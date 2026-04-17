@@ -52,6 +52,16 @@ def sha1_text(text: str) -> str:
     return hashlib.sha1(text.encode("utf-8")).hexdigest()
 
 
+SQL_QUERY_HINT_RE = re.compile(r"(?is)\b(?:select|perform|call)\s+([a-z_][a-z0-9_\.]*)\s*\(")
+SQL_EXECUTE_FUNCTION_RE = re.compile(r"(?is)\bexecute\s+function\s+([a-z_][a-z0-9_\.]*)\s*\(")
+
+
+def extract_sql_query_hints(text: str) -> list[str]:
+    hints = {match.group(1) for match in SQL_QUERY_HINT_RE.finditer(text)}
+    hints.update(match.group(1) for match in SQL_EXECUTE_FUNCTION_RE.finditer(text))
+    return sorted(hints)
+
+
 def resolve_python_module(module_name: str, project_root: pathlib.Path) -> str | None:
     module_path = project_root / pathlib.Path(*module_name.split("."))
     file_candidate = module_path.with_suffix(".py")
@@ -175,6 +185,7 @@ def parse_python_backend(project_root: pathlib.Path, config: dict) -> AdapterGra
                     "attrs": {
                         "definition_kind": "function_definition",
                         "exported": False,
+                        "sql_query_hints": extract_sql_query_hints(function_text),
                         "reference_hints": {
                             "imports": sorted(imported_function_map.keys()) + sorted(imported_module_map.keys()),
                             "exports": [],
@@ -207,6 +218,7 @@ def parse_python_backend(project_root: pathlib.Path, config: dict) -> AdapterGra
                     "attrs": {
                         "definition_kind": "test_case",
                         "test_style": "python_unittest",
+                        "sql_query_hints": extract_sql_query_hints(python_node_text(source_text, test_node)),
                     },
                 }
             )
@@ -657,13 +669,14 @@ def parse_tsjs_backend(project_root: pathlib.Path, config: dict) -> AdapterGraph
                                 "end_line": end_line,
                                 "language": "tsjs",
                                 "body_hash": sha1_text(body_text),
-                                "attrs": {
-                                    "definition_kind": "class_method",
-                                    "class_name": class_name,
-                                    "exported": bool(export_names),
-                                    "is_component": False,
-                                    "is_hook": False,
-                                    "reference_hints": {
+                        "attrs": {
+                            "definition_kind": "class_method",
+                            "class_name": class_name,
+                            "exported": bool(export_names),
+                            "is_component": False,
+                            "is_hook": False,
+                            "sql_query_hints": extract_sql_query_hints(body_text),
+                            "reference_hints": {
                                         "imports": sorted(list(imported_function_map.keys()) + list(imported_module_map.keys())),
                                         "exports": sorted(export_names),
                                         "references": [],
@@ -716,6 +729,7 @@ def parse_tsjs_backend(project_root: pathlib.Path, config: dict) -> AdapterGraph
                             "exported": exported,
                             "is_component": is_component,
                             "is_hook": is_hook,
+                            "sql_query_hints": extract_sql_query_hints(body_text),
                             "reference_hints": {
                                 "imports": sorted(list(imported_function_map.keys()) + list(imported_module_map.keys())),
                                 "exports": sorted(export_names),
@@ -769,6 +783,7 @@ def parse_tsjs_backend(project_root: pathlib.Path, config: dict) -> AdapterGraph
                             "exported": exported,
                             "is_component": is_component,
                             "is_hook": is_hook,
+                            "sql_query_hints": extract_sql_query_hints(body_text),
                             "reference_hints": {
                                 "imports": sorted(list(imported_function_map.keys()) + list(imported_module_map.keys())),
                                 "exports": sorted(export_names),
@@ -825,6 +840,7 @@ def parse_tsjs_backend(project_root: pathlib.Path, config: dict) -> AdapterGraph
                         "attrs": {
                             "definition_kind": "test_case",
                             "test_style": tsjs_test_style(line),
+                            "sql_query_hints": extract_sql_query_hints(body_text),
                         },
                     }
                 )
@@ -916,6 +932,188 @@ def parse_generic_backend(project_root: pathlib.Path, config: dict) -> AdapterGr
     return adapter_graph
 
 
+SQL_ROUTINE_RE = re.compile(
+    r"(?is)create\s+(?:or\s+replace\s+)?(function|procedure)\s+([a-z_][a-z0-9_\.]*)\s*\((.*?)\)\s*(returns\s+trigger|returns\s+[^$;]+)?\s+as\s+\$\$(.*?)\$\$\s+language\s+[a-z_]+\s*;",
+)
+SQL_TRIGGER_BINDING_RE = re.compile(r"(?is)create\s+trigger\s+([a-z_][a-z0-9_]*)[\s\S]*?execute\s+function\s+([a-z_][a-z0-9_\.]*)\s*\(")
+
+
+def sql_basename(name: str) -> str:
+    return name.split(".")[-1]
+
+
+def unique_sql_target(hint: str, sql_targets: dict[str, list[str]]) -> str | None:
+    exact = sql_targets.get(hint, [])
+    if len(exact) == 1:
+        return exact[0]
+    base = sql_targets.get(sql_basename(hint), [])
+    if len(base) == 1:
+        return base[0]
+    return None
+
+
+def parse_sql_postgres_backend(project_root: pathlib.Path, config: dict) -> AdapterGraph:
+    adapter_graph = AdapterGraph()
+    sql_config = config["sql_postgres"]
+    source_globs = sql_config.get("source_globs", [])
+    test_globs = sql_config.get("test_globs", [])
+    patterns = source_globs + test_globs
+
+    sql_targets: dict[str, list[str]] = {}
+    routine_contexts: list[dict] = []
+    test_contexts: list[dict] = []
+
+    for path in iter_matching_files(project_root, patterns):
+        relative = path.relative_to(project_root).as_posix()
+        text = path.read_text(encoding="utf-8")
+        is_test_file = matches_any(relative, test_globs)
+        trigger_bindings = [
+            {"trigger_name": match.group(1), "target": match.group(2)}
+            for match in SQL_TRIGGER_BINDING_RE.finditer(text)
+        ]
+        adapter_graph.files.append(
+            {
+                "path": relative,
+                "is_test_file": is_test_file,
+                "content_hash": sha1_text(text),
+                "attrs": {
+                    "extension": path.suffix,
+                    "parser_backend": "sql_postgres_lite",
+                    "file_role": "test-file" if is_test_file else "sql-file",
+                    "trigger_bindings": trigger_bindings,
+                },
+            }
+        )
+
+        if is_test_file:
+            test_name = pathlib.PurePosixPath(relative).stem
+            test_contexts.append(
+                {
+                    "node_id": test_node_id(relative, test_name),
+                    "relative_path": relative,
+                    "text": text,
+                }
+            )
+            adapter_graph.tests.append(
+                {
+                    "node_id": test_node_id(relative, test_name),
+                    "path": relative,
+                    "name": test_name,
+                    "symbol": test_name,
+                    "start_line": 1,
+                    "end_line": len(text.splitlines()),
+                    "language": "sql_postgres",
+                    "body_hash": sha1_text(text),
+                    "attrs": {
+                        "definition_kind": "sql_test_file",
+                        "test_style": "sql_file",
+                        "sql_query_hints": extract_sql_query_hints(text),
+                    },
+                }
+            )
+            continue
+
+        for match in SQL_ROUTINE_RE.finditer(text):
+            routine_type = match.group(1).lower()
+            qualified_name = match.group(2)
+            returns_clause = (match.group(4) or "").lower()
+            body_text = match.group(5)
+            sql_kind = "trigger" if "returns trigger" in returns_clause else routine_type
+            node_id = function_node_id(relative, qualified_name)
+            start_line = text[: match.start()].count("\n") + 1
+            end_line = text[: match.end()].count("\n") + 1
+            query_hints = extract_sql_query_hints(body_text)
+            adapter_graph.functions.append(
+                {
+                    "node_id": node_id,
+                    "path": relative,
+                    "name": qualified_name,
+                    "symbol": qualified_name,
+                    "start_line": start_line,
+                    "end_line": end_line,
+                    "language": "sql_postgres",
+                    "body_hash": sha1_text(body_text),
+                    "attrs": {
+                        "definition_kind": "sql_routine",
+                        "sql_kind": sql_kind,
+                        "qualified_name": qualified_name,
+                        "sql_query_hints": query_hints,
+                        "reference_hints": {
+                            "imports": [],
+                            "exports": [],
+                            "references": query_hints,
+                            "resolved_call_targets": [],
+                        },
+                    },
+                }
+            )
+            routine_contexts.append(
+                {
+                    "node_id": node_id,
+                    "relative_path": relative,
+                    "qualified_name": qualified_name,
+                    "body_text": body_text,
+                    "start_line": start_line,
+                    "query_hints": query_hints,
+                }
+            )
+            for key in {qualified_name, sql_basename(qualified_name)}:
+                sql_targets.setdefault(key, []).append(node_id)
+
+    function_attrs = {item["node_id"]: item["attrs"] for item in adapter_graph.functions}
+    for context in routine_contexts:
+        resolved_targets: list[str] = []
+        unresolved_hints: list[str] = []
+        for hint in context["query_hints"]:
+            target = unique_sql_target(hint, sql_targets)
+            if target and target != context["node_id"]:
+                resolved_targets.append(target)
+                adapter_graph.calls.append(
+                    {
+                        "src_id": context["node_id"],
+                        "dst_id": target,
+                        "relative_path": context["relative_path"],
+                        "start_line": context["start_line"],
+                        "end_line": context["start_line"],
+                        "extractor": "sql_postgres_call_scan",
+                    }
+                )
+            else:
+                unresolved_hints.append(hint)
+        function_attrs[context["node_id"]]["reference_hints"]["resolved_call_targets"] = sorted(set(resolved_targets))
+        function_attrs[context["node_id"]]["reference_hints"]["unresolved_sql_hints"] = sorted(set(unresolved_hints))
+
+    for context in test_contexts:
+        resolved_targets: list[str] = []
+        unresolved_hints: list[str] = []
+        for hint in extract_sql_query_hints(context["text"]):
+            target = unique_sql_target(hint, sql_targets)
+            if target:
+                resolved_targets.append(target)
+                adapter_graph.covers.append(
+                    {
+                        "src_id": context["node_id"],
+                        "dst_id": target,
+                        "relative_path": context["relative_path"],
+                        "start_line": 1,
+                        "end_line": 1,
+                        "extractor": "sql_postgres_test_scan",
+                    }
+                )
+            else:
+                unresolved_hints.append(hint)
+        for test_record in adapter_graph.tests:
+            if test_record["node_id"] == context["node_id"]:
+                test_record["attrs"]["reference_hints"] = {
+                    "references": extract_sql_query_hints(context["text"]),
+                    "resolved_call_targets": sorted(set(resolved_targets)),
+                    "unresolved_sql_hints": sorted(set(unresolved_hints)),
+                }
+                break
+
+    return adapter_graph
+
+
 def v8_relative_path(url: str, project_root: pathlib.Path) -> str | None:
     if not url:
         return None
@@ -934,6 +1132,7 @@ BACKENDS = {
     "python": parse_python_backend,
     "tsjs": parse_tsjs_backend,
     "generic": parse_generic_backend,
+    "sql_postgres": parse_sql_postgres_backend,
 }
 
 

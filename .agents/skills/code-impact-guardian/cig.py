@@ -16,13 +16,15 @@ import after_edit_update  # noqa: E402
 import build_graph  # noqa: E402
 import generate_report  # noqa: E402
 import list_seeds  # noqa: E402
-from adapters import detect_language_adapter, detect_project_profile_name  # noqa: E402
+from adapters import SQL_POSTGRES_ADAPTER, configured_supplemental_adapters, detect_language_adapter, detect_project_profile_name, detect_supplemental_adapters  # noqa: E402
 from doc_sources import doc_source_doctor_status  # noqa: E402
 from profiles import AUTO_PROFILE, PROFILE_PRESETS, apply_profile_preset, detect_project_profile, package_json_data, profile_coverage_adapter, profile_test_command  # noqa: E402
 
 
 DEFAULT_CONFIG = {
     "project_root": ".",
+    "primary_adapter": "auto",
+    "supplemental_adapters": [],
     "language_adapter": "auto",
     "project_profile": "auto",
     "rule_adapter": "markdown",
@@ -60,8 +62,30 @@ DEFAULT_CONFIG = {
         "enabled": False,
     },
     "sql_postgres": {
-        "parser_backend": "sql_pg_placeholder",
         "enabled": False,
+        "source_globs": [
+            "db/*.sql",
+            "db/**/*.sql",
+            "sql/*.sql",
+            "sql/**/*.sql",
+            "migrations/*.sql",
+            "migrations/**/*.sql",
+            "supabase/migrations/*.sql",
+            "supabase/migrations/**/*.sql"
+        ],
+        "test_globs": [
+            "tests/sql/*.sql",
+            "tests/sql/**/*.sql",
+            "db/tests/*.sql",
+            "db/tests/**/*.sql"
+        ],
+        "test_command": [
+            "python",
+            "-c",
+            "import pathlib; roots=[pathlib.Path('tests/sql'), pathlib.Path('db/tests')]; files=[]; [files.extend(sorted(root.rglob('*.sql'))) for root in roots if root.exists()]; assert files, 'no SQL test files found'; text='\\n'.join(p.read_text(encoding='utf-8') for p in files).lower(); assert any(token in text for token in ('select ', 'call ', 'perform ')), 'no SQL invocation statements found in SQL tests'"
+        ],
+        "coverage_adapter": "unavailable",
+        "parser_backend": "sql_postgres_lite",
     },
     "impact": {"max_depth": 3},
 }
@@ -268,7 +292,17 @@ def default_schema_text() -> str:
     return DEFAULT_SCHEMA_TEXT
 
 
-def init_workspace(workspace_root: pathlib.Path, *, profile: str | None = None, project_root: str | None = None) -> dict:
+def normalize_with_adapter(value: str) -> str:
+    return value.replace("-", "_")
+
+
+def init_workspace(
+    workspace_root: pathlib.Path,
+    *,
+    profile: str | None = None,
+    project_root: str | None = None,
+    with_adapters: list[str] | None = None,
+) -> dict:
     codegraph_dir = workspace_root / ".ai" / "codegraph"
     report_dir = codegraph_dir / "reports"
     doc_cache_dir = codegraph_dir / "doc-cache"
@@ -285,10 +319,21 @@ def init_workspace(workspace_root: pathlib.Path, *, profile: str | None = None, 
     config_payload = default_config_payload() if not config_path.exists() else load_json(config_path)
     if project_root:
         config_payload["project_root"] = project_root
+    config_payload["primary_adapter"] = config_payload.get("primary_adapter", config_payload.get("language_adapter", "auto"))
+    config_payload["language_adapter"] = config_payload["primary_adapter"]
+    config_payload["supplemental_adapters"] = list(config_payload.get("supplemental_adapters", []))
     if profile and profile != AUTO_PROFILE:
         config_payload = apply_profile_preset(config_payload, profile)
     elif "project_profile" not in config_payload:
         config_payload["project_profile"] = AUTO_PROFILE
+
+    for adapter_name in with_adapters or []:
+        normalized = normalize_with_adapter(adapter_name)
+        if normalized not in config_payload["supplemental_adapters"]:
+            config_payload["supplemental_adapters"].append(normalized)
+        if normalized == SQL_POSTGRES_ADAPTER:
+            config_payload.setdefault(SQL_POSTGRES_ADAPTER, {})
+            config_payload[SQL_POSTGRES_ADAPTER]["enabled"] = True
 
     resolved_project_root = (workspace_root / config_payload["project_root"]).resolve()
     active_profile = config_payload.get("project_profile", AUTO_PROFILE)
@@ -314,6 +359,8 @@ def init_workspace(workspace_root: pathlib.Path, *, profile: str | None = None, 
         "codegraph_dir": str(codegraph_dir),
         "project_profile": config_payload.get("project_profile", AUTO_PROFILE),
         "project_root": config_payload["project_root"],
+        "primary_adapter": config_payload["primary_adapter"],
+        "supplemental_adapters": config_payload["supplemental_adapters"],
     }
 
 
@@ -321,6 +368,7 @@ def set_fixture_config(workspace_root: pathlib.Path, fixture: str, persist: bool
     config_path = config_path_for(workspace_root)
     payload = load_json(config_path)
     payload["project_root"] = f"examples/{fixture}"
+    payload["primary_adapter"] = "auto"
     payload["language_adapter"] = "auto"
     if persist:
         write_json(config_path, payload)
@@ -390,6 +438,24 @@ def _toggle_marker(target: pathlib.Path, baseline: str, edited: str, changed_fil
     return changed_file
 
 
+def apply_sql_pg_demo_edit(workspace_root: pathlib.Path) -> str:
+    return _toggle_marker(
+        workspace_root / "examples" / "sql_pg_minimal" / "db" / "functions" / "session.sql",
+        "-- stage5 demo marker: baseline",
+        "-- stage5 demo marker: edited",
+        "db/functions/session.sql",
+    )
+
+
+def apply_tsjs_pg_demo_edit(workspace_root: pathlib.Path) -> str:
+    return _toggle_marker(
+        workspace_root / "examples" / "tsjs_pg_compound" / "src" / "sessionQueries.js",
+        'const DEMO_COMPOUND_TRACK = "baseline";',
+        'const DEMO_COMPOUND_TRACK = "edited";',
+        "src/sessionQueries.js",
+    )
+
+
 def fixture_spec(fixture: str) -> dict:
     specs = {
         "python_minimal": {
@@ -422,6 +488,20 @@ def fixture_spec(fixture: str) -> dict:
             "edit": lambda root: _toggle_marker(root / "examples" / "tsx_react_vite" / "src" / "AppShell.tsx", 'const DEMO_REACT_VITE_TRACK = "baseline";', 'const DEMO_REACT_VITE_TRACK = "edited-by-demo";', "src/AppShell.tsx"),
             "profile": "react-vite",
         },
+        "sql_pg_minimal": {
+            "task_id": "demo-sql-pg-impact",
+            "seed": "fn:db/functions/session.sql:app.issue_session_token",
+            "edit": apply_sql_pg_demo_edit,
+            "profile": "generic-file",
+            "with_adapters": ["sql-postgres"],
+        },
+        "tsjs_pg_compound": {
+            "task_id": "demo-tsjs-pg-impact",
+            "seed": "fn:src/sessionQueries.js:fetchSessionLabel",
+            "edit": apply_tsjs_pg_demo_edit,
+            "profile": "node-cli",
+            "with_adapters": ["sql-postgres"],
+        },
     }
     if fixture not in specs:
         raise SystemExit(f"Unsupported fixture: {fixture}")
@@ -433,13 +513,18 @@ def detect_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
     project_root = build_graph.project_root_for(workspace_root, config)
     detected_adapter = detect_language_adapter(project_root, config)
     detected_profile, confidence, reason = detect_project_profile(project_root, config, detected_adapter)
+    supplemental_detected = detect_supplemental_adapters(project_root, config)
     return {
         "workspace_root": str(workspace_root),
         "project_root": str(project_root),
+        "primary_adapter": detected_adapter,
         "configured_adapter": config.get("language_adapter", "auto"),
+        "configured_primary_adapter": config.get("primary_adapter", config.get("language_adapter", "auto")),
         "configured_profile": config.get("project_profile", AUTO_PROFILE),
         "detected_adapter": detected_adapter,
         "detected_profile": detected_profile,
+        "configured_supplemental_adapters": configured_supplemental_adapters(config),
+        "supplemental_adapters_detected": supplemental_detected,
         "confidence": confidence,
         "reason": reason,
     }
@@ -485,8 +570,13 @@ def doctor_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
     try:
         detected_adapter = detect_language_adapter(project_root, config)
         detected_profile, confidence, reason = detect_project_profile(project_root, config, detected_adapter)
+        supplemental_detected = detect_supplemental_adapters(project_root, config)
         add_status("PASS", f"detected_adapter {detected_adapter}")
         add_status("PASS", f"profile {detected_profile} ({reason}, confidence={confidence:.2f})")
+        if configured_supplemental_adapters(config):
+            add_status("PASS", f"supplemental configured: {', '.join(configured_supplemental_adapters(config))}")
+        if supplemental_detected:
+            add_status("PASS", f"supplemental detected: {', '.join(supplemental_detected)}")
     except Exception as exc:  # pragma: no cover - defensive
         add_status("FAIL", f"adapter detection failed: {exc}")
         return {"overall": overall, "statuses": statuses}
@@ -541,6 +631,14 @@ def doctor_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
     else:
         add_status("PASS", "generic fallback available")
 
+    if SQL_POSTGRES_ADAPTER in configured_supplemental_adapters(config):
+        sql_config = config.get(SQL_POSTGRES_ADAPTER, {})
+        source_patterns = sql_config.get("source_globs", [])
+        test_patterns = sql_config.get("test_globs", [])
+        source_files = sum(1 for path in project_root.rglob("*.sql") if any(pathlib.PurePosixPath(path.relative_to(project_root).as_posix()).match(pattern) for pattern in source_patterns))
+        test_files = sum(1 for path in project_root.rglob("*.sql") if any(pathlib.PurePosixPath(path.relative_to(project_root).as_posix()).match(pattern) for pattern in test_patterns))
+        add_status("PASS", f"sql_postgres enabled (source_files={source_files}, test_files={test_files})")
+
     doc_level, doc_message = doc_source_doctor_status(project_root, config)
     add_status(doc_level, doc_message)
 
@@ -564,6 +662,7 @@ def run_demo(fixture: str, workspace: str | None) -> pathlib.Path:
         workspace_root,
         profile=spec.get("profile"),
         project_root=f"examples/{fixture}",
+        with_adapters=spec.get("with_adapters"),
     )
     config_path = set_fixture_config(workspace_root, fixture, persist=bool(workspace))
     build_graph.build_graph(workspace_root=workspace_root, config_path=config_path)
@@ -592,6 +691,7 @@ def main() -> int:
     init_parser.add_argument("--workspace-root", default=".")
     init_parser.add_argument("--profile", default=None)
     init_parser.add_argument("--project-root", default=None)
+    init_parser.add_argument("--with", dest="with_adapters", action="append", default=[])
 
     doctor_parser = subparsers.add_parser("doctor", help="Run a lightweight workspace health check")
     doctor_parser.add_argument("--workspace-root", default=".")
@@ -624,7 +724,7 @@ def main() -> int:
     after_parser.add_argument("--changed-file", action="append", default=[])
 
     demo_parser = subparsers.add_parser("demo", help="Run a fixture end-to-end demo")
-    demo_parser.add_argument("--fixture", choices=["python_minimal", "tsjs_minimal", "generic_minimal", "tsjs_node_cli", "tsx_react_vite"], default="python_minimal")
+    demo_parser.add_argument("--fixture", choices=["python_minimal", "tsjs_minimal", "generic_minimal", "tsjs_node_cli", "tsx_react_vite", "sql_pg_minimal", "tsjs_pg_compound"], default="python_minimal")
     demo_parser.add_argument("--workspace", default=None)
 
     args = parser.parse_args()
@@ -637,7 +737,18 @@ def main() -> int:
     workspace_root = pathlib.Path(args.workspace_root).resolve()
 
     if args.command == "init":
-        print(json.dumps(init_workspace(workspace_root, profile=args.profile, project_root=args.project_root), ensure_ascii=False, indent=2))
+        print(
+            json.dumps(
+                init_workspace(
+                    workspace_root,
+                    profile=args.profile,
+                    project_root=args.project_root,
+                    with_adapters=args.with_adapters,
+                ),
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
         return 0
 
     config_path = pathlib.Path(getattr(args, "config", ".code-impact-guardian/config.json"))

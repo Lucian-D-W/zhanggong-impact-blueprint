@@ -11,9 +11,12 @@ from datetime import datetime, timezone
 
 from adapters import (
     AdapterGraph,
+    SQL_POSTGRES_ADAPTER,
     collect_adapter_graph,
+    configured_supplemental_adapters,
     detect_language_adapter,
     detect_project_profile_name,
+    detect_supplemental_adapters,
     file_node_id,
     rule_node_id,
 )
@@ -496,6 +499,12 @@ def resolved_language_adapter(workspace_root: pathlib.Path, config_path: pathlib
     return detect_language_adapter(project_root, config)
 
 
+def resolved_supplemental_adapters(workspace_root: pathlib.Path, config_path: pathlib.Path) -> list[str]:
+    config = load_config(config_path)
+    project_root = project_root_for(workspace_root, config)
+    return detect_supplemental_adapters(project_root, config)
+
+
 def collect_rule_documents(
     *,
     workspace_root: pathlib.Path,
@@ -705,6 +714,76 @@ def adapter_graph_to_rows(
     return list(nodes.values()), edges, evidence_rows
 
 
+def unique_sql_target(hint: str, sql_index: dict[str, list[str]]) -> str | None:
+    exact = sql_index.get(hint, [])
+    if len(exact) == 1:
+        return exact[0]
+    base = sql_index.get(hint.split(".")[-1], [])
+    if len(base) == 1:
+        return base[0]
+    return None
+
+
+def augment_sql_hint_links(
+    *,
+    workspace_root: pathlib.Path,
+    git: dict,
+    nodes: dict[str, Node],
+    edges: dict[tuple[str, str, str], Edge],
+    evidence_rows: dict[str, Evidence],
+) -> None:
+    sql_index: dict[str, list[str]] = {}
+    for node in nodes.values():
+        if node.kind != "function":
+            continue
+        attrs = attrs_dict(node.attrs_json)
+        if "sql_kind" not in attrs:
+            continue
+        qualified_name = attrs.get("qualified_name") or node.symbol or node.name
+        for key in {qualified_name, str(qualified_name).split(".")[-1]}:
+            sql_index.setdefault(str(key), []).append(node.node_id)
+
+    for node in nodes.values():
+        if node.kind != "function":
+            continue
+        attrs = attrs_dict(node.attrs_json)
+        if "sql_kind" in attrs:
+            continue
+        hints = list(attrs.get("sql_query_hints", []))
+        if not hints:
+            continue
+        resolved: list[str] = []
+        unresolved: list[str] = []
+        for hint in hints:
+            target_id = unique_sql_target(hint, sql_index)
+            if target_id:
+                resolved.append(target_id)
+                evidence = make_evidence(
+                    workspace_root=workspace_root,
+                    git=git,
+                    extractor="cross_adapter_sql_hint",
+                    relative_path=node.path,
+                    start_line=node.start_line,
+                    end_line=node.end_line,
+                    attrs={"edge_type": "CALLS", "hint": hint, "target": target_id},
+                    confidence=0.9,
+                )
+                evidence_rows[evidence.evidence_id] = evidence
+                edges[(node.node_id, "CALLS", target_id)] = Edge(
+                    node.node_id,
+                    "CALLS",
+                    target_id,
+                    evidence.evidence_id,
+                    confidence=0.9,
+                    attrs_json=json.dumps({"hint": hint, "cross_adapter": True}, ensure_ascii=False),
+                )
+            else:
+                unresolved.append(hint)
+        attrs["resolved_sql_targets"] = sorted(set(resolved))
+        attrs["unresolved_sql_hints"] = sorted(set(unresolved))
+        node.attrs_json = json.dumps(attrs, ensure_ascii=False)
+
+
 def build_graph(*, workspace_root: pathlib.Path, config_path: pathlib.Path) -> dict:
     config = load_config(config_path)
     paths = graph_paths(workspace_root, config)
@@ -714,17 +793,39 @@ def build_graph(*, workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
     project_root = project_root_for(workspace_root, config)
     git = get_git_context(workspace_root)
     adapter_name = detect_language_adapter(project_root, config)
+    supplemental_adapters = detect_supplemental_adapters(project_root, config)
     profile_name = detect_project_profile_name(project_root, config, adapter_name)
-    adapter_graph = collect_adapter_graph(project_root, config, adapter_name)
 
-    nodes, edges, evidence_rows = adapter_graph_to_rows(
+    all_nodes: dict[str, Node] = {}
+    all_edges: dict[tuple[str, str, str], Edge] = {}
+    all_evidence: dict[str, Evidence] = {}
+
+    adapter_order = [adapter_name, *supplemental_adapters]
+    for active_adapter in adapter_order:
+        adapter_graph = collect_adapter_graph(project_root, config, active_adapter)
+        nodes, edges, evidence_rows = adapter_graph_to_rows(
+            workspace_root=workspace_root,
+            git=git,
+            adapter_name=active_adapter,
+            profile_name=profile_name,
+            adapter_graph=adapter_graph,
+        )
+        for node in nodes:
+            all_nodes[node.node_id] = node
+        for edge in edges:
+            all_edges[(edge.src_id, edge.edge_type, edge.dst_id)] = edge
+        for evidence in evidence_rows:
+            all_evidence[evidence.evidence_id] = evidence
+
+    augment_sql_hint_links(
         workspace_root=workspace_root,
         git=git,
-        adapter_name=adapter_name,
-        profile_name=profile_name,
-        adapter_graph=adapter_graph,
+        nodes=all_nodes,
+        edges=all_edges,
+        evidence_rows=all_evidence,
     )
-    known_nodes = {node.node_id for node in nodes}
+
+    known_nodes = set(all_nodes)
     rule_nodes, rule_edges, rule_evidence, rule_docs = collect_rule_documents(
         workspace_root=workspace_root,
         project_root=project_root,
@@ -732,14 +833,10 @@ def build_graph(*, workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
         git=git,
         known_nodes=known_nodes,
     )
-
-    all_nodes = {node.node_id: node for node in nodes}
     for node in rule_nodes:
         all_nodes[node.node_id] = node
-    all_edges = {(edge.src_id, edge.edge_type, edge.dst_id): edge for edge in edges}
     for edge in rule_edges:
         all_edges[(edge.src_id, edge.edge_type, edge.dst_id)] = edge
-    all_evidence = {item.evidence_id: item for item in evidence_rows}
     for item in rule_evidence:
         all_evidence[item.evidence_id] = item
 
@@ -760,8 +857,12 @@ def build_graph(*, workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
         "edge_count": len(all_edges),
         "evidence_count": len(all_evidence),
         "configured_language_adapter": config.get("language_adapter", "auto"),
+        "configured_primary_adapter": config.get("primary_adapter", config.get("language_adapter", "auto")),
         "detected_adapter": adapter_name,
+        "primary_adapter": adapter_name,
         "detected_profile": profile_name,
+        "supplemental_adapters_configured": configured_supplemental_adapters(config),
+        "supplemental_adapters_detected": supplemental_adapters,
         "available_function_seeds": sorted(node_id for node_id, node in all_nodes.items() if node.kind == "function"),
         "available_file_seeds": sorted(node_id for node_id, node in all_nodes.items() if node.kind == "file"),
     }

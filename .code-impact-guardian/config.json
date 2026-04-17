@@ -1,5 +1,7 @@
 {
   "project_root": "examples/python_minimal",
+  "primary_adapter": "auto",
+  "supplemental_adapters": [],
   "language_adapter": "auto",
   "project_profile": "auto",
   "rule_adapter": "markdown",
@@ -84,8 +86,30 @@
     "enabled": false
   },
   "sql_postgres": {
-    "parser_backend": "sql_pg_placeholder",
-    "enabled": false
+    "enabled": false,
+    "source_globs": [
+      "db/*.sql",
+      "db/**/*.sql",
+      "sql/*.sql",
+      "sql/**/*.sql",
+      "migrations/*.sql",
+      "migrations/**/*.sql",
+      "supabase/migrations/*.sql",
+      "supabase/migrations/**/*.sql"
+    ],
+    "test_globs": [
+      "tests/sql/*.sql",
+      "tests/sql/**/*.sql",
+      "db/tests/*.sql",
+      "db/tests/**/*.sql"
+    ],
+    "test_command": [
+      "python",
+      "-c",
+      "import pathlib; roots=[pathlib.Path('tests/sql'), pathlib.Path('db/tests')]; files=[]; [files.extend(sorted(root.rglob('*.sql'))) for root in roots if root.exists()]; assert files, 'no SQL test files found'; text='\\n'.join(p.read_text(encoding='utf-8') for p in files).lower(); assert any(token in text for token in ('select ', 'call ', 'perform ')), 'no SQL invocation statements found in SQL tests'"
+    ],
+    "coverage_adapter": "unavailable",
+    "parser_backend": "sql_postgres_lite"
   },
   "impact": {
     "max_depth": 3

@@ -21,21 +21,21 @@ It is not tied to any existing business codebase.
 
 The workflow stays fixed even when adapters, profiles, or fixtures change.
 
-## Stage 4 scope
+## Stage 5 scope
 
-Stage4 keeps the template lightweight and only pushes these things forward:
+Stage5 keeps the template lightweight and pushes these things forward:
 
-- TS/JS family becomes the main extensibility target
-- profile-aware `init` / `detect` / `doctor`
-- `.js`, `.ts`, `.jsx`, `.tsx` parsing
-- a real TS/JS coverage path through raw V8 coverage
-- better seed and report metadata
-- Python stays stable
+- TS/JS family stays the main app-facing adapter
+- Python stays the stable regression baseline
+- mixed repos now use `primary_adapter` + `supplemental_adapters`
+- `sql_postgres` is now a real supplemental adapter
+- local markdown rules remain the main truth source
 - generic fallback stays available
 
 Python remains the first demonstration chain, not a product binding.
-React / Next / Electron / Obsidian / Tauri are handled as TS/JS profile
-differences instead of separate graph systems.
+React / Next / Electron / Obsidian / Tauri remain TS/JS profile differences
+instead of separate graph systems.
+PostgreSQL is not a second workflow; it is supplemental graph enrichment.
 
 ## Durable graph rules
 
@@ -51,6 +51,14 @@ Start with:
 
 ```bash
 python .agents/skills/code-impact-guardian/cig.py init --profile node-cli --project-root .
+python .agents/skills/code-impact-guardian/cig.py doctor
+python .agents/skills/code-impact-guardian/cig.py detect
+```
+
+Mixed repo with PostgreSQL:
+
+```bash
+python .agents/skills/code-impact-guardian/cig.py init --profile node-cli --with sql-postgres --project-root .
 python .agents/skills/code-impact-guardian/cig.py doctor
 python .agents/skills/code-impact-guardian/cig.py detect
 ```
@@ -71,24 +79,23 @@ python .agents/skills/code-impact-guardian/cig.py demo --fixture python_minimal
 python .agents/skills/code-impact-guardian/cig.py demo --fixture tsjs_node_cli --workspace path/to/temp/workspace
 python .agents/skills/code-impact-guardian/cig.py demo --fixture tsx_react_vite --workspace path/to/temp/workspace
 python .agents/skills/code-impact-guardian/cig.py demo --fixture generic_minimal --workspace path/to/temp/workspace
+python .agents/skills/code-impact-guardian/cig.py demo --fixture sql_pg_minimal --workspace path/to/temp/workspace
+python .agents/skills/code-impact-guardian/cig.py demo --fixture tsjs_pg_compound --workspace path/to/temp/workspace
 ```
 
 ## Profile notes
 
-Real profiles in stage4:
+Real profiles in stage5:
 
 - `node-cli`
 - `react-vite`
 
-Preset-only profiles in stage4:
+Preset-only profiles:
 
 - `next-basic`
 - `electron-renderer`
 - `obsidian-plugin`
 - `tauri-frontend`
-
-If no supported parser matches, the workflow must continue through the generic
-adapter.
 
 ## Generic fallback rule
 
@@ -101,6 +108,25 @@ In generic mode:
 
 Do not pretend generic mode has function-level precision.
 
+## Supplemental adapter rule
+
+Stage5 allows:
+
+- `primary_adapter`
+- `supplemental_adapters`
+
+Use supplemental adapters when the repo has an app language plus SQL or another
+supporting language that should land in the same graph.
+
+Do not create a separate workflow for supplemental adapters.
+Do not invent new node or edge types to represent them.
+Do not turn low-confidence query text into graph truth.
+
+For SQL query hints:
+
+- high confidence + unique target -> direct `CALLS`
+- otherwise -> attrs/report hint only
+
 ## Expected outputs
 
 - `.ai/codegraph/codegraph.db`
@@ -108,6 +134,7 @@ Do not pretend generic mode has function-level precision.
 - `.ai/codegraph/reports/impact-<task-id>.md`
 - `.ai/codegraph/test-results.json`
 - available function seeds or file seeds from `seeds`
+- SQL seeds when SQL/PostgreSQL is enabled
 - lightweight process tables: `task_runs`, `edit_rounds`, `file_diffs`, `symbol_diffs`
 
 ## Evidence policy

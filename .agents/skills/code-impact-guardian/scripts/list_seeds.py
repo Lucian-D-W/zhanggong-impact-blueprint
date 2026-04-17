@@ -4,7 +4,7 @@ import json
 import pathlib
 import sqlite3
 
-from adapters import GENERIC_ADAPTER, detect_language_adapter
+from adapters import detect_language_adapter, detect_supplemental_adapters
 from build_graph import graph_paths, load_config, project_root_for
 from profiles import detect_project_profile
 
@@ -31,6 +31,7 @@ def list_seeds(*, workspace_root: pathlib.Path, config_path: pathlib.Path) -> di
     project_root = project_root_for(workspace_root, config)
     adapter_name = detect_language_adapter(project_root, config)
     profile_name, _, _ = detect_project_profile(project_root, config, adapter_name)
+    supplemental_detected = detect_supplemental_adapters(project_root, config)
     with sqlite3.connect(paths["db_path"]) as conn:
         file_nodes = [row[0] for row in conn.execute("SELECT node_id FROM nodes WHERE kind = 'file' ORDER BY node_id").fetchall()]
         function_nodes = [row[0] for row in conn.execute("SELECT node_id FROM nodes WHERE kind = 'function' ORDER BY node_id").fetchall()]
@@ -39,23 +40,21 @@ def list_seeds(*, workspace_root: pathlib.Path, config_path: pathlib.Path) -> di
         file_details = detail_rows(conn, "file")
         function_details = detail_rows(conn, "function")
         test_details = detail_rows(conn, "test")
-    if adapter_name == GENERIC_ADAPTER:
-        return {
-            "detected_adapter": adapter_name,
-            "detected_profile": profile_name,
-            "files": file_nodes,
-            "file_details": file_details,
-            "rules": rule_nodes,
-        }
-    return {
+    payload = {
         "detected_adapter": adapter_name,
+        "primary_adapter": adapter_name,
         "detected_profile": profile_name,
-        "functions": function_nodes,
-        "function_details": function_details,
-        "tests": test_nodes,
-        "test_details": test_details,
+        "supplemental_adapters_detected": supplemental_detected,
+        "files": file_nodes,
+        "file_details": file_details,
         "rules": rule_nodes,
     }
+    if function_nodes or test_nodes or supplemental_detected or adapter_name != "generic":
+        payload["functions"] = function_nodes
+        payload["function_details"] = function_details
+        payload["tests"] = test_nodes
+        payload["test_details"] = test_details
+    return payload
 
 
 def main() -> int:

@@ -1,0 +1,71 @@
+{
+  "project_root": "examples/python_minimal",
+  "language_adapter": "auto",
+  "rule_adapter": "markdown",
+  "graph": {
+    "db_path": ".ai/codegraph/codegraph.db",
+    "report_dir": ".ai/codegraph/reports",
+    "build_log_path": ".ai/codegraph/build.log",
+    "test_results_path": ".ai/codegraph/test-results.json"
+  },
+  "rules": {
+    "globs": [
+      "docs/rules/*.md"
+    ]
+  },
+  "python": {
+    "source_globs": [
+      "src/*.py",
+      "src/**/*.py"
+    ],
+    "test_globs": [
+      "tests/*.py",
+      "tests/**/*.py"
+    ],
+    "test_command": [
+      "python",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "tests",
+      "-p",
+      "test_*.py"
+    ],
+    "coverage_adapter": "coveragepy"
+  },
+  "tsjs": {
+    "source_globs": [
+      "src/*.js",
+      "src/**/*.js",
+      "src/*.ts",
+      "src/**/*.ts"
+    ],
+    "test_globs": [
+      "tests/*.js",
+      "tests/**/*.js",
+      "tests/*.ts",
+      "tests/**/*.ts"
+    ],
+    "test_command": [
+      "node",
+      "--test"
+    ],
+    "coverage_adapter": "unavailable"
+  },
+  "generic": {
+    "source_globs": [
+      "src/*",
+      "src/**/*"
+    ],
+    "test_command": [
+      "python",
+      "-c",
+      "import pathlib; data = (pathlib.Path('src') / 'settings.conf').read_text(encoding='utf-8'); assert 'mode=active' in data"
+    ],
+    "coverage_adapter": "unavailable"
+  },
+  "impact": {
+    "max_depth": 3
+  }
+}

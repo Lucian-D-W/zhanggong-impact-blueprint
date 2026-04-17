@@ -5,7 +5,7 @@ import pathlib
 import sqlite3
 from datetime import datetime, timezone
 
-from build_graph import get_git_context, graph_paths, load_config
+from build_graph import get_git_context, graph_paths, load_config, record_task_run, resolved_language_adapter
 
 
 def utc_now() -> str:
@@ -245,6 +245,8 @@ def generate_report(*, workspace_root: pathlib.Path, config_path: pathlib.Path, 
     report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     mermaid_path.write_text(mermaid, encoding="utf-8")
 
+    detected_adapter = resolved_language_adapter(workspace_root, config_path)
+
     with sqlite3.connect(paths["db_path"]) as conn:
         conn.execute(
             """
@@ -262,12 +264,33 @@ def generate_report(*, workspace_root: pathlib.Path, config_path: pathlib.Path, 
         )
         conn.commit()
 
+    task_run_id = record_task_run(
+        db_path=paths["db_path"],
+        task_id=task_id,
+        seed_node_id=seed,
+        command_name="report",
+        detected_adapter=detected_adapter,
+        report_path=str(report_path.relative_to(workspace_root)),
+        status="completed",
+        attrs={
+            "seed_kind": sections["seed_kind"],
+            "direct_counts": {
+                "upstream": len(sections["direct_upstream"]),
+                "downstream": len(sections["direct_downstream"]),
+                "tests": len(sections["direct_tests"]),
+                "rules": len(sections["direct_rules"]),
+            },
+        },
+    )
+
     return {
         "task_id": task_id,
         "seed": seed,
         "git_sha": git["git_sha"],
         "report_path": str(report_path),
         "mermaid_path": str(mermaid_path),
+        "task_run_id": task_run_id,
+        "detected_adapter": detected_adapter,
     }
 
 

@@ -2,6 +2,7 @@
   "project_root": "examples/python_minimal",
   "language_adapter": "auto",
   "rule_adapter": "markdown",
+  "doc_source_adapter": "local_markdown",
   "graph": {
     "db_path": ".ai/codegraph/codegraph.db",
     "report_dir": ".ai/codegraph/reports",

@@ -89,6 +89,50 @@ CREATE TABLE IF NOT EXISTS coverage_observations (
   raw_json TEXT NOT NULL DEFAULT '{}'
 );
 
+CREATE TABLE IF NOT EXISTS task_runs (
+  task_run_id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  seed_node_id TEXT NOT NULL,
+  command_name TEXT NOT NULL,
+  detected_adapter TEXT NOT NULL,
+  report_path TEXT,
+  status TEXT NOT NULL,
+  attrs_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS edit_rounds (
+  edit_round_id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  task_run_id TEXT NOT NULL REFERENCES task_runs(task_run_id) ON DELETE CASCADE,
+  round_index INTEGER NOT NULL,
+  seed_node_id TEXT NOT NULL,
+  changed_files_json TEXT NOT NULL DEFAULT '[]',
+  summary_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS file_diffs (
+  file_diff_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  edit_round_id TEXT NOT NULL REFERENCES edit_rounds(edit_round_id) ON DELETE CASCADE,
+  file_path TEXT NOT NULL,
+  diff_kind TEXT NOT NULL,
+  before_hash TEXT,
+  after_hash TEXT,
+  summary_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS symbol_diffs (
+  symbol_diff_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  edit_round_id TEXT NOT NULL REFERENCES edit_rounds(edit_round_id) ON DELETE CASCADE,
+  file_path TEXT NOT NULL,
+  symbol_kind TEXT NOT NULL,
+  diff_kind TEXT NOT NULL,
+  before_symbol TEXT,
+  after_symbol TEXT,
+  summary_json TEXT NOT NULL DEFAULT '{}'
+);
+
 CREATE INDEX IF NOT EXISTS idx_nodes_kind ON nodes(kind);
 CREATE INDEX IF NOT EXISTS idx_nodes_path ON nodes(path);
 CREATE INDEX IF NOT EXISTS idx_edges_src ON edges(src_id);
@@ -96,7 +140,12 @@ CREATE INDEX IF NOT EXISTS idx_edges_dst ON edges(dst_id);
 CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(edge_type);
 CREATE INDEX IF NOT EXISTS idx_evidence_file_path ON evidence(file_path);
 CREATE INDEX IF NOT EXISTS idx_test_runs_task ON test_runs(task_id);
+CREATE INDEX IF NOT EXISTS idx_task_runs_task ON task_runs(task_id);
+CREATE INDEX IF NOT EXISTS idx_edit_rounds_task ON edit_rounds(task_id);
+CREATE INDEX IF NOT EXISTS idx_file_diffs_round ON file_diffs(edit_round_id);
+CREATE INDEX IF NOT EXISTS idx_symbol_diffs_round ON symbol_diffs(edit_round_id);
 
-INSERT OR IGNORE INTO repo_meta(meta_key, meta_value) VALUES
-  ('schema_version', '1'),
-  ('graph_mode', 'direct-edges-only');
+INSERT INTO repo_meta(meta_key, meta_value) VALUES
+  ('schema_version', '2'),
+  ('graph_mode', 'direct-edges-only')
+ON CONFLICT(meta_key) DO UPDATE SET meta_value = excluded.meta_value;

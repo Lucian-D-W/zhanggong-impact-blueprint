@@ -46,6 +46,8 @@ adapters instead of replacing the workflow or schema.
 Detect the active adapter:
 
 ```bash
+python .agents/skills/code-impact-guardian/cig.py init
+python .agents/skills/code-impact-guardian/cig.py doctor
 python .agents/skills/code-impact-guardian/cig.py detect
 ```
 
@@ -100,6 +102,7 @@ Do not pretend generic mode has function-level precision.
 - `.ai/codegraph/reports/impact-<task-id>.md`
 - `.ai/codegraph/test-results.json`
 - available function seeds or file seeds from `seeds`
+- lightweight process tables: `task_runs`, `edit_rounds`, `file_diffs`, `symbol_diffs`
 
 ## Evidence policy
 

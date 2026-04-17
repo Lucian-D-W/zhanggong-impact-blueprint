@@ -52,6 +52,16 @@ Stage 2 still keeps the template light:
 - no new node or edge types
 - no persisted transitive edges
 
+### Stage 3
+
+Stage 3 keeps the same lightweight shape and adds:
+
+- lightweight process recording in SQLite
+- per-round file and symbol diffs after edits
+- thin parser backend indirection
+- `init` and `doctor` for faster project setup
+- an optional doc source adapter hook that keeps local markdown as the default path
+
 ## Adapter status
 
 ### Python
@@ -109,6 +119,8 @@ python .agents/skills/code-impact-guardian/cig.py <command>
 
 Supported commands:
 
+- `init`
+- `doctor`
 - `detect`
 - `build`
 - `seeds`
@@ -119,6 +131,8 @@ Supported commands:
 Examples:
 
 ```bash
+python .agents/skills/code-impact-guardian/cig.py init
+python .agents/skills/code-impact-guardian/cig.py doctor
 python .agents/skills/code-impact-guardian/cig.py detect
 python .agents/skills/code-impact-guardian/cig.py build
 python .agents/skills/code-impact-guardian/cig.py seeds
@@ -156,6 +170,21 @@ python .agents/skills/code-impact-guardian/cig.py demo --fixture generic_minimal
 The `--workspace` form copies the template into a disposable workspace,
 initializes a temporary git repository there, and leaves the generated
 artifacts in that copied workspace.
+
+## Stage 3 process logs
+
+Stage 3 adds lightweight workflow tables without changing the node/edge graph
+model:
+
+- `task_runs`
+- `edit_rounds`
+- `file_diffs`
+- `symbol_diffs`
+
+These tables record task and round metadata, changed files, conservative
+function diffs, and direct relation diffs.
+
+They do **not** persist indirect or transitive impact.
 
 ## Generated artifacts
 
@@ -215,19 +244,31 @@ To reuse this template in another repository:
    - set the test command for that project
    - set `rules.globs` if your rule docs live elsewhere
 3. Add Markdown rule files with stable `id` values in frontmatter.
-4. Build the graph:
+4. Initialize the workspace:
+
+```bash
+python .agents/skills/code-impact-guardian/cig.py init
+```
+
+5. Run the lightweight doctor:
+
+```bash
+python .agents/skills/code-impact-guardian/cig.py doctor
+```
+
+6. Build the graph:
 
 ```bash
 python .agents/skills/code-impact-guardian/cig.py build
 ```
 
-5. List seed candidates:
+7. List seed candidates:
 
 ```bash
 python .agents/skills/code-impact-guardian/cig.py seeds
 ```
 
-6. Generate the report for the function or file you plan to change:
+8. Generate the report for the function or file you plan to change:
 
 ```bash
 python .agents/skills/code-impact-guardian/cig.py report --task-id your-task --seed fn:path/to/file.py:function_name
@@ -239,7 +280,7 @@ For generic fallback, use a file seed:
 python .agents/skills/code-impact-guardian/cig.py report --task-id your-task --seed file:path/to/file.conf
 ```
 
-7. Read the report, make the edit, then refresh graph, report, evidence, and
+9. Read the report, make the edit, then refresh graph, report, evidence, and
 test outcome:
 
 ```bash

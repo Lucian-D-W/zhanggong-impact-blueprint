@@ -5,20 +5,18 @@ import json
 import pathlib
 import sqlite3
 import subprocess
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from adapters import (
     AdapterGraph,
-    GENERIC_ADAPTER,
+    collect_adapter_graph,
     detect_language_adapter,
     file_node_id,
-    function_node_id,
     rule_node_id,
-    test_node_id,
-    collect_adapter_graph,
-    matches_any,
 )
+from doc_sources import collect_rule_documents_from_sources
 
 
 @dataclass
@@ -146,6 +144,12 @@ def parse_frontmatter(text: str) -> tuple[dict, str]:
         value = value.strip()
         data[current_key] = value if value else []
     return data, body
+
+
+def attrs_dict(attrs_json: str | None) -> dict:
+    if not attrs_json:
+        return {}
+    return json.loads(attrs_json)
 
 
 def make_evidence_id(*parts: str) -> str:
@@ -280,16 +284,227 @@ def upsert_rule_documents(conn: sqlite3.Connection, rule_docs: list[tuple[str, s
     )
 
 
+def next_edit_round_index(conn: sqlite3.Connection, task_id: str) -> int:
+    row = conn.execute("SELECT COALESCE(MAX(round_index), 0) FROM edit_rounds WHERE task_id = ?", (task_id,)).fetchone()
+    return int(row[0]) + 1
+
+
+def record_task_run(
+    *,
+    db_path: pathlib.Path,
+    task_id: str,
+    seed_node_id: str,
+    command_name: str,
+    detected_adapter: str,
+    report_path: str | None,
+    status: str,
+    attrs: dict | None = None,
+) -> str:
+    task_run_id = f"taskrun-{uuid.uuid4().hex[:12]}"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO task_runs (
+                task_run_id, task_id, seed_node_id, command_name,
+                detected_adapter, report_path, status, attrs_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                task_run_id,
+                task_id,
+                seed_node_id,
+                command_name,
+                detected_adapter,
+                report_path,
+                status,
+                json.dumps(attrs or {}, ensure_ascii=False),
+            ),
+        )
+        conn.commit()
+    return task_run_id
+
+
+def node_snapshot(conn: sqlite3.Connection, node_id: str) -> dict | None:
+    row = conn.execute(
+        "SELECT node_id, kind, name, path, symbol, start_line, end_line, attrs_json FROM nodes WHERE node_id = ?",
+        (node_id,),
+    ).fetchone()
+    if not row:
+        return None
+    return {
+        "node_id": row[0],
+        "kind": row[1],
+        "name": row[2],
+        "path": row[3],
+        "symbol": row[4],
+        "start_line": row[5],
+        "end_line": row[6],
+        "attrs": attrs_dict(row[7]),
+    }
+
+
+def relation_snapshot(conn: sqlite3.Connection, node_id: str) -> dict:
+    node = node_snapshot(conn, node_id)
+    if not node:
+        return {
+            "node_id": node_id,
+            "kind": None,
+            "callers": [],
+            "callees": [],
+            "tests": [],
+            "rules": [],
+            "importers": [],
+            "imports": [],
+        }
+    if node["kind"] == "file":
+        return {
+            "node_id": node_id,
+            "kind": "file",
+            "callers": [],
+            "callees": [],
+            "tests": [],
+            "rules": [row[0] for row in conn.execute("SELECT src_id FROM edges WHERE edge_type = 'GOVERNS' AND dst_id = ? ORDER BY src_id", (node_id,)).fetchall()],
+            "importers": [row[0] for row in conn.execute("SELECT src_id FROM edges WHERE edge_type = 'IMPORTS' AND dst_id = ? ORDER BY src_id", (node_id,)).fetchall()],
+            "imports": [row[0] for row in conn.execute("SELECT dst_id FROM edges WHERE edge_type = 'IMPORTS' AND src_id = ? ORDER BY dst_id", (node_id,)).fetchall()],
+        }
+    return {
+        "node_id": node_id,
+        "kind": node["kind"],
+        "callers": [row[0] for row in conn.execute("SELECT src_id FROM edges WHERE edge_type = 'CALLS' AND dst_id = ? ORDER BY src_id", (node_id,)).fetchall()],
+        "callees": [row[0] for row in conn.execute("SELECT dst_id FROM edges WHERE edge_type = 'CALLS' AND src_id = ? ORDER BY dst_id", (node_id,)).fetchall()],
+        "tests": [row[0] for row in conn.execute("SELECT src_id FROM edges WHERE edge_type = 'COVERS' AND dst_id = ? ORDER BY src_id", (node_id,)).fetchall()],
+        "rules": [row[0] for row in conn.execute("SELECT src_id FROM edges WHERE edge_type = 'GOVERNS' AND dst_id = ? ORDER BY src_id", (node_id,)).fetchall()],
+        "importers": [],
+        "imports": [],
+    }
+
+
+def snapshot_for_files(conn: sqlite3.Connection, file_paths: list[str]) -> dict:
+    payload = {"files": {}, "functions_by_file": {}, "relations": {}}
+    for file_path in sorted(set(file_paths)):
+        file_id = file_node_id(file_path)
+        file_row = node_snapshot(conn, file_id)
+        if file_row:
+            payload["files"][file_path] = file_row
+        function_rows = conn.execute(
+            """
+            SELECT node_id, path, symbol, attrs_json
+            FROM nodes
+            WHERE kind = 'function' AND path = ?
+            ORDER BY symbol
+            """,
+            (file_path,),
+        ).fetchall()
+        function_entries: list[dict] = []
+        for node_id, path, symbol, attrs_json in function_rows:
+            entry = {"node_id": node_id, "path": path, "symbol": symbol, "attrs": attrs_dict(attrs_json)}
+            function_entries.append(entry)
+            payload["relations"][node_id] = relation_snapshot(conn, node_id)
+        payload["functions_by_file"][file_path] = function_entries
+    return payload
+
+
+def write_edit_round(
+    *,
+    db_path: pathlib.Path,
+    task_id: str,
+    task_run_id: str,
+    seed_node_id: str,
+    changed_files: list[str],
+    summary: dict,
+) -> str:
+    edit_round_id = f"editround-{uuid.uuid4().hex[:12]}"
+    with sqlite3.connect(db_path) as conn:
+        round_index = next_edit_round_index(conn, task_id)
+        conn.execute(
+            """
+            INSERT INTO edit_rounds (
+                edit_round_id, task_id, task_run_id, round_index,
+                seed_node_id, changed_files_json, summary_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                edit_round_id,
+                task_id,
+                task_run_id,
+                round_index,
+                seed_node_id,
+                json.dumps(changed_files, ensure_ascii=False),
+                json.dumps(summary, ensure_ascii=False),
+            ),
+        )
+        conn.commit()
+    return edit_round_id
+
+
+def write_file_diffs(db_path: pathlib.Path, edit_round_id: str, file_diffs: list[dict]) -> None:
+    with sqlite3.connect(db_path) as conn:
+        conn.executemany(
+            """
+            INSERT INTO file_diffs (
+                edit_round_id, file_path, diff_kind, before_hash, after_hash, summary_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    edit_round_id,
+                    item["file_path"],
+                    item["diff_kind"],
+                    item.get("before_hash"),
+                    item.get("after_hash"),
+                    json.dumps(item.get("summary", {}), ensure_ascii=False),
+                )
+                for item in file_diffs
+            ],
+        )
+        conn.commit()
+
+
+def write_symbol_diffs(db_path: pathlib.Path, edit_round_id: str, symbol_diffs: list[dict]) -> None:
+    with sqlite3.connect(db_path) as conn:
+        conn.executemany(
+            """
+            INSERT INTO symbol_diffs (
+                edit_round_id, file_path, symbol_kind, diff_kind,
+                before_symbol, after_symbol, summary_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    edit_round_id,
+                    item["file_path"],
+                    item["symbol_kind"],
+                    item["diff_kind"],
+                    item.get("before_symbol"),
+                    item.get("after_symbol"),
+                    json.dumps(item.get("summary", {}), ensure_ascii=False),
+                )
+                for item in symbol_diffs
+            ],
+        )
+        conn.commit()
+
+
 def resolved_language_adapter(workspace_root: pathlib.Path, config_path: pathlib.Path) -> str:
     config = load_config(config_path)
     project_root = project_root_for(workspace_root, config)
     return detect_language_adapter(project_root, config)
 
 
-def collect_rule_documents(*, workspace_root: pathlib.Path, project_root: pathlib.Path, config: dict, git: dict, known_nodes: set[str]) -> tuple[list[Node], list[Edge], list[Evidence], list[tuple[str, str, str, str]]]:
-    rules_config = config.get("rules", {})
-    rule_globs = rules_config.get("globs", [])
-    if not rule_globs:
+def collect_rule_documents(
+    *,
+    workspace_root: pathlib.Path,
+    project_root: pathlib.Path,
+    config: dict,
+    git: dict,
+    known_nodes: set[str],
+) -> tuple[list[Node], list[Edge], list[Evidence], list[tuple[str, str, str, str]]]:
+    documents = collect_rule_documents_from_sources(project_root, config)
+    if not documents:
         return [], [], [], []
 
     nodes: list[Node] = []
@@ -297,18 +512,24 @@ def collect_rule_documents(*, workspace_root: pathlib.Path, project_root: pathli
     evidence_rows: list[Evidence] = []
     rule_docs: list[tuple[str, str, str, str]] = []
 
-    for rule_file in sorted(project_root.rglob("*.md")):
-        relative = rule_file.relative_to(project_root).as_posix()
-        if not matches_any(relative, rule_globs):
-            continue
-        text = rule_file.read_text(encoding="utf-8")
+    for document in documents:
+        relative = document["relative_path"]
+        text = document["text"]
         frontmatter, body = parse_frontmatter(text)
         rule_name = str(frontmatter.get("id", pathlib.Path(relative).stem))
         governs = frontmatter.get("governs", [])
         if isinstance(governs, str):
             governs = [governs]
         markdown_file_id = file_node_id(relative)
-        nodes.append(Node(markdown_file_id, "file", rule_file.name, relative, attrs_json=json.dumps({"kind": "rule-file"}, ensure_ascii=False)))
+        nodes.append(
+            Node(
+                markdown_file_id,
+                "file",
+                pathlib.PurePosixPath(relative).name,
+                relative,
+                attrs_json=json.dumps({"kind": "rule-file", "doc_source": document["source_adapter"]}, ensure_ascii=False),
+            )
+        )
         rule_id_full = rule_node_id(rule_name)
         nodes.append(
             Node(
@@ -319,7 +540,7 @@ def collect_rule_documents(*, workspace_root: pathlib.Path, project_root: pathli
                 symbol=rule_name,
                 start_line=1,
                 end_line=len(text.splitlines()),
-                attrs_json=json.dumps({"summary": frontmatter.get("summary", "")}, ensure_ascii=False),
+                attrs_json=json.dumps({"summary": frontmatter.get("summary", ""), "doc_source": document["source_adapter"]}, ensure_ascii=False),
             )
         )
         define_evidence = make_evidence(
@@ -352,19 +573,30 @@ def collect_rule_documents(*, workspace_root: pathlib.Path, project_root: pathli
     return nodes, edges, evidence_rows, rule_docs
 
 
-def adapter_graph_to_rows(*, workspace_root: pathlib.Path, config: dict, git: dict, adapter_name: str, adapter_graph: AdapterGraph) -> tuple[list[Node], list[Edge], list[Evidence]]:
+def adapter_graph_to_rows(
+    *,
+    workspace_root: pathlib.Path,
+    git: dict,
+    adapter_name: str,
+    adapter_graph: AdapterGraph,
+) -> tuple[list[Node], list[Edge], list[Evidence]]:
     nodes: dict[str, Node] = {}
     edges: list[Edge] = []
     evidence_rows: list[Evidence] = []
 
     for file_record in adapter_graph.files:
         relative = file_record["path"]
+        attrs = {
+            "kind": "test-file" if file_record.get("is_test_file") else "source-file",
+            "adapter": adapter_name,
+            "content_hash": file_record.get("content_hash"),
+        }
         nodes[file_node_id(relative)] = Node(
             node_id=file_node_id(relative),
             kind="file",
             name=pathlib.PurePosixPath(relative).name,
             path=relative,
-            attrs_json=json.dumps({"kind": "test-file" if file_record.get("is_test_file") else "source-file", "adapter": adapter_name}, ensure_ascii=False),
+            attrs_json=json.dumps(attrs, ensure_ascii=False),
         )
 
     for function_record in adapter_graph.functions:
@@ -376,7 +608,7 @@ def adapter_graph_to_rows(*, workspace_root: pathlib.Path, config: dict, git: di
             symbol=function_record["symbol"],
             start_line=function_record["start_line"],
             end_line=function_record["end_line"],
-            attrs_json=json.dumps({"language": function_record["language"]}, ensure_ascii=False),
+            attrs_json=json.dumps({"language": function_record["language"], "body_hash": function_record.get("body_hash")}, ensure_ascii=False),
         )
         evidence = make_evidence(
             workspace_root=workspace_root,
@@ -399,7 +631,7 @@ def adapter_graph_to_rows(*, workspace_root: pathlib.Path, config: dict, git: di
             symbol=test_record["symbol"],
             start_line=test_record["start_line"],
             end_line=test_record["end_line"],
-            attrs_json=json.dumps({"language": test_record["language"]}, ensure_ascii=False),
+            attrs_json=json.dumps({"language": test_record["language"], "body_hash": test_record.get("body_hash")}, ensure_ascii=False),
         )
         evidence = make_evidence(
             workspace_root=workspace_root,
@@ -468,7 +700,6 @@ def build_graph(*, workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
 
     nodes, edges, evidence_rows = adapter_graph_to_rows(
         workspace_root=workspace_root,
-        config=config,
         git=git,
         adapter_name=adapter_name,
         adapter_graph=adapter_graph,
@@ -481,6 +712,7 @@ def build_graph(*, workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
         git=git,
         known_nodes=known_nodes,
     )
+
     all_nodes = {node.node_id: node for node in nodes}
     for node in rule_nodes:
         all_nodes[node.node_id] = node

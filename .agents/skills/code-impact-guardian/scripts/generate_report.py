@@ -5,7 +5,8 @@ import pathlib
 import sqlite3
 from datetime import datetime, timezone
 
-from build_graph import get_git_context, graph_paths, load_config, record_task_run, resolved_language_adapter
+from adapters import detect_project_profile_name
+from build_graph import get_git_context, graph_paths, load_config, project_root_for, record_task_run, resolved_language_adapter
 
 
 def utc_now() -> str:
@@ -14,6 +15,23 @@ def utc_now() -> str:
 
 def fetch_all(conn: sqlite3.Connection, sql: str, params: tuple) -> list[tuple]:
     return conn.execute(sql, params).fetchall()
+
+
+def node_details(conn: sqlite3.Connection, node_id: str) -> dict | None:
+    row = conn.execute(
+        "SELECT node_id, kind, name, path, symbol, attrs_json FROM nodes WHERE node_id = ?",
+        (node_id,),
+    ).fetchone()
+    if not row:
+        return None
+    return {
+        "node_id": row[0],
+        "kind": row[1],
+        "name": row[2],
+        "path": row[3],
+        "symbol": row[4],
+        "attrs": json.loads(row[5] or "{}"),
+    }
 
 
 def recursive_paths(conn: sqlite3.Connection, seed: str, edge_type: str, max_depth: int, reverse: bool = False) -> list[str]:
@@ -135,6 +153,9 @@ def generate_report(*, workspace_root: pathlib.Path, config_path: pathlib.Path, 
     report_dir.mkdir(parents=True, exist_ok=True)
     git = get_git_context(workspace_root)
     max_depth = max_depth or config["impact"]["max_depth"]
+    detected_adapter = resolved_language_adapter(workspace_root, config_path)
+    project_root = project_root_for(workspace_root, config)
+    detected_profile = detect_project_profile_name(project_root, config, detected_adapter)
 
     with sqlite3.connect(paths["db_path"]) as conn:
         seed_row = conn.execute("SELECT node_id, kind FROM nodes WHERE node_id = ?", (seed,)).fetchone()
@@ -142,6 +163,7 @@ def generate_report(*, workspace_root: pathlib.Path, config_path: pathlib.Path, 
             raise SystemExit(f"Seed node not found: {seed}")
 
         _, seed_kind = seed_row
+        seed_detail = node_details(conn, seed)
         if seed_kind == "file":
             sections = file_report_sections(conn, seed, max_depth)
         else:
@@ -174,9 +196,41 @@ def generate_report(*, workspace_root: pathlib.Path, config_path: pathlib.Path, 
         f"- git_sha: {git['git_sha']}",
         f"- seed: {seed}",
         f"- seed_kind: {sections['seed_kind']}",
+        f"- detected_adapter: {detected_adapter}",
+        f"- detected_profile: {detected_profile}",
         "",
-        "## Direct Impact",
+        "## Definition metadata",
     ]
+    if seed_detail:
+        lines.append(f"- node_path: `{seed_detail['path']}`")
+        lines.append(f"- node_symbol: `{seed_detail['symbol'] or seed_detail['name']}`")
+        for key, value in sorted(seed_detail["attrs"].items()):
+            if key == "reference_hints":
+                continue
+            if isinstance(value, list):
+                lines.append(f"- {key}: {', '.join(str(item) for item in value) if value else 'none'}")
+            else:
+                lines.append(f"- {key}: {value}")
+        reference_hints = seed_detail["attrs"].get("reference_hints", {})
+        lines.extend(
+            [
+                "",
+                "## Reference hints",
+                f"- imports: {', '.join(reference_hints.get('imports', [])) or 'none'}",
+                f"- exports: {', '.join(reference_hints.get('exports', [])) or 'none'}",
+                f"- references: {', '.join(reference_hints.get('references', [])) or 'none'}",
+                f"- resolved_call_targets: {', '.join(reference_hints.get('resolved_call_targets', [])) or 'none'}",
+            ]
+        )
+    else:
+        lines.extend(["- unavailable", "", "## Reference hints", "- unavailable"])
+
+    lines.extend(
+        [
+            "",
+        "## Direct Impact",
+        ]
+    )
     if sections["seed_kind"] == "function":
         lines.append("- owning file:")
         lines.extend([f"  - `{src_id}`" for src_id, _, _ in sections["owning_files"]] or ["  - none"])
@@ -244,8 +298,6 @@ def generate_report(*, workspace_root: pathlib.Path, config_path: pathlib.Path, 
 
     report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     mermaid_path.write_text(mermaid, encoding="utf-8")
-
-    detected_adapter = resolved_language_adapter(workspace_root, config_path)
 
     with sqlite3.connect(paths["db_path"]) as conn:
         conn.execute(

@@ -1,8 +1,13 @@
 {
   "project_root": "examples/python_minimal",
   "language_adapter": "auto",
+  "project_profile": "auto",
   "rule_adapter": "markdown",
   "doc_source_adapter": "local_markdown",
+  "doc_cache": {
+    "enabled": true,
+    "dir": ".ai/codegraph/doc-cache"
+  },
   "graph": {
     "db_path": ".ai/codegraph/codegraph.db",
     "report_dir": ".ai/codegraph/reports",
@@ -40,19 +45,27 @@
       "src/*.js",
       "src/**/*.js",
       "src/*.ts",
-      "src/**/*.ts"
+      "src/**/*.ts",
+      "src/*.jsx",
+      "src/**/*.jsx",
+      "src/*.tsx",
+      "src/**/*.tsx"
     ],
     "test_globs": [
       "tests/*.js",
       "tests/**/*.js",
       "tests/*.ts",
-      "tests/**/*.ts"
+      "tests/**/*.ts",
+      "tests/*.jsx",
+      "tests/**/*.jsx",
+      "tests/*.tsx",
+      "tests/**/*.tsx"
     ],
     "test_command": [
       "node",
       "--test"
     ],
-    "coverage_adapter": "unavailable"
+    "coverage_adapter": "v8_family"
   },
   "generic": {
     "source_globs": [
@@ -65,6 +78,14 @@
       "import pathlib; data = (pathlib.Path('src') / 'settings.conf').read_text(encoding='utf-8'); assert 'mode=active' in data"
     ],
     "coverage_adapter": "unavailable"
+  },
+  "rust_lite": {
+    "parser_backend": "rust_lite_placeholder",
+    "enabled": false
+  },
+  "sql_postgres": {
+    "parser_backend": "sql_pg_placeholder",
+    "enabled": false
   },
   "impact": {
     "max_depth": 3

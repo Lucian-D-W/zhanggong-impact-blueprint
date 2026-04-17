@@ -16,15 +16,21 @@ import after_edit_update  # noqa: E402
 import build_graph  # noqa: E402
 import generate_report  # noqa: E402
 import list_seeds  # noqa: E402
-from adapters import detect_language_adapter  # noqa: E402
+from adapters import detect_language_adapter, detect_project_profile_name  # noqa: E402
 from doc_sources import doc_source_doctor_status  # noqa: E402
+from profiles import AUTO_PROFILE, PROFILE_PRESETS, apply_profile_preset, detect_project_profile, package_json_data, profile_coverage_adapter, profile_test_command  # noqa: E402
 
 
 DEFAULT_CONFIG = {
     "project_root": ".",
     "language_adapter": "auto",
+    "project_profile": "auto",
     "rule_adapter": "markdown",
     "doc_source_adapter": "local_markdown",
+    "doc_cache": {
+        "enabled": True,
+        "dir": ".ai/codegraph/doc-cache",
+    },
     "graph": {
         "db_path": ".ai/codegraph/codegraph.db",
         "report_dir": ".ai/codegraph/reports",
@@ -39,15 +45,23 @@ DEFAULT_CONFIG = {
         "coverage_adapter": "coveragepy",
     },
     "tsjs": {
-        "source_globs": ["src/*.js", "src/**/*.js", "src/*.ts", "src/**/*.ts"],
-        "test_globs": ["tests/*.js", "tests/**/*.js", "tests/*.ts", "tests/**/*.ts"],
+        "source_globs": ["src/*.js", "src/**/*.js", "src/*.ts", "src/**/*.ts", "src/*.jsx", "src/**/*.jsx", "src/*.tsx", "src/**/*.tsx"],
+        "test_globs": ["tests/*.js", "tests/**/*.js", "tests/*.ts", "tests/**/*.ts", "tests/*.jsx", "tests/**/*.jsx", "tests/*.tsx", "tests/**/*.tsx"],
         "test_command": ["node", "--test"],
-        "coverage_adapter": "unavailable",
+        "coverage_adapter": "v8_family",
     },
     "generic": {
         "source_globs": ["src/*", "src/**/*"],
         "test_command": [],
         "coverage_adapter": "unavailable",
+    },
+    "rust_lite": {
+        "parser_backend": "rust_lite_placeholder",
+        "enabled": False,
+    },
+    "sql_postgres": {
+        "parser_backend": "sql_pg_placeholder",
+        "enabled": False,
     },
     "impact": {"max_depth": 3},
 }
@@ -254,21 +268,40 @@ def default_schema_text() -> str:
     return DEFAULT_SCHEMA_TEXT
 
 
-def init_workspace(workspace_root: pathlib.Path) -> dict:
+def init_workspace(workspace_root: pathlib.Path, *, profile: str | None = None, project_root: str | None = None) -> dict:
     codegraph_dir = workspace_root / ".ai" / "codegraph"
     report_dir = codegraph_dir / "reports"
+    doc_cache_dir = codegraph_dir / "doc-cache"
     config_dir = workspace_root / ".code-impact-guardian"
     config_dir.mkdir(parents=True, exist_ok=True)
     codegraph_dir.mkdir(parents=True, exist_ok=True)
     report_dir.mkdir(parents=True, exist_ok=True)
+    doc_cache_dir.mkdir(parents=True, exist_ok=True)
 
     config_path = config_path_for(workspace_root)
     schema_path = schema_path_for(workspace_root)
     created: list[str] = []
 
+    config_payload = default_config_payload() if not config_path.exists() else load_json(config_path)
+    if project_root:
+        config_payload["project_root"] = project_root
+    if profile and profile != AUTO_PROFILE:
+        config_payload = apply_profile_preset(config_payload, profile)
+    elif "project_profile" not in config_payload:
+        config_payload["project_profile"] = AUTO_PROFILE
+
+    resolved_project_root = (workspace_root / config_payload["project_root"]).resolve()
+    active_profile = config_payload.get("project_profile", AUTO_PROFILE)
+    if active_profile != AUTO_PROFILE:
+        if PROFILE_PRESETS.get(active_profile, {}).get("language_adapter") == "tsjs":
+            config_payload["tsjs"]["test_command"] = profile_test_command(active_profile, resolved_project_root, config_payload, "tsjs")
+            config_payload["tsjs"]["coverage_adapter"] = profile_coverage_adapter(active_profile, config_payload, "tsjs")
+
     if not config_path.exists():
-        write_json(config_path, default_config_payload())
+        write_json(config_path, config_payload)
         created.append(str(config_path.relative_to(workspace_root)))
+    else:
+        write_json(config_path, config_payload)
     if not schema_path.exists():
         schema_path.write_text(default_schema_text(), encoding="utf-8")
         created.append(str(schema_path.relative_to(workspace_root)))
@@ -279,6 +312,8 @@ def init_workspace(workspace_root: pathlib.Path) -> dict:
         "config_path": str(config_path),
         "schema_path": str(schema_path),
         "codegraph_dir": str(codegraph_dir),
+        "project_profile": config_payload.get("project_profile", AUTO_PROFILE),
+        "project_root": config_payload["project_root"],
     }
 
 
@@ -341,22 +376,51 @@ def apply_generic_demo_edit(workspace_root: pathlib.Path) -> str:
     return "src/settings.conf"
 
 
+def _toggle_marker(target: pathlib.Path, baseline: str, edited: str, changed_file: str) -> str:
+    original = target.read_text(encoding="utf-8")
+    if baseline in original:
+        updated = original.replace(baseline, edited)
+    elif edited in original:
+        updated = original.replace(edited, baseline)
+    else:
+        raise RuntimeError(f"Demo edit marker not found in {target}")
+    if updated == original:
+        raise RuntimeError(f"Demo edit did not change {target}")
+    target.write_text(updated, encoding="utf-8")
+    return changed_file
+
+
 def fixture_spec(fixture: str) -> dict:
     specs = {
         "python_minimal": {
             "task_id": "demo-login-impact",
             "seed": "fn:src/app.py:login",
             "edit": apply_python_demo_edit,
+            "profile": "python-basic",
         },
         "tsjs_minimal": {
             "task_id": "demo-tsjs-impact",
             "seed": "fn:src/math.js:add",
             "edit": apply_tsjs_demo_edit,
+            "profile": "node-cli",
         },
         "generic_minimal": {
             "task_id": "demo-generic-impact",
             "seed": "file:src/settings.conf",
             "edit": apply_generic_demo_edit,
+            "profile": "generic-file",
+        },
+        "tsjs_node_cli": {
+            "task_id": "demo-node-cli-impact",
+            "seed": "fn:src/cli.js:runCommand",
+            "edit": lambda root: _toggle_marker(root / "examples" / "tsjs_node_cli" / "src" / "cli.js", 'const DEMO_NODE_CLI_TRACK = "baseline";', 'const DEMO_NODE_CLI_TRACK = "edited-by-demo";', "src/cli.js"),
+            "profile": "node-cli",
+        },
+        "tsx_react_vite": {
+            "task_id": "demo-react-vite-impact",
+            "seed": "fn:src/AppShell.tsx:AppShell",
+            "edit": lambda root: _toggle_marker(root / "examples" / "tsx_react_vite" / "src" / "AppShell.tsx", 'const DEMO_REACT_VITE_TRACK = "baseline";', 'const DEMO_REACT_VITE_TRACK = "edited-by-demo";', "src/AppShell.tsx"),
+            "profile": "react-vite",
         },
     }
     if fixture not in specs:
@@ -367,11 +431,17 @@ def fixture_spec(fixture: str) -> dict:
 def detect_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> dict:
     config = build_graph.load_config(config_path)
     project_root = build_graph.project_root_for(workspace_root, config)
+    detected_adapter = detect_language_adapter(project_root, config)
+    detected_profile, confidence, reason = detect_project_profile(project_root, config, detected_adapter)
     return {
         "workspace_root": str(workspace_root),
         "project_root": str(project_root),
         "configured_adapter": config.get("language_adapter", "auto"),
-        "detected_adapter": detect_language_adapter(project_root, config),
+        "configured_profile": config.get("project_profile", AUTO_PROFILE),
+        "detected_adapter": detected_adapter,
+        "detected_profile": detected_profile,
+        "confidence": confidence,
+        "reason": reason,
     }
 
 
@@ -414,7 +484,9 @@ def doctor_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
 
     try:
         detected_adapter = detect_language_adapter(project_root, config)
+        detected_profile, confidence, reason = detect_project_profile(project_root, config, detected_adapter)
         add_status("PASS", f"detected_adapter {detected_adapter}")
+        add_status("PASS", f"profile {detected_profile} ({reason}, confidence={confidence:.2f})")
     except Exception as exc:  # pragma: no cover - defensive
         add_status("FAIL", f"adapter detection failed: {exc}")
         return {"overall": overall, "statuses": statuses}
@@ -427,7 +499,7 @@ def doctor_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
             subprocess.run(["git", "rev-parse", "--is-inside-work-tree"], cwd=workspace_root, check=True, capture_output=True, text=True)
             add_status("PASS", "git repository available")
         except subprocess.CalledProcessError:
-            add_status("WARN", "git repository not initialized in this workspace")
+            add_status("PASS", "git repository not initialized yet; evidence will use UNCOMMITTED markers until first commit")
 
     if detected_adapter == "python":
         add_status("PASS", "python runtime available")
@@ -444,6 +516,28 @@ def doctor_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
             add_status("PASS", "node runtime available")
         else:
             add_status("WARN", "node runtime not found; tsjs test execution will be unavailable")
+        package_json = package_json_data(project_root)
+        if package_json:
+            add_status("PASS", "package.json found")
+        else:
+            add_status("WARN", "package.json missing; node-cli profile will fall back to direct node commands")
+        if detected_profile == "react-vite":
+            deps = set(package_json.get("dependencies", {}).keys()) | set(package_json.get("devDependencies", {}).keys())
+            if "react" in deps and "vite" in deps:
+                add_status("PASS", "react-vite markers found")
+            else:
+                add_status("WARN", "react-vite profile is selected but package.json is missing react or vite markers")
+        elif detected_profile == "next-basic":
+            if any((project_root / name).exists() for name in ("next.config.js", "next.config.mjs", "next.config.ts")):
+                add_status("PASS", "next markers found")
+            else:
+                add_status("WARN", "next-basic profile is preset-only until this project adds Next markers")
+        elif detected_profile == "electron-renderer":
+            add_status("WARN", "electron-renderer profile is preset-only in stage4")
+        elif detected_profile == "obsidian-plugin":
+            add_status("WARN", "obsidian-plugin profile is preset-only in stage4")
+        elif detected_profile == "tauri-frontend":
+            add_status("WARN", "tauri-frontend profile is preset-only in stage4")
     else:
         add_status("PASS", "generic fallback available")
 
@@ -462,13 +556,16 @@ def print_doctor(payload: dict) -> None:
 def run_demo(fixture: str, workspace: str | None) -> pathlib.Path:
     source_root = template_root()
     workspace_root = pathlib.Path(workspace).resolve() if workspace else source_root
+    spec = fixture_spec(fixture)
     if workspace:
         copy_template(source_root, workspace_root)
         init_git_repo(workspace_root)
-    else:
-        init_workspace(workspace_root)
+    init_workspace(
+        workspace_root,
+        profile=spec.get("profile"),
+        project_root=f"examples/{fixture}",
+    )
     config_path = set_fixture_config(workspace_root, fixture, persist=bool(workspace))
-    spec = fixture_spec(fixture)
     build_graph.build_graph(workspace_root=workspace_root, config_path=config_path)
     generate_report.generate_report(
         workspace_root=workspace_root,
@@ -493,6 +590,8 @@ def main() -> int:
 
     init_parser = subparsers.add_parser("init", help="Bootstrap config, schema, and artifact directories")
     init_parser.add_argument("--workspace-root", default=".")
+    init_parser.add_argument("--profile", default=None)
+    init_parser.add_argument("--project-root", default=None)
 
     doctor_parser = subparsers.add_parser("doctor", help="Run a lightweight workspace health check")
     doctor_parser.add_argument("--workspace-root", default=".")
@@ -525,7 +624,7 @@ def main() -> int:
     after_parser.add_argument("--changed-file", action="append", default=[])
 
     demo_parser = subparsers.add_parser("demo", help="Run a fixture end-to-end demo")
-    demo_parser.add_argument("--fixture", choices=["python_minimal", "tsjs_minimal", "generic_minimal"], default="python_minimal")
+    demo_parser.add_argument("--fixture", choices=["python_minimal", "tsjs_minimal", "generic_minimal", "tsjs_node_cli", "tsx_react_vite"], default="python_minimal")
     demo_parser.add_argument("--workspace", default=None)
 
     args = parser.parse_args()
@@ -538,7 +637,7 @@ def main() -> int:
     workspace_root = pathlib.Path(args.workspace_root).resolve()
 
     if args.command == "init":
-        print(json.dumps(init_workspace(workspace_root), ensure_ascii=False, indent=2))
+        print(json.dumps(init_workspace(workspace_root, profile=args.profile, project_root=args.project_root), ensure_ascii=False, indent=2))
         return 0
 
     config_path = pathlib.Path(getattr(args, "config", ".code-impact-guardian/config.json"))

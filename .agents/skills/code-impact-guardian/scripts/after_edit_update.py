@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import os
 import pathlib
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -11,6 +13,7 @@ from datetime import datetime, timezone
 import build_graph
 import generate_report
 from adapters import adapter_coverage_adapter, adapter_test_command, detect_language_adapter
+from parser_backends import v8_relative_path
 
 
 def utc_now() -> str:
@@ -29,6 +32,9 @@ def normalize_test_command(command: list[str]) -> list[str]:
         return []
     if command[0].lower() == "python":
         return [sys.executable, *command[1:]]
+    if command[0].lower() == "npm":
+        npm_binary = shutil.which("npm.cmd") or shutil.which("npm") or "npm"
+        return [npm_binary, *command[1:]]
     return command
 
 
@@ -37,7 +43,7 @@ def run_tests_with_coverage(*, workspace_root: pathlib.Path, config_path: pathli
     paths = build_graph.graph_paths(workspace_root, config)
     project_root = build_graph.project_root_for(workspace_root, config)
     adapter_name = detect_language_adapter(project_root, config)
-    configured_command = adapter_test_command(config, adapter_name)
+    configured_command = adapter_test_command(config, adapter_name, project_root)
     command = normalize_test_command(configured_command)
 
     output_path = workspace_root / ".ai" / "codegraph" / f"test-output-{task_id}.log"
@@ -61,7 +67,7 @@ def run_tests_with_coverage(*, workspace_root: pathlib.Path, config_path: pathli
         paths["test_results_path"].write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
         return summary
 
-    coverage_adapter = adapter_coverage_adapter(config, adapter_name)
+    coverage_adapter = adapter_coverage_adapter(config, adapter_name, project_root)
 
     if coverage_adapter == "coveragepy":
         coverage_command = [
@@ -119,6 +125,76 @@ def run_tests_with_coverage(*, workspace_root: pathlib.Path, config_path: pathli
             "coverage_status": coverage_status,
             "coverage_reason": coverage_reason,
             "totals": coverage_payload.get("totals", {}),
+            "detected_adapter": adapter_name,
+        }
+        paths["test_results_path"].write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+        return summary
+
+    if coverage_adapter == "v8_family":
+        coverage_dir = workspace_root / ".ai" / "codegraph" / f"v8-coverage-{task_id}"
+        coverage_dir.mkdir(parents=True, exist_ok=True)
+        for stale in coverage_dir.glob("*.json"):
+            stale.unlink()
+        env = os.environ.copy()
+        env["NODE_V8_COVERAGE"] = str(coverage_dir)
+        result = subprocess.run(
+            command,
+            cwd=project_root,
+            env=env,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            check=False,
+        )
+        output_path.write_text(result.stdout + "\n" + result.stderr, encoding="utf-8")
+        coverage_payload = {"result": [], "summary": {"files": {}}}
+        coverage_status = "available"
+        coverage_reason = None
+        if result.returncode == 0:
+            for raw_json in sorted(coverage_dir.glob("*.json")):
+                try:
+                    payload = json.loads(raw_json.read_text(encoding="utf-8"))
+                except json.JSONDecodeError:
+                    continue
+                coverage_payload["result"].append(payload)
+                for script in payload.get("result", []):
+                    relative_path = v8_relative_path(script.get("url", ""), project_root)
+                    if not relative_path:
+                        continue
+                    functions = script.get("functions", [])
+                    covered_functions = sum(
+                        1
+                        for item in functions
+                        if any(section.get("count", 0) > 0 for section in item.get("ranges", []))
+                    )
+                    summary = coverage_payload["summary"]["files"].setdefault(
+                        relative_path,
+                        {"function_count": 0, "covered_function_count": 0, "range_count": 0, "covered_range_count": 0},
+                    )
+                    summary["function_count"] += len(functions)
+                    summary["covered_function_count"] += covered_functions
+                    for item in functions:
+                        ranges = item.get("ranges", [])
+                        summary["range_count"] += len(ranges)
+                        summary["covered_range_count"] += sum(1 for section in ranges if section.get("count", 0) > 0)
+            coverage_json_path.write_text(json.dumps(coverage_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        else:
+            coverage_status = "tests_failed"
+            coverage_reason = "configured test command failed"
+
+        summary = {
+            "task_id": task_id,
+            "command": command,
+            "status": "passed" if result.returncode == 0 else "failed",
+            "exit_code": result.returncode,
+            "output_path": str(output_path.relative_to(workspace_root)),
+            "coverage_path": str(coverage_json_path.relative_to(workspace_root)) if coverage_json_path.exists() else None,
+            "coverage_status": coverage_status,
+            "coverage_reason": coverage_reason,
+            "totals": {
+                "file_count": len(coverage_payload.get("summary", {}).get("files", {})),
+            },
             "detected_adapter": adapter_name,
         }
         paths["test_results_path"].write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -187,7 +263,8 @@ def import_coverage(*, workspace_root: pathlib.Path, config_path: pathlib.Path, 
     paths = build_graph.graph_paths(workspace_root, config)
     payload = json.loads((workspace_root / test_summary["coverage_path"]).read_text(encoding="utf-8"))
     with sqlite3.connect(paths["db_path"]) as conn:
-        for file_path, raw_data in payload.get("files", {}).items():
+        file_entries = payload.get("files", {}) or payload.get("summary", {}).get("files", {})
+        for file_path, raw_data in file_entries.items():
             node_id = build_graph.file_node_id(file_path)
             target_node_id = node_id if conn.execute("SELECT 1 FROM nodes WHERE node_id = ?", (node_id,)).fetchone() else None
             conn.execute(

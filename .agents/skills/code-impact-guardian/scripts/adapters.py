@@ -10,6 +10,7 @@ from parser_backends import (
     test_node_id,
     iter_matching_files,
 )
+from profiles import detect_project_profile, profile_coverage_adapter, profile_test_command
 
 
 PYTHON_ADAPTER = "python"
@@ -41,14 +42,20 @@ def detect_language_adapter(project_root: pathlib.Path, config: dict) -> str:
     return GENERIC_ADAPTER
 
 
-def adapter_test_command(config: dict, adapter_name: str) -> list[str]:
-    adapter_config = config.get(adapter_name, {})
-    return list(adapter_config.get("test_command", []))
+def detect_project_profile_name(project_root: pathlib.Path, config: dict, adapter_name: str | None = None) -> str:
+    active_adapter = adapter_name or detect_language_adapter(project_root, config)
+    profile_name, _, _ = detect_project_profile(project_root, config, active_adapter)
+    return profile_name
 
 
-def adapter_coverage_adapter(config: dict, adapter_name: str) -> str:
-    adapter_config = config.get(adapter_name, {})
-    return adapter_config.get("coverage_adapter", "unavailable")
+def adapter_test_command(config: dict, adapter_name: str, project_root: pathlib.Path) -> list[str]:
+    profile_name = detect_project_profile_name(project_root, config, adapter_name)
+    return profile_test_command(profile_name, project_root, config, adapter_name)
+
+
+def adapter_coverage_adapter(config: dict, adapter_name: str, project_root: pathlib.Path) -> str:
+    profile_name = detect_project_profile_name(project_root, config, adapter_name)
+    return profile_coverage_adapter(profile_name, config, adapter_name)
 
 
 def collect_adapter_graph(project_root: pathlib.Path, config: dict, adapter_name: str) -> AdapterGraph:

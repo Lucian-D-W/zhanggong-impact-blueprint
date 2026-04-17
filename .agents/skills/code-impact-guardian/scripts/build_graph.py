@@ -13,6 +13,7 @@ from adapters import (
     AdapterGraph,
     collect_adapter_graph,
     detect_language_adapter,
+    detect_project_profile_name,
     file_node_id,
     rule_node_id,
 )
@@ -578,6 +579,7 @@ def adapter_graph_to_rows(
     workspace_root: pathlib.Path,
     git: dict,
     adapter_name: str,
+    profile_name: str,
     adapter_graph: AdapterGraph,
 ) -> tuple[list[Node], list[Edge], list[Evidence]]:
     nodes: dict[str, Node] = {}
@@ -589,8 +591,10 @@ def adapter_graph_to_rows(
         attrs = {
             "kind": "test-file" if file_record.get("is_test_file") else "source-file",
             "adapter": adapter_name,
+            "profile": profile_name,
             "content_hash": file_record.get("content_hash"),
         }
+        attrs.update(file_record.get("attrs", {}))
         nodes[file_node_id(relative)] = Node(
             node_id=file_node_id(relative),
             kind="file",
@@ -600,6 +604,13 @@ def adapter_graph_to_rows(
         )
 
     for function_record in adapter_graph.functions:
+        attrs = {
+            "language": function_record["language"],
+            "body_hash": function_record.get("body_hash"),
+            "adapter": adapter_name,
+            "profile": profile_name,
+        }
+        attrs.update(function_record.get("attrs", {}))
         nodes[function_record["node_id"]] = Node(
             node_id=function_record["node_id"],
             kind="function",
@@ -608,7 +619,7 @@ def adapter_graph_to_rows(
             symbol=function_record["symbol"],
             start_line=function_record["start_line"],
             end_line=function_record["end_line"],
-            attrs_json=json.dumps({"language": function_record["language"], "body_hash": function_record.get("body_hash")}, ensure_ascii=False),
+            attrs_json=json.dumps(attrs, ensure_ascii=False),
         )
         evidence = make_evidence(
             workspace_root=workspace_root,
@@ -623,6 +634,13 @@ def adapter_graph_to_rows(
         edges.append(Edge(file_node_id(function_record["path"]), "DEFINES", function_record["node_id"], evidence.evidence_id))
 
     for test_record in adapter_graph.tests:
+        attrs = {
+            "language": test_record["language"],
+            "body_hash": test_record.get("body_hash"),
+            "adapter": adapter_name,
+            "profile": profile_name,
+        }
+        attrs.update(test_record.get("attrs", {}))
         nodes[test_record["node_id"]] = Node(
             node_id=test_record["node_id"],
             kind="test",
@@ -631,7 +649,7 @@ def adapter_graph_to_rows(
             symbol=test_record["symbol"],
             start_line=test_record["start_line"],
             end_line=test_record["end_line"],
-            attrs_json=json.dumps({"language": test_record["language"], "body_hash": test_record.get("body_hash")}, ensure_ascii=False),
+            attrs_json=json.dumps(attrs, ensure_ascii=False),
         )
         evidence = make_evidence(
             workspace_root=workspace_root,
@@ -653,7 +671,7 @@ def adapter_graph_to_rows(
                 kind="file",
                 name=pathlib.PurePosixPath(target_path).name,
                 path=target_path,
-                attrs_json=json.dumps({"kind": "source-file", "adapter": adapter_name}, ensure_ascii=False),
+                attrs_json=json.dumps({"kind": "source-file", "adapter": adapter_name, "profile": profile_name}, ensure_ascii=False),
             )
         evidence = make_evidence(
             workspace_root=workspace_root,
@@ -696,12 +714,14 @@ def build_graph(*, workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
     project_root = project_root_for(workspace_root, config)
     git = get_git_context(workspace_root)
     adapter_name = detect_language_adapter(project_root, config)
+    profile_name = detect_project_profile_name(project_root, config, adapter_name)
     adapter_graph = collect_adapter_graph(project_root, config, adapter_name)
 
     nodes, edges, evidence_rows = adapter_graph_to_rows(
         workspace_root=workspace_root,
         git=git,
         adapter_name=adapter_name,
+        profile_name=profile_name,
         adapter_graph=adapter_graph,
     )
     known_nodes = {node.node_id for node in nodes}
@@ -741,6 +761,7 @@ def build_graph(*, workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
         "evidence_count": len(all_evidence),
         "configured_language_adapter": config.get("language_adapter", "auto"),
         "detected_adapter": adapter_name,
+        "detected_profile": profile_name,
         "available_function_seeds": sorted(node_id for node_id, node in all_nodes.items() if node.kind == "function"),
         "available_file_seeds": sorted(node_id for node_id, node in all_nodes.items() if node.kind == "file"),
     }

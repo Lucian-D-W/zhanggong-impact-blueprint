@@ -19,19 +19,23 @@ It is not tied to any existing business codebase.
 4. edit code
 5. `after-edit`
 
-The fixed workflow stays the same even when adapters change.
+The workflow stays fixed even when adapters, profiles, or fixtures change.
 
-## Stage 2 scope
+## Stage 4 scope
 
-Stage 2 keeps the template lightweight and only adds:
+Stage4 keeps the template lightweight and only pushes these things forward:
 
-- a thin unified entry: `cig.py`
-- a minimal `.js/.ts` adapter
-- a generic file-level fallback
+- TS/JS family becomes the main extensibility target
+- profile-aware `init` / `detect` / `doctor`
+- `.js`, `.ts`, `.jsx`, `.tsx` parsing
+- a real TS/JS coverage path through raw V8 coverage
+- better seed and report metadata
+- Python stays stable
+- generic fallback stays available
 
 Python remains the first demonstration chain, not a product binding.
-Future React / Node.js work should extend the TS/JS family through config and
-adapters instead of replacing the workflow or schema.
+React / Next / Electron / Obsidian / Tauri are handled as TS/JS profile
+differences instead of separate graph systems.
 
 ## Durable graph rules
 
@@ -43,48 +47,50 @@ adapters instead of replacing the workflow or schema.
 
 ## Preferred commands
 
-Detect the active adapter:
+Start with:
 
 ```bash
-python .agents/skills/code-impact-guardian/cig.py init
+python .agents/skills/code-impact-guardian/cig.py init --profile node-cli --project-root .
 python .agents/skills/code-impact-guardian/cig.py doctor
 python .agents/skills/code-impact-guardian/cig.py detect
 ```
 
-Build or refresh:
+Then:
 
 ```bash
 python .agents/skills/code-impact-guardian/cig.py build
-```
-
-List seed candidates:
-
-```bash
 python .agents/skills/code-impact-guardian/cig.py seeds
+python .agents/skills/code-impact-guardian/cig.py report --task-id your-task --seed fn:src/file.js:yourFunction
+python .agents/skills/code-impact-guardian/cig.py after-edit --task-id your-task --seed fn:src/file.js:yourFunction --changed-file src/file.js
 ```
 
-Generate a report:
-
-```bash
-python .agents/skills/code-impact-guardian/cig.py report --task-id demo-login-impact --seed fn:src/app.py:login
-```
-
-Update after an edit:
-
-```bash
-python .agents/skills/code-impact-guardian/cig.py after-edit --task-id demo-login-impact --seed fn:src/app.py:login --changed-file src/app.py
-```
-
-Run a fixture demo:
+Fixture demos:
 
 ```bash
 python .agents/skills/code-impact-guardian/cig.py demo --fixture python_minimal
+python .agents/skills/code-impact-guardian/cig.py demo --fixture tsjs_node_cli --workspace path/to/temp/workspace
+python .agents/skills/code-impact-guardian/cig.py demo --fixture tsx_react_vite --workspace path/to/temp/workspace
+python .agents/skills/code-impact-guardian/cig.py demo --fixture generic_minimal --workspace path/to/temp/workspace
 ```
 
-## Generic fallback rule
+## Profile notes
 
-If the active project language is not supported yet, the workflow must still
-continue through the generic adapter.
+Real profiles in stage4:
+
+- `node-cli`
+- `react-vite`
+
+Preset-only profiles in stage4:
+
+- `next-basic`
+- `electron-renderer`
+- `obsidian-plugin`
+- `tauri-frontend`
+
+If no supported parser matches, the workflow must continue through the generic
+adapter.
+
+## Generic fallback rule
 
 In generic mode:
 
@@ -110,3 +116,5 @@ Do not pretend generic mode has function-level precision.
 - GitHub permalink, blame, and compare stay optional.
 - If git history is unavailable, record the reason instead of pretending it exists.
 - If coverage is unavailable, record the reason instead of fabricating coverage-backed results.
+- Local markdown rules remain the main truth source for rule documents.
+- Optional external docs may supplement the workflow, but never replace the graph.

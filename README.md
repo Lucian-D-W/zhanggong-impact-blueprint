@@ -1,7 +1,7 @@
 # Code Impact Guardian
 
-Code Impact Guardian is a lightweight, repo-local workflow template for safer
-code edits.
+Code Impact Guardian is a lightweight, repo-local skill workflow for safer code
+edits.
 
 It is intentionally shaped as:
 
@@ -11,14 +11,14 @@ It is intentionally shaped as:
 - one fixed impact report flow
 - a small set of copyable scripts
 
-It is **not** a platform product.
-It is **not** a plugin.
-It is designed to be copied into another repository and extended through config
-plus thin adapters.
+It is not a plugin.
+It is not a platform product.
+It is meant to be copied into another repository and adapted through config,
+profiles, and thin parser backends.
 
 ## Fixed workflow
 
-The workflow stays the same across Stage 1 and Stage 2:
+The workflow stays fixed across every stage:
 
 1. build / refresh graph
 2. generate impact report
@@ -26,98 +26,136 @@ The workflow stays the same across Stage 1 and Stage 2:
 4. update graph / report / evidence after edit
 5. run relevant tests and record outcome
 
-## Current support
+## Current support level
 
 ### Stage 1
 
-Stage 1 proved the workflow with a real Python minimal fixture plus
-`coverage.py`.
-
-That Python chain is only the first demonstration path.
-It does **not** mean the workflow core is bound to Python.
+- real Python minimal fixture
+- real `coverage.py` import
+- SQLite graph + report + after-edit loop
 
 ### Stage 2
 
-Stage 2 adds the smallest possible extension layer without changing the schema
-or the fixed workflow:
-
-- `generic` fallback for unsupported languages
-- a minimal `tsjs` adapter for `.js` and `.ts`
-- one unified entry point: `cig.py`
-
-Stage 2 still keeps the template light:
-
-- no plugin
-- no platformization
-- no new node or edge types
-- no persisted transitive edges
+- generic file-level fallback
+- minimal `.js/.ts` adapter
+- unified CLI entry: `cig.py`
 
 ### Stage 3
 
-Stage 3 keeps the same lightweight shape and adds:
+- lightweight process recording
+- `task_runs`, `edit_rounds`, `file_diffs`, `symbol_diffs`
+- `init` and `doctor`
+- optional doc source hook while keeping local markdown as default truth
 
-- lightweight process recording in SQLite
-- per-round file and symbol diffs after edits
-- thin parser backend indirection
-- `init` and `doctor` for faster project setup
-- an optional doc source adapter hook that keeps local markdown as the default path
+### Stage 4
+
+- TS/JS family promoted to a first-class adapter
+- profile-aware init / detect / doctor
+- `.js`, `.ts`, `.jsx`, `.tsx` scanning
+- raw V8 coverage path for TS/JS profiles
+- better seed discovery and report metadata
+- lightweight placeholder slots for Rust-lite and SQL/PostgreSQL
 
 ## Adapter status
 
 ### Python
 
-Python is the most complete chain today.
+Python remains the most stable baseline.
 
 Current Python behavior:
 
 - supports `file`, `function`, `test`, `rule`
 - supports `DEFINES`, `CALLS`, `IMPORTS`, `COVERS`, `GOVERNS`
-- supports `coverage.py`
-- has a real end-to-end fixture: `examples/python_minimal/`
+- imports real `coverage.py` data
+- keeps stage1 / stage2 / stage3 regressions as the main stability gate
 
-### TS/JS
+Python is still the first demonstration chain, not a product binding.
 
-TS/JS is now supported at the minimum Stage 2 level.
+### TS/JS family
+
+TS/JS is now the main expansion target in stage4.
 
 Current TS/JS behavior:
 
-- supports `.js` and `.ts`
-- supports `file`, `function`, `test`
-- supports `DEFINES`, `CALLS`, `IMPORTS`
-- records test outcome and git evidence
-- coverage stays unavailable by default in Stage 2
-- has a real end-to-end fixture: `examples/tsjs_minimal/`
+- supports `.js`, `.ts`, `.jsx`, `.tsx`
+- recognizes:
+  - function declarations
+  - exported const arrow functions
+  - React function components
+  - custom hooks (`useX`)
+  - minimal class methods
+- parses:
+  - `import`
+  - `export`
+  - re-export
+  - `require`
+  - `module.exports`
+- records richer parser metadata in node attrs
+- improves seed discovery and report display for definition/reference hints
+- supports node:test and basic `test` / `it` / `describe` / `test.describe`
+- has a real raw V8 coverage path for profile-driven TS/JS projects
 
-This Stage 2 TS/JS adapter is intentionally small.
-It does **not** add React-specific, Node-specific, Electron-specific, or
-Tauri-specific logic yet.
+Stage4 still keeps TS/JS as one family adapter.
+React, Next, Electron, Obsidian, and Tauri are profile differences, not
+separate graph systems.
 
 ### Generic fallback
 
-When a project language is not yet supported, the workflow can still run in
-`generic` fallback mode.
+When a language is not supported yet, the workflow still runs through the
+generic adapter.
 
-Current generic behavior:
+Generic mode:
 
-- still supports `build`
-- still supports `seeds`
-- still supports `report`
-- still supports `after-edit`
+- stays file-level only
+- still supports `build`, `seeds`, `report`, `after-edit`
 - still records test outcome and git evidence
-- only works at **file level**
+- never pretends to have function-level precision
 
-The generic adapter does **not** pretend to support function-level analysis.
-It emits file seeds such as `file:src/settings.conf`.
+Use generic fallback when:
 
-## Unified entry
+- the project language is not supported yet
+- you only need config / file / rule impact coverage for now
+- you want the workflow today without waiting for a parser backend
 
-Stage 2 adds one thin command shell:
+## Profiles
+
+Stage4 adds a lightweight profile layer for project defaults.
+
+Real profiles in stage4:
+
+- `node-cli`
+- `react-vite`
+
+Preset-only profiles in stage4:
+
+- `next-basic`
+- `electron-renderer`
+- `obsidian-plugin`
+- `tauri-frontend`
+
+Profiles affect:
+
+- globs
+- test command selection
+- coverage command selection
+- doctor checks
+- default rule/doc expectations
+
+Profiles do not:
+
+- change the schema
+- fork the core workflow
+- create a second adapter system
+
+## Unified CLI
+
+The unified entry point stays thin:
 
 ```bash
 python .agents/skills/code-impact-guardian/cig.py <command>
 ```
 
-Supported commands:
+Commands:
 
 - `init`
 - `doctor`
@@ -128,175 +166,213 @@ Supported commands:
 - `after-edit`
 - `demo`
 
-Examples:
+### Shortest path in a real project
 
 ```bash
-python .agents/skills/code-impact-guardian/cig.py init
+python .agents/skills/code-impact-guardian/cig.py init --profile node-cli --project-root .
 python .agents/skills/code-impact-guardian/cig.py doctor
 python .agents/skills/code-impact-guardian/cig.py detect
 python .agents/skills/code-impact-guardian/cig.py build
 python .agents/skills/code-impact-guardian/cig.py seeds
-python .agents/skills/code-impact-guardian/cig.py report --task-id demo-login-impact --seed fn:src/app.py:login
-python .agents/skills/code-impact-guardian/cig.py after-edit --task-id demo-login-impact --seed fn:src/app.py:login --changed-file src/app.py
+python .agents/skills/code-impact-guardian/cig.py report --task-id your-task --seed fn:src/your_file.js:yourFunction
+python .agents/skills/code-impact-guardian/cig.py after-edit --task-id your-task --seed fn:src/your_file.js:yourFunction --changed-file src/your_file.js
 ```
 
-`cig.py` is only a thin entry shell.
-The existing scripts still do the real work underneath.
+## Profile-aware init
 
-## Demo fixtures
+Examples:
 
-The repository now includes three fixtures:
+Python:
+
+```bash
+python .agents/skills/code-impact-guardian/cig.py init --profile python-basic --project-root .
+```
+
+Node CLI:
+
+```bash
+python .agents/skills/code-impact-guardian/cig.py init --profile node-cli --project-root .
+```
+
+React + Vite:
+
+```bash
+python .agents/skills/code-impact-guardian/cig.py init --profile react-vite --project-root .
+```
+
+If you do not supply a profile, `project_profile` stays `auto` and `detect`
+will fall back to a lightweight heuristic:
+
+- Python files -> `python-basic`
+- TS/JS family files -> a TS/JS profile guess
+- otherwise -> `generic-file`
+
+## Seeds and reports
+
+`seeds` now returns both ids and lightweight metadata.
+
+For TS/JS family projects, seed details can include:
+
+- `definition_kind`
+- `exported`
+- `is_component`
+- `is_hook`
+- `class_name`
+- `reference_hints`
+
+`report` now shows:
+
+- detected adapter and profile
+- seed definition metadata
+- reference hints from parser attrs
+- direct callers / callees / tests / rules
+- transitive paths computed only at report time
+
+## Rules and doc sources
+
+Local markdown rules remain the default path and the default truth source.
+
+Rule docs are still expected in local markdown with stable ids, for example:
+
+```text
+docs/rules/*.md
+```
+
+Optional doc sources can be added later through `doc_source_adapter`, but they
+only supplement local docs. They never replace the local code graph as the main
+truth source.
+
+If external docs are supplied through config, stage4 can snapshot them into the
+local doc cache under `.ai/codegraph/doc-cache/` for later review.
+
+## Example fixtures
+
+Current fixtures:
 
 - `examples/python_minimal/`
 - `examples/tsjs_minimal/`
 - `examples/generic_minimal/`
+- `examples/tsjs_node_cli/`
+- `examples/tsx_react_vite/`
+- `examples/rust_lite_placeholder/`
+- `examples/sql_pg_placeholder/`
 
-### Cross-platform demo commands
+Real stage4 TS/JS fixtures:
 
-Python demo:
+- `tsjs_node_cli` for `node-cli`
+- `tsx_react_vite` for `react-vite`
 
-```bash
-python scripts/demo_phase1.py
-```
+## Copying the skill into a real project
 
-Unified fixture demos:
+Copy these paths into the target repo:
 
-```bash
-python .agents/skills/code-impact-guardian/cig.py demo --fixture python_minimal
-python .agents/skills/code-impact-guardian/cig.py demo --fixture tsjs_minimal --workspace path/to/temp/workspace
-python .agents/skills/code-impact-guardian/cig.py demo --fixture generic_minimal --workspace path/to/temp/workspace
-```
+- `AGENTS.md`
+- `.agents/skills/code-impact-guardian/`
+- `.code-impact-guardian/config.json`
+- `.code-impact-guardian/schema.sql`
 
-The `--workspace` form copies the template into a disposable workspace,
-initializes a temporary git repository there, and leaves the generated
-artifacts in that copied workspace.
+Then:
 
-## Stage 3 process logs
+1. run `init` with a profile
+2. run `doctor`
+3. run `detect`
+4. run `build`
+5. run `seeds`
+6. run `report`
+7. make the edit
+8. run `after-edit`
 
-Stage 3 adds lightweight workflow tables without changing the node/edge graph
-model:
+### Real Python project
 
-- `task_runs`
-- `edit_rounds`
-- `file_diffs`
-- `symbol_diffs`
-
-These tables record task and round metadata, changed files, conservative
-function diffs, and direct relation diffs.
-
-They do **not** persist indirect or transitive impact.
-
-## Generated artifacts
-
-Successful runs write real outputs under `.ai/codegraph/`:
-
-- `codegraph.db`
-- `build.log`
-- `reports/impact-<task-id>.md`
-- `test-results.json`
-- `test-output-<task-id>.log`
-- `coverage-<task-id>.json` when coverage is available
-
-## Configuration
-
-Configuration stays dependency-free and lives in:
-
-```text
-.code-impact-guardian/config.json
-```
-
-Important keys:
-
-- `project_root`
-- `language_adapter`
-- `rules.globs`
-- `python.*`
-- `tsjs.*`
-- `generic.*`
-- `impact.max_depth`
-
-`language_adapter` accepts:
-
-- `auto`
-- `python`
-- `tsjs`
-- `generic`
-
-`auto` is intentionally lightweight:
-
-- detect Python if Python source/test files are present
-- otherwise detect TS/JS if `.js` or `.ts` source/test files are present
-- otherwise fall back to `generic`
-
-## Copying this into a real project
-
-To reuse this template in another repository:
-
-1. Copy these paths into the target repository:
-   - `AGENTS.md`
-   - `.agents/skills/code-impact-guardian/`
-   - `.code-impact-guardian/config.json`
-   - `.code-impact-guardian/schema.sql`
-2. Update `.code-impact-guardian/config.json`:
-   - point `project_root` at the real project
-   - choose `language_adapter`
-   - set source/test globs for the selected adapter
-   - set the test command for that project
-   - set `rules.globs` if your rule docs live elsewhere
-3. Add Markdown rule files with stable `id` values in frontmatter.
-4. Initialize the workspace:
+1. Copy the skill files into the repo.
+2. Add or confirm local rule markdown files such as `docs/rules/*.md`.
+3. Initialize:
 
 ```bash
-python .agents/skills/code-impact-guardian/cig.py init
+python .agents/skills/code-impact-guardian/cig.py init --profile python-basic --project-root .
 ```
 
-5. Run the lightweight doctor:
+4. Doctor:
 
 ```bash
 python .agents/skills/code-impact-guardian/cig.py doctor
 ```
 
-6. Build the graph:
+5. Build and inspect seeds:
 
 ```bash
 python .agents/skills/code-impact-guardian/cig.py build
-```
-
-7. List seed candidates:
-
-```bash
 python .agents/skills/code-impact-guardian/cig.py seeds
 ```
 
-8. Generate the report for the function or file you plan to change:
+6. Generate a report for the function you plan to touch:
 
 ```bash
-python .agents/skills/code-impact-guardian/cig.py report --task-id your-task --seed fn:path/to/file.py:function_name
+python .agents/skills/code-impact-guardian/cig.py report --task-id auth-fix --seed fn:src/app.py:login
 ```
 
-For generic fallback, use a file seed:
+7. Edit the code, then refresh graph, report, evidence, and tests:
 
 ```bash
-python .agents/skills/code-impact-guardian/cig.py report --task-id your-task --seed file:path/to/file.conf
+python .agents/skills/code-impact-guardian/cig.py after-edit --task-id auth-fix --seed fn:src/app.py:login --changed-file src/app.py
 ```
 
-9. Read the report, make the edit, then refresh graph, report, evidence, and
-test outcome:
+### Real TS/JS project
+
+Node CLI style:
 
 ```bash
-python .agents/skills/code-impact-guardian/cig.py after-edit --task-id your-task --seed fn:path/to/file.py:function_name --changed-file path/to/file.py
+python .agents/skills/code-impact-guardian/cig.py init --profile node-cli --project-root .
+```
+
+React + Vite style:
+
+```bash
+python .agents/skills/code-impact-guardian/cig.py init --profile react-vite --project-root .
+```
+
+Then run the same fixed workflow:
+
+```bash
+python .agents/skills/code-impact-guardian/cig.py doctor
+python .agents/skills/code-impact-guardian/cig.py detect
+python .agents/skills/code-impact-guardian/cig.py build
+python .agents/skills/code-impact-guardian/cig.py seeds
+python .agents/skills/code-impact-guardian/cig.py report --task-id ui-fix --seed fn:src/AppShell.tsx:AppShell
+python .agents/skills/code-impact-guardian/cig.py after-edit --task-id ui-fix --seed fn:src/AppShell.tsx:AppShell --changed-file src/AppShell.tsx
 ```
 
 ## Verification
 
-Stage 1 regression:
+Stage1 regression:
 
 ```bash
 python -m unittest tests.test_stage1_workflow -v
 ```
 
-Stage 2 workflows:
+Stage2 regression:
 
 ```bash
 python -m unittest tests.test_stage2_workflow -v
 ```
+
+Stage3 regression:
+
+```bash
+python -m unittest tests.test_stage3_workflow -v
+```
+
+Stage4 workflows:
+
+```bash
+python -m unittest tests.test_stage4_workflow -v
+```
+
+## Roadmap placeholders
+
+Stage4 only reserves these next steps:
+
+- Rust-lite backend name and example placeholder
+- SQL/PostgreSQL backend name and example placeholder
+
+No parser or tests are shipped for those two yet.

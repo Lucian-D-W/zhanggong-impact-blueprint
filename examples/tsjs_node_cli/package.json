@@ -1,0 +1,7 @@
+{
+  "name": "cig-stage4-node-cli",
+  "private": true,
+  "scripts": {
+    "test:node-cli": "node --test"
+  }
+}

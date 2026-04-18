@@ -11,7 +11,7 @@ from profiles import detect_project_profile
 
 def detail_rows(conn: sqlite3.Connection, kind: str) -> list[dict]:
     rows = conn.execute(
-        "SELECT node_id, path, symbol, attrs_json FROM nodes WHERE kind = ? ORDER BY node_id",
+        "SELECT node_id, path, symbol, start_line, end_line, attrs_json FROM nodes WHERE kind = ? ORDER BY node_id",
         (kind,),
     ).fetchall()
     return [
@@ -19,9 +19,11 @@ def detail_rows(conn: sqlite3.Connection, kind: str) -> list[dict]:
             "node_id": node_id,
             "path": path,
             "symbol": symbol,
+            "start_line": start_line,
+            "end_line": end_line,
             "attrs": json.loads(attrs_json or "{}"),
         }
-        for node_id, path, symbol, attrs_json in rows
+        for node_id, path, symbol, start_line, end_line, attrs_json in rows
     ]
 
 

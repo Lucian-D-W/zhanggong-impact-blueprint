@@ -970,6 +970,9 @@ def summary_from_db(
         "changed_files": changed_files,
         "stale_reason": stale_reason,
         "trust_level": (decision or {}).get("trust_level"),
+        "graph_trust": (decision or {}).get("graph_trust", (decision or {}).get("trust_level")),
+        "graph_freshness": (decision or {}).get("graph_freshness"),
+        "dependency_fingerprint_status": (decision or {}).get("dependency_fingerprint_status"),
         "reason_codes": (decision or {}).get("reason_codes", []),
         "verification_status": (decision or {}).get("verification_status"),
         "build_decision": decision or {},
@@ -1015,6 +1018,7 @@ def build_graph(*, workspace_root: pathlib.Path, config_path: pathlib.Path, chan
     if force_full:
         decision["build_mode"] = "full"
         decision["trust_level"] = "high"
+        decision["graph_trust"] = "high"
         decision["reason_codes"] = [*decision.get("reason_codes", []), "FORCED_FULL_REBUILD"]
     if decision["build_mode"] == "full":
         plan["build_mode"] = "full"

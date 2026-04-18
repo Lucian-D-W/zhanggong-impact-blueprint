@@ -25,16 +25,19 @@ The workflow does not change:
 4. update graph / report / evidence after edit
 5. run relevant tests and record outcome
 
-## Stage9 focus
+## Stage10 focus
 
-Stage9 keeps the same lightweight shape and pushes it toward zero-friction,
-high-trust daily use:
+Stage10 keeps the same lightweight shape and pushes it toward a more
+trustworthy, lower-friction daily workflow:
 
-- automatic context inference from explicit args, patch files, stdin patch, git diff, and recent task context
-- stable brief contracts for reports and status
-- explicit build trust decisions for incremental vs full rebuilds
-- machine-readable handoff artifacts for agents
-- lightweight benchmark repos that look more like day-to-day work than minimal fixtures
+- skill structure normalized for easier agent triggering and export
+- automatic setup when the repo has not been initialized yet
+- better Python OOP and TS/JS brace-edge parsing
+- clearer separation between seed selection, graph trust, report completeness,
+  and test signal
+- stronger protections against stale-graph trust and empty-report misuse
+- consumer export vs debug bundle export, so normal sharing does not leak `.ai`
+  artifacts
 
 ## Current support level
 
@@ -105,13 +108,23 @@ That single-folder install will generate:
 
 ## Exporting the skill
 
-### Full package export
+### Consumer export
 
 ```bash
 python .agents/skills/code-impact-guardian/cig.py export-skill --out path/to/exported-skill
 ```
 
-This keeps the stage6-style distribution package.
+This is the default. It produces the consumer-safe package and does not include
+`.ai` runtime artifacts.
+
+### Debug bundle export
+
+```bash
+python .agents/skills/code-impact-guardian/cig.py export-skill --mode debug-bundle --out path/to/exported-debug-bundle
+```
+
+Use this only for troubleshooting or handoff. It may include reports, logs,
+handoff notes, and last-error snapshots.
 
 ### Single-folder export
 
@@ -223,6 +236,9 @@ Brief mode is now a stable contract for both people and agents:
 - next tests
 - next step
 
+`brief` is intentionally not a long report. It is the default daily-use
+protocol for `analyze` and `status`.
+
 ## Structured runtime artifacts
 
 Runtime data is written under:
@@ -296,6 +312,12 @@ to see:
 You only need to pass `--seed` when the top candidates remain genuinely
 ambiguous.
 
+If there is no usable git diff, no patch input, no explicit changed file, and
+no recent task context, `analyze` now returns a readable `CONTEXT_MISSING`
+error instead of creating an empty-looking report. In that case you should pass
+`--changed-file`, pass `--patch-file`, initialize git, or explicitly allow a
+file-level fallback.
+
 Incremental vs full rebuild is now guided by a trust policy. The brief report,
 status output, `build-decision.json`, and handoff all explain:
 
@@ -303,6 +325,32 @@ status output, `build-decision.json`, and handoff all explain:
 - why that choice was made
 - whether shadow verification ran
 - whether a fallback full rebuild became necessary
+
+High graph trust now requires all of these:
+
+- fresh graph state
+- unchanged config/profile/rules/doc-source fingerprint
+- unchanged dependency fingerprint
+- no high-risk cross-adapter or noisy generated-file change set
+
+If the graph is merely reused and the previous build is older than the
+configured TTL, the run is not high trust.
+
+## Tests are not safety
+
+`tests passed` is a useful signal, but it is not proof that the change is
+safe.
+
+The daily workflow now separates:
+
+- `seed_confidence`: why this seed was selected
+- `graph_trust`: whether the graph is fresh and trustworthy enough
+- `test_signal`: what tests actually ran and how relevant they were
+- `report_completeness`: whether the report has enough context to support
+  editing safely
+
+When no directly affected tests are identified, the tool will say so
+explicitly, even if the suite is green.
 
 ## What scripts guarantee vs what the agent decides
 
@@ -333,4 +381,5 @@ python -m unittest tests.test_stage6_workflow -v
 python -m unittest tests.test_stage7_workflow -v
 python -m unittest tests.test_stage8_workflow -v
 python -m unittest tests.test_stage9_workflow -v
+python -m unittest tests.test_stage10_workflow -v
 ```

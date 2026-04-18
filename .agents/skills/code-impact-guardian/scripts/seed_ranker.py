@@ -97,8 +97,9 @@ def score_candidate(candidate: dict, *, changed_line_map: dict[str, list[int]], 
     elif lines:
         distance = min(min(abs(line_no - start_line), abs(line_no - end_line)) for line_no in lines)
         if distance <= 3:
-            score += 2.5
-            reasons.append("changed-line is near this definition")
+            proximity_bonus = max(0.5, 5.0 - (distance * 2.0))
+            score += proximity_bonus
+            reasons.append(f"changed-line is near this definition (distance={distance}, +{proximity_bonus:.2f})")
 
     attrs = candidate.get("attrs", {})
     kind_bonus = candidate_kind_priority(attrs)
@@ -107,15 +108,19 @@ def score_candidate(candidate: dict, *, changed_line_map: dict[str, list[int]], 
         reasons.append(f"definition_kind={attrs.get('definition_kind')}")
 
     if last_task:
+        last_task_files = set(last_task.get("changed_files", []))
+        same_file_overlap = bool(candidate["path"] in last_task_files and last_task_files)
         if last_task.get("seed") == candidate["node_id"]:
-            score += 5.0
-            reasons.append("matches most recent task seed")
+            recent_seed_bonus = 0.75 if same_file_overlap else 0.5
+            score += recent_seed_bonus
+            reasons.append(f"recent task seed overlap (+{recent_seed_bonus:.2f})")
         elif last_task.get("project_root") and last_task.get("seed", "").split(":")[-1] == candidate.get("symbol"):
-            score += 1.5
-            reasons.append("symbol matches recent task context")
-        if candidate["path"] in set(last_task.get("changed_files", [])):
-            score += 1.0
-            reasons.append("same file as recent task")
+            symbol_bonus = 0.6 if same_file_overlap else 0.35
+            score += symbol_bonus
+            reasons.append(f"symbol matches recent task context (+{symbol_bonus:.2f})")
+        if same_file_overlap:
+            score += 0.5
+            reasons.append("same file as recent task (+0.50)")
 
     if candidate["kind"] == "file":
         score += 0.5
@@ -180,10 +185,13 @@ def rank_seed_candidates(*, workspace_root: pathlib.Path, config_path: pathlib.P
     confidence = confidence_from_score(top_score, second_score)
     selection_reason = "; ".join(top_candidates[0]["reasons"]) if top_candidates[0]["reasons"] else "highest ranked candidate"
     score_gap = top_score - second_score if second_score is not None else None
+    top_has_line_anchor = any(reason.startswith("changed-line hits") or reason.startswith("changed-line is near") for reason in top_candidates[0]["reasons"])
     auto_select = len(top_candidates) == 1 or (
         confidence >= 0.85
         and (score_gap is None or score_gap >= 1.5)
     )
+    if not auto_select and top_has_line_anchor and confidence >= 0.75 and (score_gap is None or score_gap >= 1.5):
+        auto_select = True
 
     return {
         "selected_seed": top_candidates[0]["node_id"] if auto_select else None,
@@ -197,9 +205,14 @@ def rank_seed_candidates(*, workspace_root: pathlib.Path, config_path: pathlib.P
                 "end_line": item.get("end_line"),
                 "confidence": confidence_from_score(item["score"]),
                 "reason": "; ".join(item["reasons"]) or "ranked candidate",
+                "reason_details": item["reasons"],
             }
             for item in top_candidates
         ],
         "confidence": confidence,
         "reason": selection_reason,
+        "recent_task_influenced": any(
+            any("recent task" in detail for detail in item["reasons"])
+            for item in top_candidates
+        ),
     }

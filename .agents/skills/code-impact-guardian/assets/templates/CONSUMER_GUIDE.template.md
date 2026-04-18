@@ -26,6 +26,12 @@ python .agents/skills/code-impact-guardian/cig.py analyze
 python .agents/skills/code-impact-guardian/cig.py finish
 ```
 
+What these commands try to do for you:
+
+- `setup` writes the minimum repo-local files and checks the environment
+- `analyze` tries to infer the changed scope before you edit
+- `finish` refreshes the graph/report and records the test signal honestly
+
 ## Python
 
 ```bash
@@ -58,6 +64,19 @@ python .agents/skills/code-impact-guardian/cig.py finish
 - Default output is `brief`; add `--full` only when you need more.
 - Check `.ai/codegraph/reports/impact-<task-id>.json` when another agent needs machine-readable context.
 - Read `.ai/codegraph/build-decision.json` when you need to understand why the run trusted incremental vs full rebuild.
+- `tests passed` does not mean the change is proven safe; always read `report_completeness`, `graph_trust`, and `test_signal` together.
+- If `analyze` says the context is incomplete, do not keep editing as if the report were complete.
+
+## When you still need to pass `--seed`
+
+Most of the time you should not need it. You normally only pass `--seed` when:
+
+- multiple functions or routines in the same diff remain genuinely ambiguous
+- the repo is not using git and you did not provide `--changed-file` or `--patch-file`
+- you intentionally want to analyze a specific function/routine instead of the current diff
+
+If `analyze` cannot safely choose, it will only show the top few ranked
+candidates and ask you to be explicit.
 
 ## Where to look on failure
 
@@ -70,3 +89,8 @@ python .agents/skills/code-impact-guardian/cig.py finish
 - Structured logs: `.ai/codegraph/logs/`
 - Reports: `.ai/codegraph/reports/`
 - Recovery steps: `TROUBLESHOOTING.md`
+
+## Sharing with other people or agents
+
+- Share the normal exported package with `export-skill` (consumer mode)
+- Share `--mode debug-bundle` only when someone needs logs, reports, handoff, or last-error details for troubleshooting

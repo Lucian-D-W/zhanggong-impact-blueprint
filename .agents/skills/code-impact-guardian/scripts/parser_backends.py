@@ -83,13 +83,23 @@ def python_node_text(source_text: str, node: ast.AST) -> str:
     return ""
 
 
+def python_method_symbol(class_name: str, method_name: str) -> str:
+    return f"{class_name}.{method_name}"
+
+
 def extract_python_called_targets(
     *,
     node: ast.AST,
     local_function_ids: dict[str, str],
     imported_function_map: dict[str, str],
     imported_module_map: dict[str, str],
+    imported_symbol_map: dict[str, tuple[str, str]] | None = None,
+    class_method_ids: dict[str, str] | None = None,
+    all_class_method_ids: dict[str, dict[str, str]] | None = None,
 ) -> list[tuple[str, int]]:
+    class_method_ids = class_method_ids or {}
+    all_class_method_ids = all_class_method_ids or {}
+    imported_symbol_map = imported_symbol_map or {}
     targets: list[tuple[str, int]] = []
     for child in ast.walk(node):
         if not isinstance(child, ast.Call):
@@ -105,6 +115,13 @@ def extract_python_called_targets(
             alias = func.value.id
             if alias in imported_module_map:
                 target_id = function_node_id(imported_module_map[alias], func.attr)
+            elif alias in imported_symbol_map:
+                target_file, symbol_name = imported_symbol_map[alias]
+                target_id = function_node_id(target_file, python_method_symbol(symbol_name, func.attr))
+            elif alias in {"self", "cls"} and func.attr in class_method_ids:
+                target_id = class_method_ids[func.attr]
+            elif alias in all_class_method_ids and func.attr in all_class_method_ids[alias]:
+                target_id = all_class_method_ids[alias][func.attr]
         if target_id:
             targets.append((target_id, getattr(child, "lineno", 1)))
     return targets
@@ -136,9 +153,12 @@ def parse_python_backend(project_root: pathlib.Path, config: dict, include_files
         import_file_targets: list[tuple[str, int]] = []
         imported_function_map: dict[str, str] = {}
         imported_module_map: dict[str, str] = {}
+        imported_symbol_map: dict[str, tuple[str, str]] = {}
         local_function_ids: dict[str, str] = {}
+        all_class_method_ids: dict[str, dict[str, str]] = {}
         function_nodes: list[ast.FunctionDef] = []
-        test_nodes: list[tuple[str, ast.AST]] = []
+        class_method_nodes: list[tuple[str, ast.FunctionDef]] = []
+        test_nodes: list[tuple[str, ast.AST, dict[str, str]]] = []
 
         for child in module.body:
             if isinstance(child, ast.Import):
@@ -152,26 +172,42 @@ def parse_python_backend(project_root: pathlib.Path, config: dict, include_files
                 if target_file:
                     import_file_targets.append((target_file, getattr(child, "lineno", 1)))
                     for alias in child.names:
-                        imported_function_map[alias.asname or alias.name] = function_node_id(target_file, alias.name)
+                        alias_name = alias.asname or alias.name
+                        imported_function_map[alias_name] = function_node_id(target_file, alias.name)
+                        imported_symbol_map[alias_name] = (target_file, alias.name)
             elif isinstance(child, ast.FunctionDef):
                 if is_test_file and child.name.startswith("test_"):
-                    test_nodes.append((child.name, child))
+                    test_nodes.append((child.name, child, {}))
                 else:
                     local_function_ids[child.name] = function_node_id(relative, child.name)
                     function_nodes.append(child)
-            elif isinstance(child, ast.ClassDef) and is_test_file:
+            elif isinstance(child, ast.ClassDef):
+                class_method_map: dict[str, str] = {}
                 for member in child.body:
-                    if isinstance(member, ast.FunctionDef) and member.name.startswith("test_"):
-                        test_nodes.append((f"{child.name}.{member.name}", member))
+                    if not isinstance(member, ast.FunctionDef):
+                        continue
+                    if is_test_file and member.name.startswith("test_"):
+                        test_nodes.append((f"{child.name}.{member.name}", member, class_method_map))
+                        continue
+                    symbol = python_method_symbol(child.name, member.name)
+                    node_id = function_node_id(relative, symbol)
+                    class_method_map[member.name] = node_id
+                    class_method_nodes.append((child.name, member))
+                if class_method_map:
+                    all_class_method_ids[child.name] = class_method_map
 
         for function_node in function_nodes:
             function_text = python_node_text(source_text, function_node)
             function_contexts.append(
                 {
+                    "node_id": function_node_id(relative, function_node.name),
                     "file_path": relative,
                     "local_function_ids": local_function_ids,
                     "imported_function_map": imported_function_map,
                     "imported_module_map": imported_module_map,
+                    "imported_symbol_map": imported_symbol_map,
+                    "class_method_ids": {},
+                    "all_class_method_ids": all_class_method_ids,
                     "node": function_node,
                 }
             )
@@ -197,14 +233,57 @@ def parse_python_backend(project_root: pathlib.Path, config: dict, include_files
                 }
             )
 
-        for test_name, test_node in test_nodes:
+        for class_name, function_node in class_method_nodes:
+            symbol = python_method_symbol(class_name, function_node.name)
+            function_text = python_node_text(source_text, function_node)
+            function_contexts.append(
+                {
+                    "node_id": function_node_id(relative, symbol),
+                    "file_path": relative,
+                    "local_function_ids": local_function_ids,
+                    "imported_function_map": imported_function_map,
+                    "imported_module_map": imported_module_map,
+                    "imported_symbol_map": imported_symbol_map,
+                    "class_method_ids": all_class_method_ids.get(class_name, {}),
+                    "all_class_method_ids": all_class_method_ids,
+                    "node": function_node,
+                }
+            )
+            adapter_graph.functions.append(
+                {
+                    "node_id": function_node_id(relative, symbol),
+                    "path": relative,
+                    "name": symbol,
+                    "symbol": symbol,
+                    "start_line": function_node.lineno,
+                    "end_line": function_node.end_lineno or function_node.lineno,
+                    "language": "python",
+                    "body_hash": sha1_text(function_text),
+                    "attrs": {
+                        "definition_kind": "class_method",
+                        "class_name": class_name,
+                        "exported": False,
+                        "sql_query_hints": extract_sql_query_hints(function_text),
+                        "reference_hints": {
+                            "imports": sorted(imported_function_map.keys()) + sorted(imported_module_map.keys()),
+                            "exports": [],
+                        },
+                    },
+                }
+            )
+
+        for test_name, test_node, class_method_map in test_nodes:
             test_contexts.append(
                 {
+                    "node_id": test_node_id(relative, test_name),
                     "file_path": relative,
                     "test_name": test_name,
                     "local_function_ids": local_function_ids,
                     "imported_function_map": imported_function_map,
                     "imported_module_map": imported_module_map,
+                    "imported_symbol_map": imported_symbol_map,
+                    "class_method_ids": class_method_map,
+                    "all_class_method_ids": all_class_method_ids,
                     "node": test_node,
                 }
             )
@@ -242,12 +321,15 @@ def parse_python_backend(project_root: pathlib.Path, config: dict, include_files
 
     known_function_ids = {item["node_id"] for item in adapter_graph.functions}
     for context in function_contexts:
-        source_id = function_node_id(context["file_path"], context["node"].name)
+        source_id = context.get("node_id") or function_node_id(context["file_path"], context["node"].name)
         for target_id, line_no in extract_python_called_targets(
             node=context["node"],
             local_function_ids=context["local_function_ids"],
             imported_function_map=context["imported_function_map"],
             imported_module_map=context["imported_module_map"],
+            imported_symbol_map=context.get("imported_symbol_map"),
+            class_method_ids=context.get("class_method_ids"),
+            all_class_method_ids=context.get("all_class_method_ids"),
         ):
             if target_id not in known_function_ids:
                 continue
@@ -263,12 +345,15 @@ def parse_python_backend(project_root: pathlib.Path, config: dict, include_files
             )
 
     for context in test_contexts:
-        source_id = test_node_id(context["file_path"], context["test_name"])
+        source_id = context.get("node_id") or test_node_id(context["file_path"], context["test_name"])
         for target_id, line_no in extract_python_called_targets(
             node=context["node"],
             local_function_ids=context["local_function_ids"],
             imported_function_map=context["imported_function_map"],
             imported_module_map=context["imported_module_map"],
+            imported_symbol_map=context.get("imported_symbol_map"),
+            class_method_ids=context.get("class_method_ids"),
+            all_class_method_ids=context.get("all_class_method_ids"),
         ):
             if target_id not in known_function_ids:
                 continue
@@ -363,27 +448,146 @@ def resolve_tsjs_module(source_relative: str, spec: str, project_root: pathlib.P
 
 
 def block_end_line(lines: list[str], start_index: int, limit: int | None = None) -> int:
-    depth = 0
-    started = False
-    last_index = limit if limit is not None else len(lines)
-    for index in range(start_index, last_index):
-        line = lines[index]
-        opens = line.count("{")
-        closes = line.count("}")
-        if opens:
-            started = True
-        depth += opens
-        depth -= closes
-        if started and depth <= 0:
-            return index + 1
-    return min(last_index, start_index + 1)
+    return scan_js_block(lines, start_index, limit)["end_line"]
 
 
 def arrow_end_line(lines: list[str], start_index: int) -> int:
     line = lines[start_index]
     if "{" in line:
-        return block_end_line(lines, start_index)
+        return scan_js_block(lines, start_index)["end_line"]
     return start_index + 1
+
+
+def scan_js_block(lines: list[str], start_index: int, limit: int | None = None) -> dict:
+    last_index = limit if limit is not None else len(lines)
+    depth = 0
+    started = False
+    in_single = False
+    in_double = False
+    in_template = False
+    in_block_comment = False
+    template_expr_depth = 0
+    parser_warning: str | None = None
+
+    for index in range(start_index, last_index):
+        line = lines[index]
+        in_line_comment = False
+        char_index = 0
+        while char_index < len(line):
+            char = line[char_index]
+            next_char = line[char_index + 1] if char_index + 1 < len(line) else ""
+
+            if in_line_comment:
+                break
+
+            if in_block_comment:
+                if char == "*" and next_char == "/":
+                    in_block_comment = False
+                    char_index += 2
+                    continue
+                char_index += 1
+                continue
+
+            if in_single:
+                if char == "\\":
+                    char_index += 2
+                    continue
+                if char == "'":
+                    in_single = False
+                char_index += 1
+                continue
+
+            if in_double:
+                if char == "\\":
+                    char_index += 2
+                    continue
+                if char == '"':
+                    in_double = False
+                char_index += 1
+                continue
+
+            if in_template:
+                if template_expr_depth == 0:
+                    if char == "\\":
+                        char_index += 2
+                        continue
+                    if char == "`":
+                        in_template = False
+                        char_index += 1
+                        continue
+                    if char == "$" and next_char == "{":
+                        template_expr_depth = 1
+                        char_index += 2
+                        continue
+                    char_index += 1
+                    continue
+                if char == "'" and not in_single:
+                    in_single = True
+                    char_index += 1
+                    continue
+                if char == '"' and not in_double:
+                    in_double = True
+                    char_index += 1
+                    continue
+                if char == "/" and next_char == "*":
+                    in_block_comment = True
+                    char_index += 2
+                    continue
+                if char == "/" and next_char == "/":
+                    in_line_comment = True
+                    break
+                if char == "{":
+                    template_expr_depth += 1
+                elif char == "}":
+                    template_expr_depth -= 1
+                    if template_expr_depth == 0:
+                        char_index += 1
+                        continue
+                char_index += 1
+                continue
+
+            if char == "/" and next_char == "/":
+                in_line_comment = True
+                break
+            if char == "/" and next_char == "*":
+                in_block_comment = True
+                char_index += 2
+                continue
+            if char == "'":
+                in_single = True
+                char_index += 1
+                continue
+            if char == '"':
+                in_double = True
+                char_index += 1
+                continue
+            if char == "`":
+                in_template = True
+                char_index += 1
+                continue
+            if char == "{":
+                started = True
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if started and depth <= 0:
+                    warning = parser_warning
+                    if in_template or in_block_comment:
+                        warning = warning or "parser_warning: unterminated template/comment recovered"
+                    return {
+                        "end_line": index + 1,
+                        "parser_warning": warning,
+                        "parser_confidence": 0.6 if warning else 0.92,
+                    }
+            char_index += 1
+
+    if in_template or in_block_comment or in_single or in_double:
+        parser_warning = "parser_warning: unstable function boundary scan"
+    return {
+        "end_line": min(last_index, start_index + 1),
+        "parser_warning": parser_warning or "parser_warning: unterminated block scan",
+        "parser_confidence": 0.35,
+    }
 
 
 def normalize_export_items(export_block: str) -> list[str]:
@@ -646,7 +850,8 @@ def parse_tsjs_backend(project_root: pathlib.Path, config: dict, include_files: 
             class_match = JS_CLASS_RE.match(line)
             if class_match:
                 class_name = class_match.group(1)
-                class_end = block_end_line(lines, index)
+                class_scan = scan_js_block(lines, index)
+                class_end = class_scan["end_line"]
                 class_methods: dict[str, str] = {}
                 inner_index = index + 1
                 while inner_index < class_end - 1:
@@ -654,7 +859,8 @@ def parse_tsjs_backend(project_root: pathlib.Path, config: dict, include_files: 
                     method_match = JS_METHOD_RE.match(inner_line)
                     if method_match and method_match.group(1) != "constructor":
                         method_name = method_match.group(1)
-                        end_line = block_end_line(lines, inner_index, class_end)
+                        method_scan = scan_js_block(lines, inner_index, class_end)
+                        end_line = method_scan["end_line"]
                         symbol = f"{class_name}.{method_name}"
                         node_id = function_node_id(relative, symbol)
                         class_methods[method_name] = node_id
@@ -678,6 +884,8 @@ def parse_tsjs_backend(project_root: pathlib.Path, config: dict, include_files: 
                             "exported": bool(export_names),
                             "is_component": False,
                             "is_hook": False,
+                            "parser_confidence": method_scan["parser_confidence"],
+                            "parser_warning": method_scan["parser_warning"],
                             "sql_query_hints": extract_sql_query_hints(body_text),
                             "reference_hints": {
                                         "imports": sorted(list(imported_function_map.keys()) + list(imported_module_map.keys())),
@@ -712,7 +920,8 @@ def parse_tsjs_backend(project_root: pathlib.Path, config: dict, include_files: 
                 node_id = function_node_id(relative, name)
                 local_function_ids[name] = node_id
                 known_function_ids.add(node_id)
-                end_line = block_end_line(lines, index)
+                function_scan = scan_js_block(lines, index)
+                end_line = function_scan["end_line"]
                 body_text = "\n".join(lines[index:end_line])
                 export_names = export_names_by_symbol.get(name, [])
                 exported = line.strip().startswith("export ") or bool(export_names)
@@ -732,6 +941,8 @@ def parse_tsjs_backend(project_root: pathlib.Path, config: dict, include_files: 
                             "exported": exported,
                             "is_component": is_component,
                             "is_hook": is_hook,
+                            "parser_confidence": function_scan["parser_confidence"],
+                            "parser_warning": function_scan["parser_warning"],
                             "sql_query_hints": extract_sql_query_hints(body_text),
                             "reference_hints": {
                                 "imports": sorted(list(imported_function_map.keys()) + list(imported_module_map.keys())),
@@ -765,7 +976,8 @@ def parse_tsjs_backend(project_root: pathlib.Path, config: dict, include_files: 
                 node_id = function_node_id(relative, name)
                 local_function_ids[name] = node_id
                 known_function_ids.add(node_id)
-                end_line = arrow_end_line(lines, index)
+                arrow_scan = scan_js_block(lines, index) if "{" in line else {"end_line": index + 1, "parser_warning": None, "parser_confidence": 0.92}
+                end_line = arrow_scan["end_line"]
                 body_text = "\n".join(lines[index:end_line])
                 export_names = export_names_by_symbol.get(name, [])
                 exported = line.strip().startswith("export ") or bool(export_names)
@@ -786,6 +998,8 @@ def parse_tsjs_backend(project_root: pathlib.Path, config: dict, include_files: 
                             "exported": exported,
                             "is_component": is_component,
                             "is_hook": is_hook,
+                            "parser_confidence": arrow_scan["parser_confidence"],
+                            "parser_warning": arrow_scan["parser_warning"],
                             "sql_query_hints": extract_sql_query_hints(body_text),
                             "reference_hints": {
                                 "imports": sorted(list(imported_function_map.keys()) + list(imported_module_map.keys())),
@@ -816,7 +1030,8 @@ def parse_tsjs_backend(project_root: pathlib.Path, config: dict, include_files: 
             test_match = JS_TEST_RE.match(line)
             if test_match:
                 test_name = test_match.group(1)
-                end_line = block_end_line(lines, index)
+                test_scan = scan_js_block(lines, index)
+                end_line = test_scan["end_line"]
                 body_text = "\n".join(lines[index:end_line])
                 test_contexts.append(
                     {
@@ -843,6 +1058,8 @@ def parse_tsjs_backend(project_root: pathlib.Path, config: dict, include_files: 
                         "attrs": {
                             "definition_kind": "test_case",
                             "test_style": tsjs_test_style(line),
+                            "parser_confidence": test_scan["parser_confidence"],
+                            "parser_warning": test_scan["parser_warning"],
                             "sql_query_hints": extract_sql_query_hints(body_text),
                         },
                     }

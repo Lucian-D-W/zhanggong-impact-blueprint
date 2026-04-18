@@ -55,12 +55,16 @@ def run_tests_with_coverage(*, workspace_root: pathlib.Path, config_path: pathli
             "task_id": task_id,
             "command": [],
             "status": "skipped",
+            "tests_run": 0,
+            "tests_passed": False,
             "exit_code": None,
             "output_path": str(output_path.relative_to(workspace_root)),
             "coverage_path": None,
             "coverage_status": "unavailable",
+            "coverage_available": False,
             "coverage_reason": f"no test command configured for adapter {adapter_name}",
             "totals": {},
+            "full_suite": False,
             "detected_adapter": adapter_name,
         }
         output_path.write_text(summary["coverage_reason"], encoding="utf-8")
@@ -119,12 +123,16 @@ def run_tests_with_coverage(*, workspace_root: pathlib.Path, config_path: pathli
             "task_id": task_id,
             "command": coverage_command,
             "status": "passed" if result.returncode == 0 else "failed",
+            "tests_run": 1,
+            "tests_passed": result.returncode == 0,
             "exit_code": result.returncode,
             "output_path": str(output_path.relative_to(workspace_root)),
             "coverage_path": str(coverage_json_path.relative_to(workspace_root)) if coverage_json_path.exists() else None,
             "coverage_status": coverage_status,
+            "coverage_available": coverage_status == "available",
             "coverage_reason": coverage_reason,
             "totals": coverage_payload.get("totals", {}),
+            "full_suite": True,
             "detected_adapter": adapter_name,
         }
         paths["test_results_path"].write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -187,14 +195,18 @@ def run_tests_with_coverage(*, workspace_root: pathlib.Path, config_path: pathli
             "task_id": task_id,
             "command": command,
             "status": "passed" if result.returncode == 0 else "failed",
+            "tests_run": 1,
+            "tests_passed": result.returncode == 0,
             "exit_code": result.returncode,
             "output_path": str(output_path.relative_to(workspace_root)),
             "coverage_path": str(coverage_json_path.relative_to(workspace_root)) if coverage_json_path.exists() else None,
             "coverage_status": coverage_status,
+            "coverage_available": coverage_status == "available",
             "coverage_reason": coverage_reason,
             "totals": {
                 "file_count": len(coverage_payload.get("summary", {}).get("files", {})),
             },
+            "full_suite": True,
             "detected_adapter": adapter_name,
         }
         paths["test_results_path"].write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -214,12 +226,16 @@ def run_tests_with_coverage(*, workspace_root: pathlib.Path, config_path: pathli
         "task_id": task_id,
         "command": command,
         "status": "passed" if result.returncode == 0 else "failed",
+        "tests_run": 1,
+        "tests_passed": result.returncode == 0,
         "exit_code": result.returncode,
         "output_path": str(output_path.relative_to(workspace_root)),
         "coverage_path": None,
         "coverage_status": "unavailable",
+        "coverage_available": False,
         "coverage_reason": f"coverage adapter unavailable for {adapter_name}",
         "totals": {},
+        "full_suite": True,
         "detected_adapter": adapter_name,
     }
     paths["test_results_path"].write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -510,6 +526,7 @@ def after_edit_update(
         symbol_diffs=symbol_diffs,
     )
 
+    test_summary = run_tests_with_coverage(workspace_root=workspace_root, config_path=config_path, task_id=task_id)
     report_summary = generate_report.generate_report(
         workspace_root=workspace_root,
         config_path=config_path,
@@ -518,8 +535,13 @@ def after_edit_update(
         max_depth=None,
         mode=report_mode,
         changed_files=changed_files,
+        test_summary=test_summary,
     )
-    test_summary = run_tests_with_coverage(workspace_root=workspace_root, config_path=config_path, task_id=task_id)
+    test_signal = (report_summary.get("brief") or {}).get("test_signal", {})
+    test_summary["affected_tests_found"] = test_signal.get("affected_tests_found", False)
+    test_summary["coverage_relevance"] = test_signal.get("coverage_relevance")
+    test_summary["full_suite"] = test_signal.get("full_suite", test_summary.get("full_suite", True))
+    paths["test_results_path"].write_text(json.dumps(test_summary, ensure_ascii=False, indent=2), encoding="utf-8")
     run_id = record_test_run(workspace_root=workspace_root, config_path=config_path, task_id=task_id, test_summary=test_summary)
     import_coverage(workspace_root=workspace_root, config_path=config_path, run_id=run_id, test_summary=test_summary)
 
@@ -550,7 +572,12 @@ def after_edit_update(
             f"- updated_at: {utc_now()}",
             f"- graph_refresh: complete ({graph_summary['node_count']} nodes, {graph_summary['edge_count']} edges)",
             f"- tests: {test_summary['status']} (exit_code={test_summary['exit_code']})",
+            f"- tests_run: {test_summary.get('tests_run', 0)}",
+            f"- tests_passed: {test_summary.get('tests_passed', False)}",
+            f"- affected_tests_found: {test_summary.get('affected_tests_found', False)}",
             f"- coverage_status: {test_summary['coverage_status']}",
+            f"- coverage_available: {test_summary.get('coverage_available', False)}",
+            f"- coverage_relevance: {test_summary.get('coverage_relevance') or 'unknown'}",
             f"- coverage_reason: {test_summary['coverage_reason'] or 'none'}",
             *diff_summary_lines(round_summary),
         ],

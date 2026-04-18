@@ -5,6 +5,7 @@ import subprocess
 import sys
 
 from recent_task import read_last_task
+from trust_policy import is_generated_or_cache_file
 
 
 HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
@@ -124,12 +125,16 @@ def infer_context(
         "selected_seed": explicit_seed,
         "changed_files": explicit_files,
         "changed_lines": explicit_lines,
+        "effective_changed_files": list(explicit_files),
+        "effective_changed_lines": list(explicit_lines),
         "candidate_seeds": [],
-        "confidence": 1.0 if explicit_seed else 0.0,
+        "seed_confidence": 1.0 if explicit_seed else 0.0,
         "reason": "explicit parameters provided" if explicit_seed or explicit_files or explicit_lines else "no context inferred yet",
         "context_sources": [],
         "fallback_used": False,
         "out_of_scope_files": [],
+        "noise_files": [],
+        "context_status": "missing",
     }
 
     if explicit_seed:
@@ -140,16 +145,21 @@ def infer_context(
         payload["context_sources"].append("explicit_changed_lines")
 
     def merge_diff(diff_payload: dict, source_name: str) -> None:
-        if not payload["changed_files"] and diff_payload.get("changed_files"):
-            payload["changed_files"] = list(diff_payload["changed_files"])
+        diff_files = [normalize_relative_path(item) for item in diff_payload.get("changed_files", []) if item]
+        diff_lines: list[str] = []
+        for items in diff_payload.get("changed_lines", {}).values():
+            diff_lines.extend(normalize_relative_path(item) for item in items if item)
+        explicit_files_locked = "explicit_changed_files" in payload["context_sources"]
+        explicit_lines_locked = "explicit_changed_lines" in payload["context_sources"]
+        merged = False
+        if diff_files and not explicit_files_locked:
+            payload["changed_files"] = sorted(set(payload["changed_files"]) | set(diff_files))
+            merged = True
+        if diff_lines and not explicit_lines_locked:
+            payload["changed_lines"] = sorted(set(payload["changed_lines"]) | set(diff_lines))
+            merged = True
+        if merged and source_name not in payload["context_sources"]:
             payload["context_sources"].append(source_name)
-        if not payload["changed_lines"] and diff_payload.get("changed_lines"):
-            merged_lines: list[str] = []
-            for items in diff_payload["changed_lines"].values():
-                merged_lines.extend(items)
-            payload["changed_lines"] = merged_lines
-            if source_name not in payload["context_sources"]:
-                payload["context_sources"].append(source_name)
         payload["out_of_scope_files"] = sorted(set(payload["out_of_scope_files"]) | set(diff_payload.get("out_of_scope_files", [])))
 
     if (not payload["changed_files"] or not payload["changed_lines"]) and patch_file and patch_file.exists():
@@ -201,7 +211,7 @@ def infer_context(
         if not payload["changed_files"] and last_task.get("changed_files"):
             payload["changed_files"] = [normalize_relative_path(item) for item in last_task.get("changed_files", [])]
             payload["context_sources"].append("last_task")
-        if not payload["selected_seed"] and last_task.get("seed"):
+        if not payload["selected_seed"] and not payload["changed_files"] and last_task.get("seed"):
             payload["selected_seed"] = last_task.get("seed")
             payload["context_sources"].append("last_task_seed")
         if not payload["changed_lines"]:
@@ -216,11 +226,41 @@ def infer_context(
                 payload["context_sources"].append("last_task_candidates")
 
     if payload["changed_files"] and not payload["reason"].startswith("explicit"):
-        payload["confidence"] = 0.8 if payload["changed_lines"] else 0.65
+        payload["seed_confidence"] = 0.8 if payload["changed_lines"] else 0.65
         payload["reason"] = f"context inferred from {', '.join(payload['context_sources'])}"
     elif payload["selected_seed"] and not explicit_seed:
-        payload["confidence"] = 0.72
+        payload["seed_confidence"] = 0.72
         payload["reason"] = f"seed recovered from {', '.join(payload['context_sources'])}"
+
+    if payload["changed_files"]:
+        retained_files: list[str] = []
+        retained_lines: list[str] = []
+        noise_files: list[str] = []
+        changed_line_map: dict[str, list[str]] = {}
+        for item in payload["changed_lines"]:
+            changed_line_map.setdefault(item.rsplit(":", 1)[0], []).append(item)
+        for file_path in payload["changed_files"]:
+            if is_generated_or_cache_file(file_path):
+                noise_files.append(file_path)
+                continue
+            retained_files.append(file_path)
+            retained_lines.extend(changed_line_map.get(file_path, []))
+        if retained_files != payload["changed_files"]:
+            payload["effective_changed_files"] = retained_files
+            payload["effective_changed_lines"] = retained_lines
+            payload["noise_files"] = sorted(set(noise_files))
+            if noise_files:
+                payload["context_sources"].append("generated_noise_filtered")
+        else:
+            payload["effective_changed_files"] = list(payload["changed_files"])
+            payload["effective_changed_lines"] = list(payload["changed_lines"])
+
+    if payload["selected_seed"] and payload["effective_changed_files"]:
+        payload["context_status"] = "resolved"
+    elif payload["effective_changed_files"] or payload["selected_seed"] or payload["out_of_scope_files"] or payload["noise_files"]:
+        payload["context_status"] = "partial"
+    else:
+        payload["context_status"] = "missing"
 
     return payload
 

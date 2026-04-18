@@ -33,6 +33,7 @@ This file defines the recovery protocol for agents and humans.
 3. If the seed is too broad or stale, rerun `analyze` with `--changed-line <path:line>` or `--patch-file <path>`
 4. If needed, start from a file seed before returning to a function/routine seed
 5. If multiple candidates were found, use one of the top suggested seeds from the structured error
+6. If the error is `CONTEXT_MISSING`, do not trust an empty-looking report; provide context first or explicitly allow fallback
 
 ## After-edit test failed
 
@@ -49,6 +50,7 @@ This file defines the recovery protocol for agents and humans.
 1. Record the unavailable status and reason
 2. Continue the workflow without pretending coverage exists
 3. If needed, fix the coverage adapter later as a separate task
+4. Do not describe `coverage unavailable` or `tests passed` as proof of safety
 
 ## Supplemental adapter failed
 
@@ -60,6 +62,7 @@ This file defines the recovery protocol for agents and humans.
 ## Error code guide
 
 - `CONFIG_MISSING`: run `init`
+- `CONTEXT_MISSING`: pass `--changed-file`, pass `--patch-file`, initialize git, or use `--allow-fallback` only if file-level continuation is acceptable
 - `INVALID_PROFILE`: choose a supported profile and run `init` again
 - `SUPPLEMENTAL_ADAPTER_MISSING`: add the expected files or disable the supplemental adapter
 - `SEED_SELECTION_REQUIRED`: rerun `analyze` or `report` with `--changed-line` or an explicit `--seed`

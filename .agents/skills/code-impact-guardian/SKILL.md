@@ -1,52 +1,43 @@
 ---
 name: code-impact-guardian
-description: Use this repo-local workflow before changing code. Build or refresh the graph, generate an impact report, edit only after the report exists, then update graph, report, evidence, and tests after the edit.
+description: Use before editing source files, before editing config/schema/tests, and before behavior changes. If the repo is not initialized, run setup automatically. Run analyze before edit. Run finish after edit. Do not edit if the impact report is missing or empty unless the user explicitly overrides.
 ---
 
 # Code Impact Guardian
 
-This skill is a copyable repository workflow template.
+Use this skill as a MUST-run workflow guard for repo-local code changes.
 
-It is not a plugin.
-It is not a platform product.
-It is not tied to any business repo.
+## Trigger
 
-## Fixed workflow
+You MUST use this skill when a task will:
 
-The workflow never changes:
+- edit source files
+- edit config, schema, or tests
+- change behavior
+- add or remove functions, routines, rules, or test commands
 
-1. build / refresh graph
-2. generate impact report
-3. read the report
-4. edit code
-5. update graph / report / evidence / tests
+## Required flow
 
-## Stage9 scope
+1. If `.code-impact-guardian/config.json` is missing, run `setup` automatically.
+2. Before editing, run `analyze`.
+3. Read the brief impact result.
+4. Only then edit code.
+5. After editing, run `finish`.
 
-Stage9 keeps the same skill shape and focuses on zero-friction, high-trust
-daily use:
+## Hard rules
 
-- automatic context inference from explicit args, patch files, stdin patch, git diff, and recent task context
-- stable brief report/status contracts for both humans and agents
-- explicit build trust decisions for incremental vs full rebuilds
-- more useful machine-readable outputs such as context resolution, seed candidates, build decisions, and next actions
-- lightweight benchmark repos that validate real daily-driver behavior
-
-TS/JS remains the main app-facing family.
-Python remains the stable regression baseline.
-`sql_postgres` remains supplemental rather than a second system.
-
-## Durable graph rules
-
-- Nodes: `file`, `function`, `test`, `rule`
-- Edges: `DEFINES`, `CALLS`, `IMPORTS`, `COVERS`, `GOVERNS`
-- Persist only direct edges
-- Never persist indirect or transitive edges
-- Compute transitive impact only during report generation
+- MUST auto-run `setup` when the repo is not initialized.
+- MUST run `analyze` before changing source, config, schema, or tests.
+- MUST NOT edit if the report is missing, empty, or marked `context incomplete`, unless the user explicitly tells you to continue anyway.
+- MUST run `finish` after the edit.
+- MUST record unavailable coverage honestly.
+- MUST NOT describe `coverage unavailable` as safety.
+- MUST NOT describe `tests passed` as safety.
+- MUST only say which tests passed, which tests were directly affected, and what remains uncovered.
 
 ## Preferred commands
 
-Use these first:
+Use these high-level commands first:
 
 ```bash
 python .agents/skills/code-impact-guardian/cig.py setup --project-root .
@@ -54,125 +45,57 @@ python .agents/skills/code-impact-guardian/cig.py analyze
 python .agents/skills/code-impact-guardian/cig.py finish
 ```
 
-What they do:
+Use these when context needs help:
 
-- `setup` initializes config/schema/docs and then runs doctor + detect
-- `analyze` infers context, builds or reuses the graph, generates a task id when missing, ranks seed candidates, and writes a brief report plus JSON report
-- `finish` reuses the latest task context when possible and refreshes report/evidence/tests after the edit
+- `--changed-file <path>`
+- `--changed-line <path:line>`
+- `--patch-file <path>`
+- `--allow-fallback`
+- `--full`
+- `--debug`
 
-Prefer these flags when needed:
+## Decision rules
 
-- `--changed-line <path:line>` to improve seed selection
-- `--patch-file <path>` to infer context from a diff artifact
-- `--brief` for compact output
-- `--full` when you need more detail
-- `--allow-fallback` when generic file-level continuation is acceptable
+- If `analyze` selects one high-confidence seed, proceed with that seed.
+- If `analyze` returns multiple candidates, do not guess. Ask the user or rerun with `--seed`.
+- If context cannot be inferred and fallback is not allowed, stop and surface the recovery steps.
+- If fallback is allowed, make it explicit that the report is file-level or context-incomplete.
 
-Low-level commands remain available:
+## What to tell the user after analyze
 
-```bash
-python .agents/skills/code-impact-guardian/cig.py init
-python .agents/skills/code-impact-guardian/cig.py doctor
-python .agents/skills/code-impact-guardian/cig.py detect
-python .agents/skills/code-impact-guardian/cig.py build
-python .agents/skills/code-impact-guardian/cig.py seeds
-python .agents/skills/code-impact-guardian/cig.py report --seed <seed>
-python .agents/skills/code-impact-guardian/cig.py after-edit --seed <seed> --changed-file <path>
-python .agents/skills/code-impact-guardian/cig.py status
-```
+Give a short 1-2 sentence summary:
 
-## Single-folder install promise
+- selected seed
+- direct impact scope
+- recommended tests
+- any uncertainty
 
-Copying only this folder into:
+If the report is incomplete, say so clearly and do not present it as safe to edit.
 
-```text
-.agents/skills/code-impact-guardian/
-```
+## Recovery references
 
-is now a supported path.
+Read these when something fails:
 
-After that, `setup` or `init` must be able to generate:
+1. `references/operations.md`
+2. `references/trust-model.md`
+3. `references/troubleshooting.md`
+4. `references/supported-modes.md`
+5. `.ai/codegraph/logs/last-error.json`
+6. `.ai/codegraph/handoff/latest.md`
 
-- `AGENTS.md`
-- `.gitignore`
-- `.code-impact-guardian/config.json`
-- `.code-impact-guardian/schema.sql`
-- `QUICKSTART.md`
-- `TROUBLESHOOTING.md`
-- `CONSUMER_GUIDE.md`
+## Output expectations
 
-## Generic fallback rule
+After `analyze`, expect:
 
-In generic mode:
+- brief Markdown report
+- JSON report
+- context resolution
+- seed candidates
+- next action
 
-- graph stays file-level only
-- `seeds` must list file seeds
-- `report` must accept file seeds
-- `finish` / `after-edit` must still record test and evidence outcomes
+After `finish`, expect:
 
-Do not pretend generic mode has function-level precision.
+- refreshed graph/report/evidence/tests
+- structured logs
+- updated handoff
 
-## Supplemental adapter rule
-
-Use supplemental adapters when another language should enrich the same graph
-and report rather than create a separate workflow.
-
-For SQL hints:
-
-- high confidence + unique target -> direct `CALLS`
-- otherwise -> attrs/report hint only
-
-## Recovery protocol
-
-When something fails, do not guess.
-Read these in order:
-
-1. `.ai/codegraph/logs/last-error.json`
-2. `.ai/codegraph/handoff/latest.md`
-3. `.ai/codegraph/context-resolution.json`
-4. `.ai/codegraph/build-decision.json`
-5. `TROUBLESHOOTING.md`
-
-The recovery policy is:
-
-- doctor fail -> fix config or environment first, optionally with `doctor --fix-safe`
-- detect uncertain -> explicitly choose a profile or allow generic fallback
-- build fail -> verify config, project root, and matching globs
-- report fail -> rebuild and choose a narrower seed
-- finish / after-edit test fail -> preserve evidence, inspect handoff, retry after fixing
-- coverage unavailable -> continue honestly, never fabricate
-- supplemental adapter fail -> downgrade to primary flow unless the task truly requires the supplemental graph
-
-## Expected outputs
-
-- `.ai/codegraph/codegraph.db`
-- `.ai/codegraph/logs/`
-- `.ai/codegraph/reports/impact-<task-id>.md`
-- `.ai/codegraph/reports/impact-<task-id>.json`
-- `.ai/codegraph/test-results.json`
-- `.ai/codegraph/last-task.json`
-- `.ai/codegraph/context-resolution.json`
-- `.ai/codegraph/build-decision.json`
-- `.ai/codegraph/seed-candidates.json`
-- `.ai/codegraph/next-action.json`
-- `.ai/codegraph/handoff/latest.md`
-
-## Evidence policy
-
-- Git evidence is the default.
-- GitHub permalink, blame, and compare stay optional.
-- If git history is unavailable, record the reason instead of pretending it exists.
-- If coverage is unavailable, record the reason instead of fabricating coverage-backed results.
-- Local markdown rules remain the main truth source for rule documents.
-- Optional external docs may supplement the workflow, but never replace the graph.
-
-## Distribution note
-
-This development repo is not the same thing as the consumer install.
-
-For a distributable artifact use:
-
-```bash
-python .agents/skills/code-impact-guardian/cig.py export-skill --out path/to/export
-python .agents/skills/code-impact-guardian/cig.py export-skill --mode single-folder --out path/to/export
-```

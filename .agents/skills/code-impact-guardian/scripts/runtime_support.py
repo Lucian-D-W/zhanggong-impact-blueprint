@@ -148,7 +148,10 @@ def write_handoff(
     candidate_summary = ", ".join(item.get("node_id", "") for item in top_candidates[:3]) or "none"
     fallback_used = bool(last_task.get("fallback_used"))
     build_mode = last_task.get("build_mode") or last_run.get("build_mode") or "unknown"
-    trust_level = last_task.get("trust_level") or last_run.get("trust_level") or "unknown"
+    trust_level = last_task.get("graph_trust") or last_task.get("trust_level") or last_run.get("graph_trust") or last_run.get("trust_level") or "unknown"
+    report_completeness = (last_task.get("report_completeness") or {}).get("level", "unknown")
+    test_signal = last_task.get("test_signal") or {}
+    seed_confidence = (last_task.get("seed_selection") or {}).get("seed_confidence") or (last_task.get("context_resolution") or {}).get("seed_confidence")
     auto_context_used = bool((last_task.get("context_resolution") or {}).get("context_sources"))
     selected_reason = (last_task.get("seed_selection") or {}).get("reason") or "none"
     retry_step = recent_failure.get("command") if recent_failure else command
@@ -162,10 +165,14 @@ def write_handoff(
         f"- Seed: {seed or 'none'}",
         f"- Candidate seeds: {candidate_summary}",
         f"- Seed reason: {selected_reason}",
+        f"- Seed confidence: {seed_confidence if seed_confidence is not None else 'unknown'}",
         f"- Auto context inference used: {'yes' if auto_context_used else 'no'}",
         f"- Fallback used: {'yes' if fallback_used else 'no'}",
         f"- Incremental build mode: {build_mode}",
         f"- Trust level: {trust_level}",
+        f"- Report completeness: {report_completeness}",
+        f"- Tests passed: {test_signal.get('tests_passed', False)}",
+        f"- Affected tests found: {test_signal.get('affected_tests_found', False)}",
         f"- Recent successful step: {(recent_success or {}).get('command', 'none')} @ {(recent_success or {}).get('timestamp', 'n/a')}",
         f"- Recent failed step: {(recent_failure or {}).get('command', 'none')} @ {(recent_failure or {}).get('timestamp', 'n/a')}",
         f"- Failure point: {failure_point}",

@@ -5,7 +5,7 @@ import shutil
 
 
 SKILL_DIR = pathlib.Path(__file__).resolve().parents[1]
-TEMPLATES_DIR = SKILL_DIR / "templates"
+TEMPLATES_DIR = SKILL_DIR / "assets" / "templates"
 
 
 def template_text(name: str) -> str:
@@ -25,9 +25,9 @@ def ensure_agents_md(workspace_root: pathlib.Path) -> str:
 
 def ensure_consumer_docs(workspace_root: pathlib.Path) -> dict[str, str]:
     return {
-        "quickstart_path": ensure_text_file(workspace_root / "QUICKSTART.md", template_text("QUICKSTART.md")),
-        "troubleshooting_path": ensure_text_file(workspace_root / "TROUBLESHOOTING.md", template_text("TROUBLESHOOTING.md")),
-        "consumer_guide_path": ensure_text_file(workspace_root / "CONSUMER_GUIDE.md", template_text("CONSUMER_GUIDE.md")),
+        "quickstart_path": ensure_text_file(workspace_root / "QUICKSTART.md", template_text("QUICKSTART.template.md")),
+        "troubleshooting_path": ensure_text_file(workspace_root / "TROUBLESHOOTING.md", template_text("TROUBLESHOOTING.template.md")),
+        "consumer_guide_path": ensure_text_file(workspace_root / "CONSUMER_GUIDE.md", template_text("CONSUMER_GUIDE.template.md")),
     }
 
 

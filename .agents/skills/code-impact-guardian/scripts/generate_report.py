@@ -201,6 +201,80 @@ def next_tests_payload(sections: dict, seed: str) -> list[str]:
     return [f"Run the smallest test that exercises `{seed}` after the edit."]
 
 
+def report_completeness_payload(*, seed_kind: str, context_resolution: dict | None, fallback_used: bool) -> dict:
+    context_status = (context_resolution or {}).get("context_status", "resolved")
+    if context_status == "missing":
+        return {"level": "low", "reason": "context_missing"}
+    if fallback_used or seed_kind == "file":
+        return {"level": "low", "reason": "file_level_or_fallback"}
+    if context_status == "partial":
+        return {"level": "medium", "reason": "context_partial"}
+    return {"level": "high", "reason": "function_or_routine_seed_with_resolved_context"}
+
+
+def test_signal_payload(*, sections: dict, test_summary: dict | None) -> dict:
+    affected_tests_found = bool(sections["direct_tests"])
+    if not test_summary:
+        return {
+            "status": "not-run",
+            "tests_run": 0,
+            "tests_passed": False,
+            "coverage_available": False,
+            "affected_tests_found": affected_tests_found,
+            "coverage_relevance": "not-run",
+            "full_suite": False,
+        }
+    status = test_summary.get("status")
+    command = test_summary.get("command") or []
+    full_suite = bool(command)
+    coverage_available = test_summary.get("coverage_status") == "available"
+    if status == "passed" and not affected_tests_found:
+        relevance = "tests-passed-but-no-directly-affected-tests-identified"
+    elif status == "passed" and coverage_available:
+        relevance = "direct-impact-covered-by-available-coverage"
+    elif status == "passed":
+        relevance = "direct-impact-tests-identified-but-coverage-unavailable"
+    elif status == "failed":
+        relevance = "test-command-failed"
+    else:
+        relevance = "tests-skipped-or-unavailable"
+    return {
+        "status": status,
+        "tests_run": 1 if command else 0,
+        "tests_passed": status == "passed",
+        "coverage_available": coverage_available,
+        "affected_tests_found": affected_tests_found,
+        "coverage_relevance": relevance,
+        "full_suite": full_suite,
+    }
+
+
+def user_summary_payload(
+    *,
+    seed: str,
+    changed_files: list[str],
+    sections: dict,
+    next_tests: list[str],
+    report_completeness: dict,
+) -> str:
+    direct_refs: list[str] = []
+    direct_refs.extend(src_id for src_id, _, _ in sections["direct_tests"][:2])
+    direct_refs.extend(src_id for src_id, _, _ in sections["direct_rules"][:2])
+    direct_refs.extend(dst_id for _, _, dst_id in sections["direct_downstream"][:2])
+    linked = ", ".join(direct_refs[:3]) or "no direct linked tests or rules yet"
+    if report_completeness["level"] == "low":
+        return (
+            f"I inferred `{seed}` as the current seed, but the report is still incomplete. "
+            f"It links to {linked}, so I do not recommend editing until the context is narrowed or confirmed."
+        )
+    next_test = next_tests[0] if next_tests else f"Run the nearest test for `{seed}`."
+    changed = ", ".join(changed_files[:2]) or "the current diff"
+    return (
+        f"I identified `{seed}` as the main impact seed for {changed}. "
+        f"It directly links to {linked}; next I would {next_test}"
+    )
+
+
 def key_evidence_paths_payload(seed_detail: dict | None, evidence_lines: list[str], changed_files: list[str]) -> list[str]:
     paths: list[str] = []
     if seed_detail and seed_detail.get("path"):
@@ -230,11 +304,18 @@ def brief_payload(
     next_tests: list[str],
     key_evidence_paths: list[str],
     next_step: str | None,
+    seed_confidence: float | None,
+    recent_task_influenced: bool,
+    report_completeness: dict,
+    test_signal: dict,
+    user_summary: str,
 ) -> dict:
     decision = build_decision or {}
     return {
         "selected_seed": seed,
         "why_this_seed": seed_reason or "seed selected from current context",
+        "seed_confidence": seed_confidence,
+        "recent_task_influenced": recent_task_influenced,
         "changed_files_summary": changed_files or ["none"],
         "direct_impact_summary": {
             "callers": len(sections["direct_upstream"]),
@@ -243,15 +324,22 @@ def brief_payload(
             "rules": len(sections["direct_rules"]),
         },
         "build_trust_summary": {
-            "build_mode": decision.get("build_mode"),
-            "trust_level": decision.get("trust_level"),
+            "build_mode": decision.get("execution_mode") or decision.get("build_mode"),
+            "graph_trust": decision.get("graph_trust", decision.get("trust_level")),
+            "trust_level": decision.get("graph_trust", decision.get("trust_level")),
             "reason_codes": decision.get("reason_codes", []),
             "verification_status": decision.get("verification_status"),
+            "graph_freshness": decision.get("graph_freshness"),
+            "dependency_fingerprint_status": decision.get("dependency_fingerprint_status"),
         },
+        "graph_trust": decision.get("graph_trust", decision.get("trust_level")),
+        "report_completeness": report_completeness,
+        "test_signal": test_signal,
         "top_risks": top_risks[:3],
         "next_tests": next_tests[:3],
         "key_evidence_paths": key_evidence_paths[:4],
         "next_step": next_step or "Read the brief report, then edit the code if the selected seed looks right.",
+        "user_summary": user_summary,
     }
 
 
@@ -276,6 +364,7 @@ def write_markdown_report(
     key_evidence_paths: list[str],
     mermaid: str,
     brief: dict,
+    context_resolution: dict | None,
 ) -> None:
     attrs = (seed_detail or {}).get("attrs", {})
     reference_hints = reference_hints_payload(seed_detail)
@@ -284,11 +373,14 @@ def write_markdown_report(
         if seed_detail:
             metadata_keys = [
                 "definition_kind",
+                "class_name",
                 "qualified_name",
                 "sql_kind",
                 "language",
                 "is_component",
                 "is_hook",
+                "parser_confidence",
+                "parser_warning",
             ]
             added_metadata = False
             for key in metadata_keys:
@@ -318,14 +410,23 @@ def write_markdown_report(
         lines = [
             "# Impact Brief",
             "",
+            f"- summary: {brief['user_summary']}",
             f"- selected_seed: `{brief['selected_seed']}`",
             f"- why_this_seed: {brief['why_this_seed']}",
+            f"- seed_confidence: {brief.get('seed_confidence')}",
+            f"- recent_task_influenced: {brief.get('recent_task_influenced', False)}",
             f"- changed_files: {', '.join(brief['changed_files_summary'])}",
             f"- direct_impact: callers={impact['callers']}, callees={impact['callees']}, tests={impact['tests']}, rules={impact['rules']}",
-            f"- build_trust: mode={trust.get('build_mode') or 'unknown'}, trust={trust.get('trust_level') or 'unknown'}, reasons={', '.join(trust.get('reason_codes', [])) or 'none'}, verification={trust.get('verification_status') or 'skipped'}",
+            f"- build_trust: mode={trust.get('build_mode') or 'unknown'}, graph_trust={trust.get('graph_trust') or trust.get('trust_level') or 'unknown'}, freshness={trust.get('graph_freshness') or 'unknown'}, dependencies={trust.get('dependency_fingerprint_status') or 'unknown'}, reasons={', '.join(trust.get('reason_codes', [])) or 'none'}, verification={trust.get('verification_status') or 'skipped'}",
+            f"- report_completeness: {brief['report_completeness']['level']} ({brief['report_completeness']['reason']})",
+            f"- test_signal: tests_run={brief['test_signal']['tests_run']}, tests_passed={brief['test_signal']['tests_passed']}, coverage_available={brief['test_signal']['coverage_available']}, affected_tests_found={brief['test_signal']['affected_tests_found']}, coverage_relevance={brief['test_signal']['coverage_relevance']}",
             f"- top_risks: {' | '.join(brief['top_risks']) if brief['top_risks'] else 'none'}",
             f"- next_tests: {' | '.join(brief['next_tests']) if brief['next_tests'] else 'none'}",
             f"- next_step: {brief['next_step']}",
+            "",
+            "## Context",
+            f"- context_status: {(context_resolution or {}).get('context_status', 'resolved')}",
+            f"- fallback_used: {bool((context_resolution or {}).get('fallback_used'))}",
             "",
             "## Direct Impact",
             f"- callers: {', '.join(src_id for src_id, _, _ in sections['direct_upstream']) or 'none'}",
@@ -359,6 +460,7 @@ def write_markdown_report(
             f"- detected_profile: {detected_profile}",
             f"- report_mode: {mode}",
             f"- changed_files: {', '.join(changed_files) if changed_files else 'none'}",
+            f"- context_status: {(context_resolution or {}).get('context_status', 'resolved')}",
             "",
             "## Definition metadata",
         ]
@@ -368,7 +470,7 @@ def write_markdown_report(
         for key, value in sorted(attrs.items()):
             if key == "reference_hints":
                 continue
-            if mode == "brief" and key not in {"definition_kind", "qualified_name", "sql_kind", "language", "resolved_sql_targets", "unresolved_sql_hints"}:
+            if mode == "brief" and key not in {"definition_kind", "class_name", "qualified_name", "sql_kind", "language", "resolved_sql_targets", "unresolved_sql_hints", "parser_confidence", "parser_warning"}:
                 continue
             if isinstance(value, list):
                 rendered = ", ".join(str(item) for item in value) if value else "none"
@@ -472,6 +574,8 @@ def generate_report(
     seed_selection: dict | None = None,
     build_decision: dict | None = None,
     next_step: str | None = None,
+    context_resolution: dict | None = None,
+    test_summary: dict | None = None,
 ) -> dict:
     config = load_config(config_path)
     paths = graph_paths(workspace_root, config)
@@ -522,6 +626,19 @@ def generate_report(
     next_tests = next_tests_payload(sections, seed)
     key_evidence_paths = key_evidence_paths_payload(seed_detail, evidence_lines, changed_files)
     relationships = relationship_payload(seed_detail, sections)
+    report_completeness = report_completeness_payload(
+        seed_kind=sections["seed_kind"],
+        context_resolution=context_resolution,
+        fallback_used=bool((seed_selection or {}).get("fallback_used")),
+    )
+    test_signal = test_signal_payload(sections=sections, test_summary=test_summary)
+    user_summary = user_summary_payload(
+        seed=seed,
+        changed_files=changed_files,
+        sections=sections,
+        next_tests=next_tests,
+        report_completeness=report_completeness,
+    )
     brief = brief_payload(
         seed=seed,
         seed_reason=(seed_selection or {}).get("reason"),
@@ -532,6 +649,11 @@ def generate_report(
         next_tests=next_tests,
         key_evidence_paths=key_evidence_paths,
         next_step=next_step,
+        seed_confidence=(seed_selection or {}).get("seed_confidence", (seed_selection or {}).get("confidence")),
+        recent_task_influenced=bool((seed_selection or {}).get("recent_task_influenced")),
+        report_completeness=report_completeness,
+        test_signal=test_signal,
+        user_summary=user_summary,
     )
     json_payload = {
         "task_id": task_id,
@@ -560,6 +682,10 @@ def generate_report(
         "brief": brief,
         "seed_selection": seed_selection or {},
         "build_decision": build_decision or {},
+        "context_resolution": context_resolution or {},
+        "report_completeness": report_completeness,
+        "test_signal": test_signal,
+        "user_summary": user_summary,
         "transitive": {
             "max_depth": max_depth,
             "downstream_paths": sections["downstream_paths"],
@@ -595,6 +721,7 @@ def generate_report(
         key_evidence_paths=key_evidence_paths,
         mermaid=mermaid,
         brief=brief,
+        context_resolution=context_resolution,
     )
     json_report_path.write_text(json.dumps(json_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     mermaid_path.write_text(mermaid, encoding="utf-8")
@@ -611,7 +738,7 @@ def generate_report(
                 seed,
                 git["git_sha"],
                 str(report_path.relative_to(workspace_root)),
-                json.dumps({"max_depth": max_depth, "seed_kind": sections["seed_kind"], "mode": mode, "json_report_path": str(json_report_path.relative_to(workspace_root)), "brief": brief}, ensure_ascii=False),
+                json.dumps({"max_depth": max_depth, "seed_kind": sections["seed_kind"], "mode": mode, "json_report_path": str(json_report_path.relative_to(workspace_root)), "brief": brief, "report_completeness": report_completeness, "test_signal": test_signal}, ensure_ascii=False),
             ),
         )
         conn.commit()
@@ -648,6 +775,9 @@ def generate_report(
         "detected_profile": detected_profile,
         "mode": mode,
         "brief": brief,
+        "direct_tests": related_test_names,
+        "direct_rules": related_rule_names,
+        "user_summary": user_summary,
     }
 
 

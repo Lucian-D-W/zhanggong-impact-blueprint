@@ -1,0 +1,9 @@
+name: code-impact-guardian
+entry: cig.py
+description: Repo-local impact analysis workflow for setup, analyze, finish, export, and status.
+recommended_commands:
+  - setup
+  - analyze
+  - finish
+  - status
+

@@ -219,6 +219,42 @@ def key_evidence_paths_payload(seed_detail: dict | None, evidence_lines: list[st
     return ordered[:6]
 
 
+def brief_payload(
+    *,
+    seed: str,
+    seed_reason: str | None,
+    changed_files: list[str],
+    sections: dict,
+    build_decision: dict | None,
+    top_risks: list[str],
+    next_tests: list[str],
+    key_evidence_paths: list[str],
+    next_step: str | None,
+) -> dict:
+    decision = build_decision or {}
+    return {
+        "selected_seed": seed,
+        "why_this_seed": seed_reason or "seed selected from current context",
+        "changed_files_summary": changed_files or ["none"],
+        "direct_impact_summary": {
+            "callers": len(sections["direct_upstream"]),
+            "callees": len(sections["direct_downstream"]),
+            "tests": len(sections["direct_tests"]),
+            "rules": len(sections["direct_rules"]),
+        },
+        "build_trust_summary": {
+            "build_mode": decision.get("build_mode"),
+            "trust_level": decision.get("trust_level"),
+            "reason_codes": decision.get("reason_codes", []),
+            "verification_status": decision.get("verification_status"),
+        },
+        "top_risks": top_risks[:3],
+        "next_tests": next_tests[:3],
+        "key_evidence_paths": key_evidence_paths[:4],
+        "next_step": next_step or "Read the brief report, then edit the code if the selected seed looks right.",
+    }
+
+
 def write_markdown_report(
     *,
     report_path: pathlib.Path,
@@ -239,25 +275,93 @@ def write_markdown_report(
     evidence_lines: list[str],
     key_evidence_paths: list[str],
     mermaid: str,
+    brief: dict,
 ) -> None:
     attrs = (seed_detail or {}).get("attrs", {})
     reference_hints = reference_hints_payload(seed_detail)
-    lines = [
-        "# Impact Report",
-        "",
-        "## Task",
-        f"- task_id: {task_id}",
-        f"- generated_at: {utc_now()}",
-        f"- git_sha: {git_sha}",
-        f"- seed: {seed}",
-        f"- seed_kind: {sections['seed_kind']}",
-        f"- detected_adapter: {detected_adapter}",
-        f"- detected_profile: {detected_profile}",
-        f"- report_mode: {mode}",
-        f"- changed_files: {', '.join(changed_files) if changed_files else 'none'}",
-        "",
-        "## Definition metadata",
-    ]
+    if mode == "brief":
+        metadata_lines = ["## Definition metadata"]
+        if seed_detail:
+            metadata_keys = [
+                "definition_kind",
+                "qualified_name",
+                "sql_kind",
+                "language",
+                "is_component",
+                "is_hook",
+            ]
+            added_metadata = False
+            for key in metadata_keys:
+                if key not in attrs:
+                    continue
+                value = attrs.get(key)
+                if isinstance(value, list):
+                    rendered = ", ".join(str(item) for item in value) if value else "none"
+                else:
+                    rendered = str(value)
+                metadata_lines.append(f"- {key}: {rendered}")
+                added_metadata = True
+            if not added_metadata:
+                metadata_lines.append("- none")
+        else:
+            metadata_lines.append("- unavailable")
+
+        hint_lines = [
+            "## Reference hints",
+            f"- imports: {', '.join(reference_hints.get('imports', [])) or 'none'}",
+            f"- exports: {', '.join(reference_hints.get('exports', [])) or 'none'}",
+            f"- references: {', '.join(reference_hints.get('references', [])) or 'none'}",
+            f"- resolved_call_targets: {', '.join(reference_hints.get('resolved_call_targets', [])) or 'none'}",
+        ]
+        impact = brief["direct_impact_summary"]
+        trust = brief["build_trust_summary"]
+        lines = [
+            "# Impact Brief",
+            "",
+            f"- selected_seed: `{brief['selected_seed']}`",
+            f"- why_this_seed: {brief['why_this_seed']}",
+            f"- changed_files: {', '.join(brief['changed_files_summary'])}",
+            f"- direct_impact: callers={impact['callers']}, callees={impact['callees']}, tests={impact['tests']}, rules={impact['rules']}",
+            f"- build_trust: mode={trust.get('build_mode') or 'unknown'}, trust={trust.get('trust_level') or 'unknown'}, reasons={', '.join(trust.get('reason_codes', [])) or 'none'}, verification={trust.get('verification_status') or 'skipped'}",
+            f"- top_risks: {' | '.join(brief['top_risks']) if brief['top_risks'] else 'none'}",
+            f"- next_tests: {' | '.join(brief['next_tests']) if brief['next_tests'] else 'none'}",
+            f"- next_step: {brief['next_step']}",
+            "",
+            "## Direct Impact",
+            f"- callers: {', '.join(src_id for src_id, _, _ in sections['direct_upstream']) or 'none'}",
+            f"- callees: {', '.join(dst_id for _, _, dst_id in sections['direct_downstream']) or 'none'}",
+            f"- tests: {', '.join(src_id for src_id, _, _ in sections['direct_tests']) or 'none'}",
+            f"- rules: {', '.join(src_id for src_id, _, _ in sections['direct_rules']) or 'none'}",
+            "",
+            *metadata_lines,
+            "",
+            *hint_lines,
+            "",
+            "## Key evidence paths",
+            *[f"- `{item}`" for item in key_evidence_paths[:4]],
+            "",
+            "## Post-change note",
+            "- pending",
+        ]
+        report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return
+    else:
+        lines = [
+            "# Impact Report",
+            "",
+            "## Task",
+            f"- task_id: {task_id}",
+            f"- generated_at: {utc_now()}",
+            f"- git_sha: {git_sha}",
+            f"- seed: {seed}",
+            f"- seed_kind: {sections['seed_kind']}",
+            f"- detected_adapter: {detected_adapter}",
+            f"- detected_profile: {detected_profile}",
+            f"- report_mode: {mode}",
+            f"- changed_files: {', '.join(changed_files) if changed_files else 'none'}",
+            "",
+            "## Definition metadata",
+        ]
     if seed_detail:
         lines.append(f"- node_path: `{seed_detail['path']}`")
         lines.append(f"- node_symbol: `{seed_detail['symbol'] or seed_detail['name']}`")
@@ -365,6 +469,9 @@ def generate_report(
     max_depth: int | None = None,
     mode: str = "default",
     changed_files: list[str] | None = None,
+    seed_selection: dict | None = None,
+    build_decision: dict | None = None,
+    next_step: str | None = None,
 ) -> dict:
     config = load_config(config_path)
     paths = graph_paths(workspace_root, config)
@@ -415,6 +522,17 @@ def generate_report(
     next_tests = next_tests_payload(sections, seed)
     key_evidence_paths = key_evidence_paths_payload(seed_detail, evidence_lines, changed_files)
     relationships = relationship_payload(seed_detail, sections)
+    brief = brief_payload(
+        seed=seed,
+        seed_reason=(seed_selection or {}).get("reason"),
+        changed_files=changed_files,
+        sections=sections,
+        build_decision=build_decision,
+        top_risks=top_risks,
+        next_tests=next_tests,
+        key_evidence_paths=key_evidence_paths,
+        next_step=next_step,
+    )
     json_payload = {
         "task_id": task_id,
         "generated_at": utc_now(),
@@ -439,6 +557,9 @@ def generate_report(
         "next_tests": next_tests,
         "key_evidence_paths": key_evidence_paths,
         "relationships": relationships,
+        "brief": brief,
+        "seed_selection": seed_selection or {},
+        "build_decision": build_decision or {},
         "transitive": {
             "max_depth": max_depth,
             "downstream_paths": sections["downstream_paths"],
@@ -473,6 +594,7 @@ def generate_report(
         evidence_lines=evidence_lines,
         key_evidence_paths=key_evidence_paths,
         mermaid=mermaid,
+        brief=brief,
     )
     json_report_path.write_text(json.dumps(json_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     mermaid_path.write_text(mermaid, encoding="utf-8")
@@ -489,7 +611,7 @@ def generate_report(
                 seed,
                 git["git_sha"],
                 str(report_path.relative_to(workspace_root)),
-                json.dumps({"max_depth": max_depth, "seed_kind": sections["seed_kind"], "mode": mode, "json_report_path": str(json_report_path.relative_to(workspace_root))}, ensure_ascii=False),
+                json.dumps({"max_depth": max_depth, "seed_kind": sections["seed_kind"], "mode": mode, "json_report_path": str(json_report_path.relative_to(workspace_root)), "brief": brief}, ensure_ascii=False),
             ),
         )
         conn.commit()
@@ -525,6 +647,7 @@ def generate_report(
         "detected_adapter": detected_adapter,
         "detected_profile": detected_profile,
         "mode": mode,
+        "brief": brief,
     }
 
 

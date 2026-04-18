@@ -21,15 +21,16 @@ The workflow never changes:
 4. edit code
 5. update graph / report / evidence / tests
 
-## Stage8 scope
+## Stage9 scope
 
-Stage8 keeps the same skill shape and focuses on daily-driver use:
+Stage9 keeps the same skill shape and focuses on zero-friction, high-trust
+daily use:
 
-- smarter seed ranking from changed files and changed lines
-- brief report/status output by default
-- JSON impact reports for agents
-- conservative incremental refresh when safe
-- better TS/JS + React + SQL day-to-day guidance without new adapter families
+- automatic context inference from explicit args, patch files, stdin patch, git diff, and recent task context
+- stable brief report/status contracts for both humans and agents
+- explicit build trust decisions for incremental vs full rebuilds
+- more useful machine-readable outputs such as context resolution, seed candidates, build decisions, and next actions
+- lightweight benchmark repos that validate real daily-driver behavior
 
 TS/JS remains the main app-facing family.
 Python remains the stable regression baseline.
@@ -49,19 +50,20 @@ Use these first:
 
 ```bash
 python .agents/skills/code-impact-guardian/cig.py setup --project-root .
-python .agents/skills/code-impact-guardian/cig.py analyze --changed-file <path> --changed-line <path:line>
-python .agents/skills/code-impact-guardian/cig.py finish --changed-file <path>
+python .agents/skills/code-impact-guardian/cig.py analyze
+python .agents/skills/code-impact-guardian/cig.py finish
 ```
 
 What they do:
 
 - `setup` initializes config/schema/docs and then runs doctor + detect
-- `analyze` builds or reuses the graph, generates a task id when missing, ranks seed candidates, and writes a brief report plus JSON report
+- `analyze` infers context, builds or reuses the graph, generates a task id when missing, ranks seed candidates, and writes a brief report plus JSON report
 - `finish` reuses the latest task context when possible and refreshes report/evidence/tests after the edit
 
 Prefer these flags when needed:
 
 - `--changed-line <path:line>` to improve seed selection
+- `--patch-file <path>` to infer context from a diff artifact
 - `--brief` for compact output
 - `--full` when you need more detail
 - `--allow-fallback` when generic file-level continuation is acceptable
@@ -127,7 +129,9 @@ Read these in order:
 
 1. `.ai/codegraph/logs/last-error.json`
 2. `.ai/codegraph/handoff/latest.md`
-3. `TROUBLESHOOTING.md`
+3. `.ai/codegraph/context-resolution.json`
+4. `.ai/codegraph/build-decision.json`
+5. `TROUBLESHOOTING.md`
 
 The recovery policy is:
 
@@ -147,6 +151,10 @@ The recovery policy is:
 - `.ai/codegraph/reports/impact-<task-id>.json`
 - `.ai/codegraph/test-results.json`
 - `.ai/codegraph/last-task.json`
+- `.ai/codegraph/context-resolution.json`
+- `.ai/codegraph/build-decision.json`
+- `.ai/codegraph/seed-candidates.json`
+- `.ai/codegraph/next-action.json`
 - `.ai/codegraph/handoff/latest.md`
 
 ## Evidence policy

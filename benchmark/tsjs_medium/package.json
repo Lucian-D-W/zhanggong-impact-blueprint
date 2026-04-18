@@ -1,0 +1,8 @@
+{
+  "name": "cig-benchmark-tsjs-medium",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:node-cli": "node --test"
+  }
+}

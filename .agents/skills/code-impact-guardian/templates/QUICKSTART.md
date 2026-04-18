@@ -4,8 +4,8 @@
 
 ```bash
 python .agents/skills/code-impact-guardian/cig.py setup --project-root .
-python .agents/skills/code-impact-guardian/cig.py analyze --changed-file <relative-path> --changed-line <relative-path:line>
-python .agents/skills/code-impact-guardian/cig.py finish --changed-file <relative-path>
+python .agents/skills/code-impact-guardian/cig.py analyze
+python .agents/skills/code-impact-guardian/cig.py finish
 ```
 
 These high-level commands automatically create:
@@ -24,24 +24,24 @@ Python:
 
 ```bash
 python .agents/skills/code-impact-guardian/cig.py setup --profile python-basic --project-root .
-python .agents/skills/code-impact-guardian/cig.py analyze --changed-file src/app.py --changed-line src/app.py:10
-python .agents/skills/code-impact-guardian/cig.py finish --changed-file src/app.py
+python .agents/skills/code-impact-guardian/cig.py analyze
+python .agents/skills/code-impact-guardian/cig.py finish
 ```
 
 TS/JS:
 
 ```bash
 python .agents/skills/code-impact-guardian/cig.py setup --profile node-cli --project-root .
-python .agents/skills/code-impact-guardian/cig.py analyze --changed-file src/cli.js --changed-line src/cli.js:5
-python .agents/skills/code-impact-guardian/cig.py finish --changed-file src/cli.js
+python .agents/skills/code-impact-guardian/cig.py analyze
+python .agents/skills/code-impact-guardian/cig.py finish
 ```
 
 TS/JS + PostgreSQL:
 
 ```bash
 python .agents/skills/code-impact-guardian/cig.py setup --profile node-cli --with sql-postgres --project-root .
-python .agents/skills/code-impact-guardian/cig.py analyze --changed-file src/sessionQueries.js --changed-line src/sessionQueries.js:6
-python .agents/skills/code-impact-guardian/cig.py finish --changed-file src/sessionQueries.js
+python .agents/skills/code-impact-guardian/cig.py analyze
+python .agents/skills/code-impact-guardian/cig.py finish
 ```
 
 ## Output modes
@@ -49,6 +49,8 @@ python .agents/skills/code-impact-guardian/cig.py finish --changed-file src/sess
 - `analyze` and `status` default to `brief`
 - use `--full` when you need more detail
 - each report writes both `.md` and `.json`
+- use `--patch-file <path>` when your editor or agent already has a diff file
+- use `--changed-line <path:line>` only when auto context inference still needs help
 
 Low-level commands remain available for advanced use:
 

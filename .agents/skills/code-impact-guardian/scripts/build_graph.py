@@ -22,6 +22,7 @@ from adapters import (
 )
 from doc_sources import collect_rule_documents_from_sources
 from incremental_refresh import load_manifest, refresh_plan, save_manifest
+from trust_policy import apply_shadow_verification_result, build_decision
 
 
 @dataclass
@@ -858,6 +859,75 @@ def has_external_incoming_edges(conn: sqlite3.Connection, file_paths: list[str])
     return bool(row and row[0])
 
 
+def collect_full_graph(
+    *,
+    workspace_root: pathlib.Path,
+    project_root: pathlib.Path,
+    config: dict,
+    git: dict,
+    adapter_name: str,
+    profile_name: str,
+    adapter_order: list[str],
+) -> tuple[dict[str, Node], dict[tuple[str, str, str], Edge], dict[str, Evidence], list[tuple[str, str, str, str]], list[str]]:
+    all_nodes: dict[str, Node] = {}
+    all_edges: dict[tuple[str, str, str], Edge] = {}
+    all_evidence: dict[str, Evidence] = {}
+    warnings: list[str] = []
+
+    for active_adapter in adapter_order:
+        try:
+            adapter_graph = collect_adapter_graph(project_root, config, active_adapter)
+        except Exception as exc:
+            if active_adapter != adapter_name:
+                warnings.append(f"supplemental {active_adapter} failed and was skipped: {exc}")
+                continue
+            raise
+        nodes, edges, evidence_rows = adapter_graph_to_rows(
+            workspace_root=workspace_root,
+            git=git,
+            adapter_name=active_adapter,
+            profile_name=profile_name,
+            adapter_graph=adapter_graph,
+        )
+        for node in nodes:
+            all_nodes[node.node_id] = node
+        for edge in edges:
+            all_edges[(edge.src_id, edge.edge_type, edge.dst_id)] = edge
+        for evidence in evidence_rows:
+            all_evidence[evidence.evidence_id] = evidence
+
+    augment_sql_hint_links(
+        workspace_root=workspace_root,
+        git=git,
+        nodes=all_nodes,
+        edges=all_edges,
+        evidence_rows=all_evidence,
+    )
+
+    known_nodes = set(all_nodes)
+    rule_nodes, rule_edges, rule_evidence, rule_docs = collect_rule_documents(
+        workspace_root=workspace_root,
+        project_root=project_root,
+        config=config,
+        git=git,
+        known_nodes=known_nodes,
+    )
+    for node in rule_nodes:
+        all_nodes[node.node_id] = node
+    for edge in rule_edges:
+        all_edges[(edge.src_id, edge.edge_type, edge.dst_id)] = edge
+    for item in rule_evidence:
+        all_evidence[item.evidence_id] = item
+    return all_nodes, all_edges, all_evidence, rule_docs, warnings
+
+
+def graph_signature(nodes: dict[str, Node], edges: dict[tuple[str, str, str], Edge]) -> dict:
+    return {
+        "node_ids": sorted(nodes.keys()),
+        "edges": sorted(list(edges.keys())),
+    }
+
+
 def summary_from_db(
     *,
     conn: sqlite3.Connection,
@@ -871,6 +941,7 @@ def summary_from_db(
     build_mode: str,
     changed_files: list[str],
     stale_reason: str,
+    decision: dict | None = None,
     warnings: list[str] | None = None,
 ) -> dict:
     node_count = conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
@@ -898,15 +969,21 @@ def summary_from_db(
         "build_mode": build_mode,
         "changed_files": changed_files,
         "stale_reason": stale_reason,
+        "trust_level": (decision or {}).get("trust_level"),
+        "reason_codes": (decision or {}).get("reason_codes", []),
+        "verification_status": (decision or {}).get("verification_status"),
+        "build_decision": decision or {},
         "warnings": warnings or [],
     }
 
 
 def build_graph(*, workspace_root: pathlib.Path, config_path: pathlib.Path, changed_files: list[str] | None = None, force_full: bool = False) -> dict:
+    requested_changed_files = [item.replace("\\", "/") for item in (changed_files or [])]
     config = load_config(config_path)
     paths = graph_paths(workspace_root, config)
     paths["report_dir"].mkdir(parents=True, exist_ok=True)
     paths["build_log_path"].parent.mkdir(parents=True, exist_ok=True)
+    build_decision_path = workspace_root / ".ai" / "codegraph" / "build-decision.json"
     ensure_schema(paths["db_path"], schema_path_for(workspace_root))
     project_root = project_root_for(workspace_root, config)
     git = get_git_context(workspace_root)
@@ -914,6 +991,7 @@ def build_graph(*, workspace_root: pathlib.Path, config_path: pathlib.Path, chan
     supplemental_adapters = detect_supplemental_adapters(project_root, config)
     profile_name = detect_project_profile_name(project_root, config, adapter_name)
     warnings: list[str] = []
+    previous_manifest = load_manifest(workspace_root)
     plan = refresh_plan(
         workspace_root=workspace_root,
         project_root=project_root,
@@ -925,6 +1003,23 @@ def build_graph(*, workspace_root: pathlib.Path, config_path: pathlib.Path, chan
         plan["reason"] = "forced full rebuild"
     changed_files = [item.replace("\\", "/") for item in plan.get("changed_files", [])]
     adapter_order = [adapter_name, *supplemental_adapters]
+    decision = build_decision(
+        previous_manifest=previous_manifest,
+        plan=plan,
+        config=config,
+        profile_name=profile_name,
+        primary_adapter=adapter_name,
+        supplemental_adapters=supplemental_adapters,
+        requested_changed_files=requested_changed_files,
+    )
+    if force_full:
+        decision["build_mode"] = "full"
+        decision["trust_level"] = "high"
+        decision["reason_codes"] = [*decision.get("reason_codes", []), "FORCED_FULL_REBUILD"]
+    if decision["build_mode"] == "full":
+        plan["build_mode"] = "full"
+    build_decision_path.parent.mkdir(parents=True, exist_ok=True)
+    build_decision_path.write_text(json.dumps(decision, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     if plan["build_mode"] == "reused" and paths["db_path"].exists():
         with sqlite3.connect(paths["db_path"]) as conn:
@@ -940,9 +1035,24 @@ def build_graph(*, workspace_root: pathlib.Path, config_path: pathlib.Path, chan
                 build_mode="reused",
                 changed_files=[],
                 stale_reason=plan["reason"],
+                decision=decision,
                 warnings=warnings,
             )
-        save_manifest(workspace_root, {"timestamp": utc_now(), "files": plan["files"], "summary": summary})
+        build_decision_path.write_text(json.dumps(decision, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        save_manifest(
+            workspace_root,
+            {
+                "timestamp": utc_now(),
+                "files": plan["files"],
+                "summary": summary,
+                "meta": {
+                    "config_fingerprint": decision.get("config_fingerprint"),
+                    "profile_name": profile_name,
+                    "primary_adapter": adapter_name,
+                    "supplemental_adapters": supplemental_adapters,
+                },
+            },
+        )
         with paths["build_log_path"].open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(summary, ensure_ascii=False) + "\n")
         return summary
@@ -1014,64 +1124,67 @@ def build_graph(*, workspace_root: pathlib.Path, config_path: pathlib.Path, chan
                     build_mode="incremental",
                     changed_files=changed_files,
                     stale_reason=plan["reason"],
+                    decision=decision,
                     warnings=warnings,
                 )
-            save_manifest(workspace_root, {"timestamp": utc_now(), "files": plan["files"], "summary": summary})
+            if decision.get("shadow_verify"):
+                full_nodes, full_edges, _, _, shadow_warnings = collect_full_graph(
+                    workspace_root=workspace_root,
+                    project_root=project_root,
+                    config=config,
+                    git=git,
+                    adapter_name=adapter_name,
+                    profile_name=profile_name,
+                    adapter_order=adapter_order,
+                )
+                current_signature = None
+                with sqlite3.connect(paths["db_path"]) as conn:
+                    current_signature = {
+                        "node_ids": sorted(row[0] for row in conn.execute("SELECT node_id FROM nodes").fetchall()),
+                        "edges": sorted((row[0], row[1], row[2]) for row in conn.execute("SELECT src_id, edge_type, dst_id FROM edges").fetchall()),
+                    }
+                expected_signature = graph_signature(full_nodes, full_edges)
+                matched = current_signature == expected_signature
+                detail = "incremental summary matched a full in-memory graph sample" if matched else "incremental graph diverged from full in-memory graph sample"
+                decision = apply_shadow_verification_result(decision, matched=matched, detail=detail)
+                warnings.extend(shadow_warnings)
+                if not matched:
+                    warnings.append("incremental_refresh_fallback: shadow verification mismatch forced a full rebuild")
+                    raise RuntimeError(detail)
+            save_manifest(
+                workspace_root,
+                {
+                    "timestamp": utc_now(),
+                    "files": plan["files"],
+                    "summary": summary,
+                    "meta": {
+                        "config_fingerprint": decision.get("config_fingerprint"),
+                        "profile_name": profile_name,
+                        "primary_adapter": adapter_name,
+                        "supplemental_adapters": supplemental_adapters,
+                    },
+                },
+            )
+            build_decision_path.write_text(json.dumps(decision, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             with paths["build_log_path"].open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(summary, ensure_ascii=False) + "\n")
             return summary
         except Exception as exc:
             warnings.append(f"incremental_refresh_fallback: {exc}")
+            decision = apply_shadow_verification_result(decision, matched=False, detail=str(exc))
+            plan["build_mode"] = "full"
+            build_decision_path.write_text(json.dumps(decision, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
-    all_nodes: dict[str, Node] = {}
-    all_edges: dict[tuple[str, str, str], Edge] = {}
-    all_evidence: dict[str, Evidence] = {}
-    rule_docs: list[tuple[str, str, str, str]] = []
-
-    for active_adapter in adapter_order:
-        try:
-            adapter_graph = collect_adapter_graph(project_root, config, active_adapter)
-        except Exception as exc:
-            if active_adapter != adapter_name:
-                warnings.append(f"supplemental {active_adapter} failed and was skipped: {exc}")
-                continue
-            raise
-        nodes, edges, evidence_rows = adapter_graph_to_rows(
-            workspace_root=workspace_root,
-            git=git,
-            adapter_name=active_adapter,
-            profile_name=profile_name,
-            adapter_graph=adapter_graph,
-        )
-        for node in nodes:
-            all_nodes[node.node_id] = node
-        for edge in edges:
-            all_edges[(edge.src_id, edge.edge_type, edge.dst_id)] = edge
-        for evidence in evidence_rows:
-            all_evidence[evidence.evidence_id] = evidence
-
-    augment_sql_hint_links(
-        workspace_root=workspace_root,
-        git=git,
-        nodes=all_nodes,
-        edges=all_edges,
-        evidence_rows=all_evidence,
-    )
-
-    known_nodes = set(all_nodes)
-    rule_nodes, rule_edges, rule_evidence, rule_docs = collect_rule_documents(
+    all_nodes, all_edges, all_evidence, rule_docs, full_warnings = collect_full_graph(
         workspace_root=workspace_root,
         project_root=project_root,
         config=config,
         git=git,
-        known_nodes=known_nodes,
+        adapter_name=adapter_name,
+        profile_name=profile_name,
+        adapter_order=adapter_order,
     )
-    for node in rule_nodes:
-        all_nodes[node.node_id] = node
-    for edge in rule_edges:
-        all_edges[(edge.src_id, edge.edge_type, edge.dst_id)] = edge
-    for item in rule_evidence:
-        all_evidence[item.evidence_id] = item
+    warnings.extend(full_warnings)
 
     with sqlite3.connect(paths["db_path"]) as conn:
         clear_graph_tables(conn)
@@ -1092,10 +1205,25 @@ def build_graph(*, workspace_root: pathlib.Path, config_path: pathlib.Path, chan
             build_mode="full",
             changed_files=changed_files,
             stale_reason=plan["reason"],
+            decision=decision,
             warnings=warnings,
         )
 
-    save_manifest(workspace_root, {"timestamp": utc_now(), "files": plan["files"], "summary": summary})
+    build_decision_path.write_text(json.dumps(decision, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    save_manifest(
+        workspace_root,
+        {
+            "timestamp": utc_now(),
+            "files": plan["files"],
+            "summary": summary,
+            "meta": {
+                "config_fingerprint": decision.get("config_fingerprint"),
+                "profile_name": profile_name,
+                "primary_adapter": adapter_name,
+                "supplemental_adapters": supplemental_adapters,
+            },
+        },
+    )
     with paths["build_log_path"].open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(summary, ensure_ascii=False) + "\n")
     return summary

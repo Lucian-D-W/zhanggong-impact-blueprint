@@ -25,15 +25,16 @@ The workflow does not change:
 4. update graph / report / evidence after edit
 5. run relevant tests and record outcome
 
-## Stage8 focus
+## Stage9 focus
 
-Stage8 keeps the same lightweight shape and pushes it toward daily-driver use:
+Stage9 keeps the same lightweight shape and pushes it toward zero-friction,
+high-trust daily use:
 
-- smarter seed selection from `--changed-file` and `--changed-line`
-- shorter `brief` reports and `brief` status by default
-- machine-readable JSON impact reports for agents
-- conservative incremental refresh when safe, full rebuild when not
-- stronger TS/JS + React + SQL day-to-day value without splitting adapters
+- automatic context inference from explicit args, patch files, stdin patch, git diff, and recent task context
+- stable brief contracts for reports and status
+- explicit build trust decisions for incremental vs full rebuilds
+- machine-readable handoff artifacts for agents
+- lightweight benchmark repos that look more like day-to-day work than minimal fixtures
 
 ## Current support level
 
@@ -55,6 +56,7 @@ Stage8 keeps the same lightweight shape and pushes it toward daily-driver use:
 - import / export / re-export / require / module.exports
 - node:test / jest / vitest style detection
 - real raw V8 coverage path
+- stronger brief/test recommendations for React and CLI-style repos
 
 ### SQL/PostgreSQL supplemental
 
@@ -66,6 +68,8 @@ Stage8 keeps the same lightweight shape and pushes it toward daily-driver use:
 - high-confidence SQL test `COVERS`
 - app-to-SQL query hints only become edges when confidence is high enough
 - test outcome is real even when SQL coverage is unavailable
+- `sql_dialect`/`sql_mode` stays lightweight and metadata-driven
+- views/materialized views remain metadata or hint only, never new node types
 
 ### Generic fallback
 
@@ -129,19 +133,20 @@ These are the main user-facing commands now:
 
 ```bash
 python .agents/skills/code-impact-guardian/cig.py setup --project-root .
-python .agents/skills/code-impact-guardian/cig.py analyze --changed-file <path> --changed-line <path:line>
-python .agents/skills/code-impact-guardian/cig.py finish --changed-file <path>
+python .agents/skills/code-impact-guardian/cig.py analyze
+python .agents/skills/code-impact-guardian/cig.py finish
 ```
 
 What they do:
 
 - `setup` = init + write AGENTS.md + write .gitignore + write consumer docs + doctor + detect
-- `analyze` = build/reuse graph + automatic task id + smart seed ranking + brief report
+- `analyze` = context inference + build/reuse graph + automatic task id + smart seed ranking + brief report
 - `finish` = after-edit + recent task reuse + tests + handoff/status refresh
 
 Useful flags:
 
 - `--changed-line <path:line>` improves seed ranking inside large files
+- `--patch-file <path>` lets `analyze` or `finish` infer context from a diff file
 - `--brief` is the default for `analyze` and `status`
 - `--full` asks for a fuller report/status payload
 - `--allow-fallback` lets uncertain repos fall back to generic file-level mode
@@ -207,15 +212,16 @@ For SQL hints:
 - human report: `.ai/codegraph/reports/impact-<task-id>.md`
 - agent report: `.ai/codegraph/reports/impact-<task-id>.json`
 
-Brief mode keeps the console and Markdown shorter by focusing on:
+Brief mode is now a stable contract for both people and agents:
 
 - selected seed
-- changed files
-- direct callers/callees
-- direct tests/rules
+- why this seed
+- changed files summary
+- direct impact summary
+- build trust summary
 - top risks
 - next tests
-- key evidence paths
+- next step
 
 ## Structured runtime artifacts
 
@@ -232,6 +238,10 @@ Key files:
 - structured logs: `.ai/codegraph/logs/`
 - recent task: `.ai/codegraph/last-task.json`
 - handoff card: `.ai/codegraph/handoff/latest.md`
+- context inference: `.ai/codegraph/context-resolution.json`
+- build trust decision: `.ai/codegraph/build-decision.json`
+- top seed candidates: `.ai/codegraph/seed-candidates.json`
+- next action for the next agent/human: `.ai/codegraph/next-action.json`
 
 Structured logs include:
 
@@ -267,7 +277,32 @@ to see:
 - latest report/test paths
 - available seed count
 - recent task context
+- build trust decision
+- inferred context
+- next action suggestion
 - recommended next step
+
+## Context inference and trust
+
+`analyze` now tries hard to avoid manual flags. It uses this priority:
+
+1. explicit `--seed`, `--changed-file`, `--changed-line`
+2. `--patch-file`
+3. stdin patch
+4. git working tree diff
+5. git staged diff
+6. recent handoff / `last-task.json`
+
+You only need to pass `--seed` when the top candidates remain genuinely
+ambiguous.
+
+Incremental vs full rebuild is now guided by a trust policy. The brief report,
+status output, `build-decision.json`, and handoff all explain:
+
+- whether the run was incremental or full
+- why that choice was made
+- whether shadow verification ran
+- whether a fallback full rebuild became necessary
 
 ## What scripts guarantee vs what the agent decides
 
@@ -297,4 +332,5 @@ python -m unittest tests.test_stage5_workflow -v
 python -m unittest tests.test_stage6_workflow -v
 python -m unittest tests.test_stage7_workflow -v
 python -m unittest tests.test_stage8_workflow -v
+python -m unittest tests.test_stage9_workflow -v
 ```

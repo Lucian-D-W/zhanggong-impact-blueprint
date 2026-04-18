@@ -163,6 +163,8 @@ def rank_seed_candidates(*, workspace_root: pathlib.Path, config_path: pathlib.P
                 "kind": candidate["kind"],
                 "path": candidate["path"],
                 "symbol": candidate.get("symbol"),
+                "start_line": candidate.get("start_line"),
+                "end_line": candidate.get("end_line"),
                 "score": score,
                 "reasons": reasons,
                 "attrs": candidate.get("attrs", {}),
@@ -177,7 +179,11 @@ def rank_seed_candidates(*, workspace_root: pathlib.Path, config_path: pathlib.P
     second_score = top_candidates[1]["score"] if len(top_candidates) > 1 else None
     confidence = confidence_from_score(top_score, second_score)
     selection_reason = "; ".join(top_candidates[0]["reasons"]) if top_candidates[0]["reasons"] else "highest ranked candidate"
-    auto_select = len(top_candidates) == 1 or confidence >= 0.85
+    score_gap = top_score - second_score if second_score is not None else None
+    auto_select = len(top_candidates) == 1 or (
+        confidence >= 0.85
+        and (score_gap is None or score_gap >= 1.5)
+    )
 
     return {
         "selected_seed": top_candidates[0]["node_id"] if auto_select else None,
@@ -187,6 +193,8 @@ def rank_seed_candidates(*, workspace_root: pathlib.Path, config_path: pathlib.P
                 "kind": item["kind"],
                 "path": item["path"],
                 "symbol": item["symbol"],
+                "start_line": item.get("start_line"),
+                "end_line": item.get("end_line"),
                 "confidence": confidence_from_score(item["score"]),
                 "reason": "; ".join(item["reasons"]) or "ranked candidate",
             }

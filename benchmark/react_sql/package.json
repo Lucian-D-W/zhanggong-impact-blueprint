@@ -1,0 +1,14 @@
+{
+  "name": "cig-benchmark-react-sql",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "react": "^18.0.0"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0"
+  },
+  "scripts": {
+    "test:react-vite": "node --test"
+  }
+}

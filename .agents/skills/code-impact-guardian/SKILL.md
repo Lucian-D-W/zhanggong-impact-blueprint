@@ -21,21 +21,20 @@ It is not tied to any existing business codebase.
 
 The workflow stays fixed even when adapters, profiles, or fixtures change.
 
-## Stage 5 scope
+## Stage 6 scope
 
-Stage5 keeps the template lightweight and pushes these things forward:
+Stage6 keeps the template lightweight and focuses on:
 
-- TS/JS family stays the main app-facing adapter
-- Python stays the stable regression baseline
-- mixed repos now use `primary_adapter` + `supplemental_adapters`
-- `sql_postgres` is now a real supplemental adapter
-- local markdown rules remain the main truth source
-- generic fallback stays available
+- distribution through `export-skill`
+- stronger `init`
+- structured runtime logs
+- explicit recovery protocol
+- `status` and handoff support
+- setup-ready profile presets
 
-Python remains the first demonstration chain, not a product binding.
-React / Next / Electron / Obsidian / Tauri remain TS/JS profile differences
-instead of separate graph systems.
-PostgreSQL is not a second workflow; it is supplemental graph enrichment.
+TS/JS remains the main app-facing adapter family.
+Python remains the stable regression baseline.
+`sql_postgres` remains supplemental rather than a second system.
 
 ## Durable graph rules
 
@@ -50,15 +49,7 @@ PostgreSQL is not a second workflow; it is supplemental graph enrichment.
 Start with:
 
 ```bash
-python .agents/skills/code-impact-guardian/cig.py init --profile node-cli --project-root .
-python .agents/skills/code-impact-guardian/cig.py doctor
-python .agents/skills/code-impact-guardian/cig.py detect
-```
-
-Mixed repo with PostgreSQL:
-
-```bash
-python .agents/skills/code-impact-guardian/cig.py init --profile node-cli --with sql-postgres --project-root .
+python .agents/skills/code-impact-guardian/cig.py init --project-root . --write-agents-md --write-gitignore
 python .agents/skills/code-impact-guardian/cig.py doctor
 python .agents/skills/code-impact-guardian/cig.py detect
 ```
@@ -68,34 +59,21 @@ Then:
 ```bash
 python .agents/skills/code-impact-guardian/cig.py build
 python .agents/skills/code-impact-guardian/cig.py seeds
-python .agents/skills/code-impact-guardian/cig.py report --task-id your-task --seed fn:src/file.js:yourFunction
-python .agents/skills/code-impact-guardian/cig.py after-edit --task-id your-task --seed fn:src/file.js:yourFunction --changed-file src/file.js
+python .agents/skills/code-impact-guardian/cig.py report --task-id your-task --seed <seed>
+python .agents/skills/code-impact-guardian/cig.py after-edit --task-id your-task --seed <seed> --changed-file <path>
 ```
 
-Fixture demos:
+Exporting a distribution package:
 
 ```bash
-python .agents/skills/code-impact-guardian/cig.py demo --fixture python_minimal
-python .agents/skills/code-impact-guardian/cig.py demo --fixture tsjs_node_cli --workspace path/to/temp/workspace
-python .agents/skills/code-impact-guardian/cig.py demo --fixture tsx_react_vite --workspace path/to/temp/workspace
-python .agents/skills/code-impact-guardian/cig.py demo --fixture generic_minimal --workspace path/to/temp/workspace
-python .agents/skills/code-impact-guardian/cig.py demo --fixture sql_pg_minimal --workspace path/to/temp/workspace
-python .agents/skills/code-impact-guardian/cig.py demo --fixture tsjs_pg_compound --workspace path/to/temp/workspace
+python .agents/skills/code-impact-guardian/cig.py export-skill --out path/to/exported-skill
 ```
 
-## Profile notes
+Status and handoff:
 
-Real profiles in stage5:
-
-- `node-cli`
-- `react-vite`
-
-Preset-only profiles:
-
-- `next-basic`
-- `electron-renderer`
-- `obsidian-plugin`
-- `tauri-frontend`
+```bash
+python .agents/skills/code-impact-guardian/cig.py status
+```
 
 ## Generic fallback rule
 
@@ -110,32 +88,41 @@ Do not pretend generic mode has function-level precision.
 
 ## Supplemental adapter rule
 
-Stage5 allows:
-
-- `primary_adapter`
-- `supplemental_adapters`
-
-Use supplemental adapters when the repo has an app language plus SQL or another
-supporting language that should land in the same graph.
-
-Do not create a separate workflow for supplemental adapters.
-Do not invent new node or edge types to represent them.
-Do not turn low-confidence query text into graph truth.
+Use supplemental adapters when another language should enrich the same graph
+and report rather than create a separate workflow.
 
 For SQL query hints:
 
 - high confidence + unique target -> direct `CALLS`
 - otherwise -> attrs/report hint only
 
+## Recovery protocol
+
+When something fails, do not guess.
+Read these in order:
+
+1. `.ai/codegraph/logs/last-error.json`
+2. `.ai/codegraph/handoff/latest.md`
+3. `TROUBLESHOOTING.md`
+
+The recovery policy is:
+
+- doctor fail -> fix config or environment first
+- detect uncertain -> explicitly choose a profile or fall back to generic
+- build fail -> verify config, project root, and matching globs
+- report fail -> rebuild and choose a narrower seed
+- after-edit test fail -> preserve evidence, inspect handoff, retry after fixing
+- coverage unavailable -> continue honestly, never fabricate
+- supplemental adapter fail -> downgrade to primary flow unless the task truly requires the supplemental graph
+
 ## Expected outputs
 
 - `.ai/codegraph/codegraph.db`
-- `.ai/codegraph/build.log`
+- `.ai/codegraph/logs/`
 - `.ai/codegraph/reports/impact-<task-id>.md`
 - `.ai/codegraph/test-results.json`
-- available function seeds or file seeds from `seeds`
-- SQL seeds when SQL/PostgreSQL is enabled
-- lightweight process tables: `task_runs`, `edit_rounds`, `file_diffs`, `symbol_diffs`
+- `.ai/codegraph/handoff/latest.md`
+- function seeds or file seeds from `seeds`
 
 ## Evidence policy
 
@@ -145,3 +132,9 @@ For SQL query hints:
 - If coverage is unavailable, record the reason instead of fabricating coverage-backed results.
 - Local markdown rules remain the main truth source for rule documents.
 - Optional external docs may supplement the workflow, but never replace the graph.
+
+## Distribution note
+
+This development repo is not the same thing as the distribution package.
+Use `export-skill` to create the minimal package that should be copied into
+another repository.

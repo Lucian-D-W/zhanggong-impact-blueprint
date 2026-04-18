@@ -1,6 +1,6 @@
 # Code Impact Guardian
 
-Code Impact Guardian is a lightweight, repo-local skill workflow for safer code
+Code Impact Guardian is a lightweight, repo-local skill template for safer code
 edits.
 
 It is intentionally shaped as:
@@ -9,16 +9,17 @@ It is intentionally shaped as:
 - one repo-scoped skill
 - one SQLite fact store
 - one fixed impact report flow
-- a small set of copyable scripts
+- one unified CLI entry
+- one exportable skill package
 
 It is not a plugin.
 It is not a platform product.
-It is meant to be copied into another repository and adapted through config,
-profiles, and thin parser backends.
+It is designed to be copied into another repository and then used through
+config, profiles, and thin parser backends.
 
 ## Fixed workflow
 
-The workflow stays fixed across every stage:
+The workflow stays fixed:
 
 1. build / refresh graph
 2. generate impact report
@@ -26,353 +27,298 @@ The workflow stays fixed across every stage:
 4. update graph / report / evidence after edit
 5. run relevant tests and record outcome
 
-## Current support level
-
-### Stage 1
-
-- real Python minimal fixture
-- real `coverage.py` import
-- SQLite graph + report + after-edit loop
-
-### Stage 2
-
-- generic file-level fallback
-- minimal `.js/.ts` adapter
-- unified CLI entry: `cig.py`
-
-### Stage 3
-
-- lightweight process recording
-- `task_runs`, `edit_rounds`, `file_diffs`, `symbol_diffs`
-- `init` and `doctor`
-- optional doc source hook while keeping local markdown as default truth
-
-### Stage 4
-
-- TS/JS family promoted to a first-class adapter
-- profile-aware init / detect / doctor
-- `.js`, `.ts`, `.jsx`, `.tsx` scanning
-- raw V8 coverage path for TS/JS profiles
-- better seed discovery and report metadata
-- lightweight placeholder slots for Rust-lite and SQL/PostgreSQL
-
-## Adapter status
+## Support level
 
 ### Python
 
-Python remains the most stable baseline.
-
-Current Python behavior:
-
-- supports `file`, `function`, `test`, `rule`
-- supports `DEFINES`, `CALLS`, `IMPORTS`, `COVERS`, `GOVERNS`
-- imports real `coverage.py` data
-- keeps stage1 / stage2 / stage3 regressions as the main stability gate
-
-Python is still the first demonstration chain, not a product binding.
+- stable regression baseline
+- `file`, `function`, `test`, `rule`
+- `DEFINES`, `CALLS`, `IMPORTS`, `COVERS`, `GOVERNS`
+- real `coverage.py` path
 
 ### TS/JS family
 
-TS/JS is now the main expansion target in stage4.
+- `.js`, `.ts`, `.jsx`, `.tsx`
+- function declarations
+- exported const arrow functions
+- React function components
+- custom hooks
+- minimal class methods
+- import / export / re-export / require / module.exports
+- node:test and common JS test markers
+- real raw V8 coverage path
 
-Current TS/JS behavior:
+### SQL/PostgreSQL
 
-- supports `.js`, `.ts`, `.jsx`, `.tsx`
-- recognizes:
-  - function declarations
-  - exported const arrow functions
-  - React function components
-  - custom hooks (`useX`)
-  - minimal class methods
-- parses:
-  - `import`
-  - `export`
-  - re-export
-  - `require`
-  - `module.exports`
-- records richer parser metadata in node attrs
-- improves seed discovery and report display for definition/reference hints
-- supports node:test and basic `test` / `it` / `describe` / `test.describe`
-- has a real raw V8 coverage path for profile-driven TS/JS projects
-
-Stage4 still keeps TS/JS as one family adapter.
-React, Next, Electron, Obsidian, and Tauri are profile differences, not
-separate graph systems.
+- real supplemental adapter in stage5+
+- SQL files become `file` nodes
+- PostgreSQL routines become `function` nodes
+- routine subtype stored in attrs via `sql_kind`
+- high-confidence SQL-to-SQL `CALLS`
+- high-confidence SQL test `COVERS`
+- test outcome recorded even when coverage is unavailable
 
 ### Generic fallback
 
-When a language is not supported yet, the workflow still runs through the
-generic adapter.
-
-Generic mode:
-
-- stays file-level only
-- still supports `build`, `seeds`, `report`, `after-edit`
-- still records test outcome and git evidence
+- file-level only
+- still supports build / report / after-edit / test outcome
 - never pretends to have function-level precision
 
-Use generic fallback when:
+## Stage6 focus
 
-- the project language is not supported yet
-- you only need config / file / rule impact coverage for now
-- you want the workflow today without waiting for a parser backend
+Stage6 does not widen the language matrix.
+Instead it turns the existing system into a more reusable skill template:
+
+- exportable minimal skill package
+- stronger `init`
+- unified structured event and error logging
+- explicit recovery protocol
+- `status` and handoff support for agent takeover
+- setup-ready profile presets for more real TS/JS repo shapes
+
+## Development repo vs exported skill package
+
+This repository is the development source.
+
+It contains:
+
+- examples
+- tests
+- implementation history
+- working fixtures for stage1 through stage6
+
+The exported skill package is the distribution artifact.
+
+It contains only the minimum copyable pieces:
+
+- `AGENTS.template.md`
+- `.agents/skills/code-impact-guardian/`
+- `.code-impact-guardian/config.template.json`
+- `.code-impact-guardian/schema.sql`
+- `QUICKSTART.md`
+- `TROUBLESHOOTING.md`
+
+The exported package intentionally excludes:
+
+- `.git`
+- `.ai`
+- `tests`
+- `examples`
+- `dist`
+- `__pycache__`
+- old review zips
+
+## Exporting the skill
+
+```bash
+python .agents/skills/code-impact-guardian/cig.py export-skill --out path/to/exported-skill
+```
+
+## Copying to a new project
+
+1. Export the skill package.
+2. Copy the exported package contents into the target repo.
+3. Run `init`.
+
+Shortest path:
+
+```bash
+python .agents/skills/code-impact-guardian/cig.py init --project-root . --write-agents-md --write-gitignore
+python .agents/skills/code-impact-guardian/cig.py doctor
+python .agents/skills/code-impact-guardian/cig.py detect
+python .agents/skills/code-impact-guardian/cig.py build
+python .agents/skills/code-impact-guardian/cig.py seeds
+python .agents/skills/code-impact-guardian/cig.py report --task-id my-task --seed <seed>
+python .agents/skills/code-impact-guardian/cig.py after-edit --task-id my-task --seed <seed> --changed-file <path>
+```
+
+### Python repo
+
+```bash
+python .agents/skills/code-impact-guardian/cig.py init --profile python-basic --project-root . --write-agents-md --write-gitignore
+```
+
+### TS/JS repo
+
+```bash
+python .agents/skills/code-impact-guardian/cig.py init --profile node-cli --project-root . --write-agents-md --write-gitignore
+```
+
+### TS/JS + PostgreSQL repo
+
+```bash
+python .agents/skills/code-impact-guardian/cig.py init --profile react-vite --with sql-postgres --project-root . --write-agents-md --write-gitignore
+```
+
+## Primary and supplemental adapters
+
+Stage5+ uses:
+
+```json
+{
+  "primary_adapter": "auto",
+  "supplemental_adapters": ["sql_postgres"]
+}
+```
+
+Use a supplemental adapter when another language should enrich the same graph
+and report rather than become a second workflow.
 
 ## Profiles
 
-Stage4 adds a lightweight profile layer for project defaults.
+Real working profiles:
 
-Real profiles in stage4:
-
+- `python-basic`
 - `node-cli`
 - `react-vite`
 
-Preset-only profiles in stage4:
+Setup-ready profiles in stage6:
 
 - `next-basic`
 - `electron-renderer`
 - `obsidian-plugin`
 - `tauri-frontend`
 
-Profiles affect:
+These setup-ready profiles do not create new graph systems.
+They improve:
 
-- globs
-- test command selection
-- coverage command selection
-- doctor checks
-- default rule/doc expectations
+- init defaults
+- doctor expectations
+- default rule globs
+- recommended test-command shape
 
-Profiles do not:
+## Seeds and report behavior
 
-- change the schema
-- fork the core workflow
-- create a second adapter system
+`seeds` exposes graph-derived candidates and metadata.
 
-## Unified CLI
+`report` shows:
 
-The unified entry point stays thin:
+- adapter/profile context
+- seed definition metadata
+- direct callers / callees / tests / rules
+- transitive paths computed only at report time
+- hint data where a relation is useful but not strong enough to become graph truth
 
-```bash
-python .agents/skills/code-impact-guardian/cig.py <command>
+### Hint vs real edge
+
+For cross-language SQL hints:
+
+- high confidence + unique target -> direct `CALLS`
+- otherwise -> attrs/report hint only
+
+This keeps the graph clean and direct-edge-only.
+
+## Structured runtime logs
+
+All CLI commands now write unified logs under:
+
+```text
+.ai/codegraph/logs/
 ```
 
-Commands:
+Files:
 
-- `init`
-- `doctor`
-- `detect`
-- `build`
-- `seeds`
-- `report`
-- `after-edit`
-- `demo`
+- `events.jsonl`
+- `errors.jsonl`
+- `last-run.json`
+- `last-error.json`
 
-### Shortest path in a real project
+Each event/error carries machine-readable fields such as:
+
+- `timestamp`
+- `command`
+- `workspace_root`
+- `project_root`
+- `profile`
+- `primary_adapter`
+- `supplemental_adapters`
+- `task_id`
+- `seed`
+- `status`
+- `output_paths`
+- `warning_count`
+- `error_code`
+- `retryable`
+- `suggested_next_step`
+
+Normal failures stay concise on the terminal.
+Tracebacks are only printed when `--debug` is used.
+
+## Status and handoff
+
+Use:
 
 ```bash
-python .agents/skills/code-impact-guardian/cig.py init --profile node-cli --project-root .
-python .agents/skills/code-impact-guardian/cig.py doctor
-python .agents/skills/code-impact-guardian/cig.py detect
-python .agents/skills/code-impact-guardian/cig.py build
-python .agents/skills/code-impact-guardian/cig.py seeds
-python .agents/skills/code-impact-guardian/cig.py report --task-id your-task --seed fn:src/your_file.js:yourFunction
-python .agents/skills/code-impact-guardian/cig.py after-edit --task-id your-task --seed fn:src/your_file.js:yourFunction --changed-file src/your_file.js
+python .agents/skills/code-impact-guardian/cig.py status
 ```
 
-## Profile-aware init
+It reports:
+
+- current config path
+- current profile / primary / supplemental
+- latest build / report / after-edit status
+- latest error summary
+- latest report path
+- latest test-results path
+- available seed count
+- whether an unhandled error is present
+
+Agent handoff is written to:
+
+```text
+.ai/codegraph/handoff/latest.md
+```
+
+It includes:
+
+- current command/task
+- current phase
+- latest failure point
+- latest report/test artifact paths
+- the next action another agent should take
+
+## Troubleshooting and recovery
+
+The recovery protocol is part of the skill, not just an implementation detail.
+
+Read:
+
+- `TROUBLESHOOTING.md`
+- `.ai/codegraph/logs/last-error.json`
+- `.ai/codegraph/handoff/latest.md`
 
 Examples:
 
-Python:
+- `CONFIG_MISSING`: run `init`
+- `INVALID_PROFILE`: choose a supported profile and rerun `init`
+- `SUPPLEMENTAL_ADAPTER_MISSING`: add the expected files or disable the supplemental adapter
+- `TEST_COMMAND_FAILED`: inspect test output, fix the command or failing code, then rerun `after-edit`
 
-```bash
-python .agents/skills/code-impact-guardian/cig.py init --profile python-basic --project-root .
-```
+## What the scripts guarantee vs what the agent decides
 
-Node CLI:
+### Script-guaranteed
 
-```bash
-python .agents/skills/code-impact-guardian/cig.py init --profile node-cli --project-root .
-```
+- direct-edge-only persistence
+- build / report / after-edit flow
+- SQLite schema and process tables
+- structured logs and last-error snapshots
+- handoff artifact generation
+- deterministic export package shape
 
-React + Vite:
+### Agent-guided
 
-```bash
-python .agents/skills/code-impact-guardian/cig.py init --profile react-vite --project-root .
-```
-
-If you do not supply a profile, `project_profile` stays `auto` and `detect`
-will fall back to a lightweight heuristic:
-
-- Python files -> `python-basic`
-- TS/JS family files -> a TS/JS profile guess
-- otherwise -> `generic-file`
-
-## Seeds and reports
-
-`seeds` now returns both ids and lightweight metadata.
-
-For TS/JS family projects, seed details can include:
-
-- `definition_kind`
-- `exported`
-- `is_component`
-- `is_hook`
-- `class_name`
-- `reference_hints`
-
-`report` now shows:
-
-- detected adapter and profile
-- seed definition metadata
-- reference hints from parser attrs
-- direct callers / callees / tests / rules
-- transitive paths computed only at report time
-
-## Rules and doc sources
-
-Local markdown rules remain the default path and the default truth source.
-
-Rule docs are still expected in local markdown with stable ids, for example:
-
-```text
-docs/rules/*.md
-```
-
-Optional doc sources can be added later through `doc_source_adapter`, but they
-only supplement local docs. They never replace the local code graph as the main
-truth source.
-
-If external docs are supplied through config, stage4 can snapshot them into the
-local doc cache under `.ai/codegraph/doc-cache/` for later review.
-
-## Example fixtures
-
-Current fixtures:
-
-- `examples/python_minimal/`
-- `examples/tsjs_minimal/`
-- `examples/generic_minimal/`
-- `examples/tsjs_node_cli/`
-- `examples/tsx_react_vite/`
-- `examples/rust_lite_placeholder/`
-- `examples/sql_pg_placeholder/`
-
-Real stage4 TS/JS fixtures:
-
-- `tsjs_node_cli` for `node-cli`
-- `tsx_react_vite` for `react-vite`
-
-## Copying the skill into a real project
-
-Copy these paths into the target repo:
-
-- `AGENTS.md`
-- `.agents/skills/code-impact-guardian/`
-- `.code-impact-guardian/config.json`
-- `.code-impact-guardian/schema.sql`
-
-Then:
-
-1. run `init` with a profile
-2. run `doctor`
-3. run `detect`
-4. run `build`
-5. run `seeds`
-6. run `report`
-7. make the edit
-8. run `after-edit`
-
-### Real Python project
-
-1. Copy the skill files into the repo.
-2. Add or confirm local rule markdown files such as `docs/rules/*.md`.
-3. Initialize:
-
-```bash
-python .agents/skills/code-impact-guardian/cig.py init --profile python-basic --project-root .
-```
-
-4. Doctor:
-
-```bash
-python .agents/skills/code-impact-guardian/cig.py doctor
-```
-
-5. Build and inspect seeds:
-
-```bash
-python .agents/skills/code-impact-guardian/cig.py build
-python .agents/skills/code-impact-guardian/cig.py seeds
-```
-
-6. Generate a report for the function you plan to touch:
-
-```bash
-python .agents/skills/code-impact-guardian/cig.py report --task-id auth-fix --seed fn:src/app.py:login
-```
-
-7. Edit the code, then refresh graph, report, evidence, and tests:
-
-```bash
-python .agents/skills/code-impact-guardian/cig.py after-edit --task-id auth-fix --seed fn:src/app.py:login --changed-file src/app.py
-```
-
-### Real TS/JS project
-
-Node CLI style:
-
-```bash
-python .agents/skills/code-impact-guardian/cig.py init --profile node-cli --project-root .
-```
-
-React + Vite style:
-
-```bash
-python .agents/skills/code-impact-guardian/cig.py init --profile react-vite --project-root .
-```
-
-Then run the same fixed workflow:
-
-```bash
-python .agents/skills/code-impact-guardian/cig.py doctor
-python .agents/skills/code-impact-guardian/cig.py detect
-python .agents/skills/code-impact-guardian/cig.py build
-python .agents/skills/code-impact-guardian/cig.py seeds
-python .agents/skills/code-impact-guardian/cig.py report --task-id ui-fix --seed fn:src/AppShell.tsx:AppShell
-python .agents/skills/code-impact-guardian/cig.py after-edit --task-id ui-fix --seed fn:src/AppShell.tsx:AppShell --changed-file src/AppShell.tsx
-```
+- whether to fall back to generic when detection is uncertain
+- whether a warning can be accepted for the current task
+- how to narrow a seed when report scope is too broad
+- how to proceed after a test failure while preserving evidence
 
 ## Verification
 
-Stage1 regression:
-
 ```bash
 python -m unittest tests.test_stage1_workflow -v
-```
-
-Stage2 regression:
-
-```bash
 python -m unittest tests.test_stage2_workflow -v
-```
-
-Stage3 regression:
-
-```bash
 python -m unittest tests.test_stage3_workflow -v
-```
-
-Stage4 workflows:
-
-```bash
 python -m unittest tests.test_stage4_workflow -v
+python -m unittest tests.test_stage5_workflow -v
+python -m unittest tests.test_stage6_workflow -v
 ```
-
-## Roadmap placeholders
-
-Stage4 only reserves these next steps:
-
-- Rust-lite backend name and example placeholder
-- SQL/PostgreSQL backend name and example placeholder
-
-No parser or tests are shipped for those two yet.

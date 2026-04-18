@@ -5,6 +5,7 @@ import pathlib
 import shutil
 import subprocess
 import sys
+import traceback
 
 
 SKILL_DIR = pathlib.Path(__file__).resolve().parent
@@ -19,6 +20,7 @@ import list_seeds  # noqa: E402
 from adapters import SQL_POSTGRES_ADAPTER, configured_supplemental_adapters, detect_language_adapter, detect_project_profile_name, detect_supplemental_adapters  # noqa: E402
 from doc_sources import doc_source_doctor_status  # noqa: E402
 from profiles import AUTO_PROFILE, PROFILE_PRESETS, apply_profile_preset, detect_project_profile, package_json_data, profile_coverage_adapter, profile_test_command  # noqa: E402
+from runtime_support import CIGUserError, ensure_runtime_dirs, error_payload_from_exception, event_payload, latest_success_timestamp, normalize_output_paths, read_json, read_jsonl, recent_command_status, runtime_paths, write_error, write_event, write_handoff  # noqa: E402
 
 
 DEFAULT_CONFIG = {
@@ -249,6 +251,60 @@ def template_root() -> pathlib.Path:
     return SKILL_DIR.parents[2]
 
 
+def template_asset(name: str) -> pathlib.Path:
+    return SKILL_DIR / "templates" / name
+
+
+def supported_profiles() -> set[str]:
+    return set(PROFILE_PRESETS) | {AUTO_PROFILE}
+
+
+def ensure_supported_profile(profile: str | None) -> None:
+    if profile is None or profile in supported_profiles():
+        return
+    raise CIGUserError(
+        "INVALID_PROFILE",
+        f"Unsupported profile: {profile}",
+        retryable=True,
+        suggested_next_step=f"Choose one of: {', '.join(sorted(supported_profiles()))}",
+    )
+
+
+def minimal_gitignore_entries() -> list[str]:
+    return [
+        ".ai/",
+        "__pycache__/",
+        "*.pyc",
+        ".coverage",
+        "coverage-*.json",
+        "coverage-*.data",
+    ]
+
+
+def ensure_gitignore(workspace_root: pathlib.Path) -> str:
+    gitignore_path = workspace_root / ".gitignore"
+    existing_lines: list[str] = []
+    if gitignore_path.exists():
+        existing_lines = gitignore_path.read_text(encoding="utf-8").splitlines()
+    to_append = [entry for entry in minimal_gitignore_entries() if entry not in existing_lines]
+    if not gitignore_path.exists():
+        gitignore_path.write_text("\n".join(minimal_gitignore_entries()) + "\n", encoding="utf-8")
+    elif to_append:
+        with gitignore_path.open("a", encoding="utf-8") as fh:
+            if existing_lines and existing_lines[-1] != "":
+                fh.write("\n")
+            for entry in to_append:
+                fh.write(f"{entry}\n")
+    return str(gitignore_path)
+
+
+def ensure_agents_md(workspace_root: pathlib.Path) -> str:
+    agents_path = workspace_root / "AGENTS.md"
+    if not agents_path.exists():
+        agents_path.write_text(template_asset("AGENTS.template.md").read_text(encoding="utf-8"), encoding="utf-8")
+    return str(agents_path)
+
+
 def copy_template(source_root: pathlib.Path, destination_root: pathlib.Path) -> None:
     ignore = shutil.ignore_patterns(".git", ".ai", "__pycache__", "*.pyc", "dist", "*.zip")
     if destination_root.exists():
@@ -302,7 +358,10 @@ def init_workspace(
     profile: str | None = None,
     project_root: str | None = None,
     with_adapters: list[str] | None = None,
+    write_agents_md: bool = False,
+    write_gitignore: bool = False,
 ) -> dict:
+    ensure_supported_profile(profile)
     codegraph_dir = workspace_root / ".ai" / "codegraph"
     report_dir = codegraph_dir / "reports"
     doc_cache_dir = codegraph_dir / "doc-cache"
@@ -311,6 +370,7 @@ def init_workspace(
     codegraph_dir.mkdir(parents=True, exist_ok=True)
     report_dir.mkdir(parents=True, exist_ok=True)
     doc_cache_dir.mkdir(parents=True, exist_ok=True)
+    ensure_runtime_dirs(workspace_root)
 
     config_path = config_path_for(workspace_root)
     schema_path = schema_path_for(workspace_root)
@@ -351,6 +411,13 @@ def init_workspace(
         schema_path.write_text(default_schema_text(), encoding="utf-8")
         created.append(str(schema_path.relative_to(workspace_root)))
 
+    agents_md_path = None
+    gitignore_path = None
+    if write_agents_md:
+        agents_md_path = ensure_agents_md(workspace_root)
+    if write_gitignore:
+        gitignore_path = ensure_gitignore(workspace_root)
+
     return {
         "workspace_root": str(workspace_root),
         "created": created,
@@ -361,6 +428,8 @@ def init_workspace(
         "project_root": config_payload["project_root"],
         "primary_adapter": config_payload["primary_adapter"],
         "supplemental_adapters": config_payload["supplemental_adapters"],
+        "agents_md_path": agents_md_path,
+        "gitignore_path": gitignore_path,
     }
 
 
@@ -530,6 +599,50 @@ def detect_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
     }
 
 
+def default_config_template_payload() -> dict:
+    payload = default_config_payload()
+    payload["project_root"] = "."
+    payload["project_profile"] = AUTO_PROFILE
+    payload["primary_adapter"] = "auto"
+    payload["language_adapter"] = "auto"
+    payload["supplemental_adapters"] = []
+    payload["sql_postgres"]["enabled"] = False
+    return payload
+
+
+def export_skill(*, workspace_root: pathlib.Path, out_dir: pathlib.Path) -> dict:
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+    (out_dir / ".agents" / "skills").mkdir(parents=True, exist_ok=True)
+    shutil.copytree(
+        SKILL_DIR,
+        out_dir / ".agents" / "skills" / "code-impact-guardian",
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".ai", ".git", "dist", "*.zip"),
+    )
+    package_config_dir = out_dir / ".code-impact-guardian"
+    package_config_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(schema_path_for(workspace_root), package_config_dir / "schema.sql")
+    (package_config_dir / "config.template.json").write_text(
+        json.dumps(default_config_template_payload(), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    shutil.copy2(template_asset("AGENTS.template.md"), out_dir / "AGENTS.template.md")
+    shutil.copy2(template_asset("QUICKSTART.md"), out_dir / "QUICKSTART.md")
+    shutil.copy2(template_asset("TROUBLESHOOTING.md"), out_dir / "TROUBLESHOOTING.md")
+    return {
+        "status": "exported",
+        "out_dir": str(out_dir),
+        "exported_files": [
+            "AGENTS.template.md",
+            "QUICKSTART.md",
+            "TROUBLESHOOTING.md",
+            ".code-impact-guardian/config.template.json",
+            ".code-impact-guardian/schema.sql",
+            ".agents/skills/code-impact-guardian/",
+        ],
+    }
+
+
 def command_available(command_name: str) -> bool:
     return shutil.which(command_name) is not None
 
@@ -621,13 +734,22 @@ def doctor_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
             if any((project_root / name).exists() for name in ("next.config.js", "next.config.mjs", "next.config.ts")):
                 add_status("PASS", "next markers found")
             else:
-                add_status("WARN", "next-basic profile is preset-only until this project adds Next markers")
+                add_status("WARN", "next-basic profile is active but Next markers are missing; TS/JS defaults remain usable while setup is completed")
         elif detected_profile == "electron-renderer":
-            add_status("WARN", "electron-renderer profile is preset-only in stage4")
+            if "electron" in (set(package_json.get("dependencies", {}).keys()) | set(package_json.get("devDependencies", {}).keys())):
+                add_status("PASS", "electron markers found")
+            else:
+                add_status("WARN", "electron-renderer profile is active; add electron dependency or renderer markers to fully confirm setup")
         elif detected_profile == "obsidian-plugin":
-            add_status("WARN", "obsidian-plugin profile is preset-only in stage4")
+            if (project_root / "manifest.json").exists():
+                add_status("PASS", "obsidian manifest found")
+            else:
+                add_status("WARN", "obsidian-plugin profile is active; add manifest.json or obsidian dependency to fully confirm setup")
         elif detected_profile == "tauri-frontend":
-            add_status("WARN", "tauri-frontend profile is preset-only in stage4")
+            if (project_root / "src-tauri").exists():
+                add_status("PASS", "tauri markers found")
+            else:
+                add_status("WARN", "tauri-frontend profile is active; add src-tauri or related markers to fully confirm setup")
     else:
         add_status("PASS", "generic fallback available")
 
@@ -637,7 +759,10 @@ def doctor_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
         test_patterns = sql_config.get("test_globs", [])
         source_files = sum(1 for path in project_root.rglob("*.sql") if any(pathlib.PurePosixPath(path.relative_to(project_root).as_posix()).match(pattern) for pattern in source_patterns))
         test_files = sum(1 for path in project_root.rglob("*.sql") if any(pathlib.PurePosixPath(path.relative_to(project_root).as_posix()).match(pattern) for pattern in test_patterns))
-        add_status("PASS", f"sql_postgres enabled (source_files={source_files}, test_files={test_files})")
+        if source_files == 0 and test_files == 0:
+            add_status("FAIL", "sql_postgres enabled but no configured SQL source/test paths were found")
+        else:
+            add_status("PASS", f"sql_postgres enabled (source_files={source_files}, test_files={test_files})")
 
     doc_level, doc_message = doc_source_doctor_status(project_root, config)
     add_status(doc_level, doc_message)
@@ -649,6 +774,62 @@ def print_doctor(payload: dict) -> None:
     print(f"OVERALL {payload['overall']}")
     for status in payload["statuses"]:
         print(f"{status['level']} {status['message']}")
+
+
+def status_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> dict:
+    paths = runtime_paths(workspace_root)
+    config_exists = config_path.exists()
+    config = build_graph.load_config(config_path) if config_exists else {}
+    project_root = str(build_graph.project_root_for(workspace_root, config)) if config_exists else None
+    events = read_jsonl(paths["events"])
+    last_error = read_json(paths["last_error"])
+    last_success = latest_success_timestamp(events)
+    last_error_timestamp = (last_error or {}).get("timestamp")
+    has_unhandled_error = bool(last_error_timestamp and (not last_success or last_error_timestamp > last_success))
+    latest_report_path = None
+    latest_test_results_path = None
+    for item in reversed(events):
+        output_paths = item.get("output_paths", {})
+        if not latest_report_path and output_paths.get("report_path"):
+            latest_report_path = output_paths["report_path"]
+        if not latest_test_results_path and output_paths.get("test_results_path"):
+            latest_test_results_path = output_paths["test_results_path"]
+        if latest_report_path and latest_test_results_path:
+            break
+
+    available_seed_count = None
+    if config_exists:
+        graph = build_graph.graph_paths(workspace_root, config)
+        db_path = graph["db_path"]
+        if db_path.exists():
+            import sqlite3
+
+            with sqlite3.connect(db_path) as conn:
+                function_count = conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'function'").fetchone()[0]
+                file_count = conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'file'").fetchone()[0]
+                available_seed_count = function_count if function_count else file_count
+
+    return {
+        "config_path": str(config_path),
+        "config_exists": config_exists,
+        "current": {
+            "project_root": project_root,
+            "project_profile": config.get("project_profile") if config_exists else None,
+            "primary_adapter": config.get("primary_adapter", config.get("language_adapter")) if config_exists else None,
+            "supplemental_adapters": configured_supplemental_adapters(config) if config_exists else [],
+        },
+        "recent": {
+            "build": recent_command_status(events, "build"),
+            "report": recent_command_status(events, "report"),
+            "after-edit": recent_command_status(events, "after-edit"),
+        },
+        "last_error": last_error,
+        "latest_report_path": latest_report_path,
+        "latest_test_results_path": latest_test_results_path,
+        "available_seed_count": available_seed_count or 0,
+        "has_unhandled_error": has_unhandled_error,
+        "handoff_path": str(paths["handoff_latest"]) if paths["handoff_latest"].exists() else None,
+    }
 
 
 def run_demo(fixture: str, workspace: str | None) -> pathlib.Path:
@@ -683,8 +864,90 @@ def run_demo(fixture: str, workspace: str | None) -> pathlib.Path:
     return workspace_root
 
 
+def ensure_config_exists(config_path: pathlib.Path) -> None:
+    if not config_path.exists():
+        raise CIGUserError(
+            "CONFIG_MISSING",
+            f"Config file not found: {config_path}",
+            retryable=True,
+            suggested_next_step="Run `cig.py init --project-root .` before this command.",
+        )
+
+
+def command_context(workspace_root: pathlib.Path, config_path: pathlib.Path | None) -> dict:
+    if not config_path or not config_path.exists():
+        return {
+            "project_root": None,
+            "profile": None,
+            "primary_adapter": None,
+            "supplemental_adapters": [],
+        }
+    config = build_graph.load_config(config_path)
+    project_root = build_graph.project_root_for(workspace_root, config)
+    primary_adapter = detect_language_adapter(project_root, config)
+    detected_profile = detect_project_profile_name(project_root, config, primary_adapter)
+    supplemental = detect_supplemental_adapters(project_root, config)
+    return {
+        "project_root": str(project_root),
+        "profile": detected_profile,
+        "primary_adapter": primary_adapter,
+        "supplemental_adapters": supplemental,
+    }
+
+
+def success_next_step(command_name: str) -> str:
+    mapping = {
+        "init": "Run `cig.py doctor` next.",
+        "doctor": "Run `cig.py detect` next.",
+        "detect": "Run `cig.py build` next.",
+        "build": "Run `cig.py seeds` next.",
+        "seeds": "Pick a seed and run `cig.py report`.",
+        "report": "Read the report, edit the code, then run `cig.py after-edit`.",
+        "after-edit": "Review the updated report, test results, and handoff note.",
+        "demo": "Inspect the generated graph, report, logs, and handoff artifacts.",
+        "export-skill": "Copy the exported package into a new repo and run `cig.py init` there.",
+        "status": "Inspect the latest error or continue from the suggested next command.",
+    }
+    return mapping.get(command_name, "Continue with the next workflow step.")
+
+
+def output_paths_for_command(command_name: str, workspace_root: pathlib.Path, payload: dict | pathlib.Path | None, config_path: pathlib.Path | None) -> dict:
+    if command_name == "init":
+        return {
+            "config_path": payload.get("config_path") if isinstance(payload, dict) else None,
+            "schema_path": payload.get("schema_path") if isinstance(payload, dict) else None,
+            "agents_md_path": payload.get("agents_md_path") if isinstance(payload, dict) else None,
+            "gitignore_path": payload.get("gitignore_path") if isinstance(payload, dict) else None,
+        }
+    if command_name == "doctor":
+        return {}
+    if command_name == "detect":
+        return {}
+    if command_name == "build":
+        return {
+            "db_path": str(build_graph.graph_paths(workspace_root, build_graph.load_config(config_path))["db_path"]) if config_path and config_path.exists() else None,
+            "build_log_path": str(build_graph.graph_paths(workspace_root, build_graph.load_config(config_path))["build_log_path"]) if config_path and config_path.exists() else None,
+        }
+    if command_name == "report" and isinstance(payload, dict):
+        return {"report_path": payload.get("report_path"), "mermaid_path": payload.get("mermaid_path")}
+    if command_name == "after-edit" and isinstance(payload, dict):
+        return {
+            "report_path": payload.get("report", {}).get("report_path"),
+            "test_results_path": str((workspace_root / ".ai" / "codegraph" / "test-results.json")),
+            "handoff_path": str(runtime_paths(workspace_root)["handoff_latest"]),
+        }
+    if command_name == "demo":
+        return {"workspace_root": str(payload) if isinstance(payload, pathlib.Path) else None}
+    if command_name == "export-skill" and isinstance(payload, dict):
+        return {"out_dir": payload.get("out_dir")}
+    if command_name == "status":
+        return {"handoff_path": str(runtime_paths(workspace_root)["handoff_latest"])}
+    return {}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Unified Code Impact Guardian entry point")
+    parser.add_argument("--debug", action="store_true", help="Show traceback on failures")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     init_parser = subparsers.add_parser("init", help="Bootstrap config, schema, and artifact directories")
@@ -692,6 +955,8 @@ def main() -> int:
     init_parser.add_argument("--profile", default=None)
     init_parser.add_argument("--project-root", default=None)
     init_parser.add_argument("--with", dest="with_adapters", action="append", default=[])
+    init_parser.add_argument("--write-agents-md", action="store_true")
+    init_parser.add_argument("--write-gitignore", action="store_true")
 
     doctor_parser = subparsers.add_parser("doctor", help="Run a lightweight workspace health check")
     doctor_parser.add_argument("--workspace-root", default=".")
@@ -727,77 +992,258 @@ def main() -> int:
     demo_parser.add_argument("--fixture", choices=["python_minimal", "tsjs_minimal", "generic_minimal", "tsjs_node_cli", "tsx_react_vite", "sql_pg_minimal", "tsjs_pg_compound"], default="python_minimal")
     demo_parser.add_argument("--workspace", default=None)
 
+    export_parser = subparsers.add_parser("export-skill", help="Export a minimal distribution package")
+    export_parser.add_argument("--workspace-root", default=".")
+    export_parser.add_argument("--out", required=True)
+
+    status_parser = subparsers.add_parser("status", help="Show current config, recent runs, and handoff state")
+    status_parser.add_argument("--workspace-root", default=".")
+    status_parser.add_argument("--config", default=".code-impact-guardian/config.json")
+
     args = parser.parse_args()
-
-    if args.command == "demo":
-        workspace_root = run_demo(args.fixture, args.workspace)
-        print(workspace_root)
-        return 0
-
-    workspace_root = pathlib.Path(args.workspace_root).resolve()
-
-    if args.command == "init":
-        print(
-            json.dumps(
-                init_workspace(
-                    workspace_root,
-                    profile=args.profile,
-                    project_root=args.project_root,
-                    with_adapters=args.with_adapters,
-                ),
-                ensure_ascii=False,
-                indent=2,
-            )
-        )
-        return 0
-
+    workspace_root = pathlib.Path(getattr(args, "workspace_root", ".")).resolve()
+    ensure_runtime_dirs(workspace_root)
     config_path = pathlib.Path(getattr(args, "config", ".code-impact-guardian/config.json"))
     if not config_path.is_absolute():
         config_path = (workspace_root / config_path).resolve()
 
-    if args.command == "doctor":
-        print_doctor(doctor_payload(workspace_root, config_path))
-        return 0
-    if args.command == "detect":
-        print(json.dumps(detect_payload(workspace_root, config_path), ensure_ascii=False, indent=2))
-        return 0
-    if args.command == "build":
-        print(json.dumps(build_graph.build_graph(workspace_root=workspace_root, config_path=config_path), ensure_ascii=False, indent=2))
-        return 0
-    if args.command == "seeds":
-        print(json.dumps(list_seeds.list_seeds(workspace_root=workspace_root, config_path=config_path), ensure_ascii=False, indent=2))
-        return 0
-    if args.command == "report":
-        print(
-            json.dumps(
-                generate_report.generate_report(
-                    workspace_root=workspace_root,
-                    config_path=config_path,
-                    task_id=args.task_id,
-                    seed=args.seed,
-                    max_depth=args.max_depth,
-                ),
-                ensure_ascii=False,
-                indent=2,
+    task_id = getattr(args, "task_id", None)
+    seed = getattr(args, "seed", None)
+    context = {"project_root": None, "profile": None, "primary_adapter": None, "supplemental_adapters": []}
+
+    try:
+        if args.command == "demo":
+            payload = run_demo(args.fixture, args.workspace)
+            workspace_root = payload if isinstance(payload, pathlib.Path) else workspace_root
+            demo_config_path = config_path_for(workspace_root)
+            context = command_context(workspace_root, demo_config_path)
+            event = event_payload(
+                command="demo",
+                workspace_root=workspace_root,
+                project_root=context["project_root"],
+                profile=context["profile"],
+                primary_adapter=context["primary_adapter"],
+                supplemental_adapters=context["supplemental_adapters"],
+                task_id=None,
+                seed=None,
+                status="success",
+                output_paths=normalize_output_paths(workspace_root, output_paths_for_command("demo", workspace_root, payload, demo_config_path)),
+                warning_count=0,
+                error_code=None,
+                retryable=False,
+                suggested_next_step=success_next_step("demo"),
             )
-        )
-        return 0
-    if args.command == "after-edit":
-        print(
-            json.dumps(
-                after_edit_update.after_edit_update(
-                    workspace_root=workspace_root,
-                    config_path=config_path,
-                    task_id=args.task_id,
-                    seed=args.seed,
-                    changed_files=args.changed_file,
-                ),
-                ensure_ascii=False,
-                indent=2,
+            write_event(workspace_root, event)
+            print(workspace_root)
+            return 0
+
+        if args.command == "export-skill":
+            payload = export_skill(workspace_root=workspace_root, out_dir=pathlib.Path(args.out).resolve())
+            event = event_payload(
+                command="export-skill",
+                workspace_root=workspace_root,
+                project_root=None,
+                profile=None,
+                primary_adapter=None,
+                supplemental_adapters=[],
+                task_id=None,
+                seed=None,
+                status="success",
+                output_paths=normalize_output_paths(workspace_root, output_paths_for_command("export-skill", workspace_root, payload, None)),
+                warning_count=0,
+                error_code=None,
+                retryable=False,
+                suggested_next_step=success_next_step("export-skill"),
             )
+            write_event(workspace_root, event)
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return 0
+
+        if args.command == "init":
+            payload = init_workspace(
+                workspace_root,
+                profile=args.profile,
+                project_root=args.project_root,
+                with_adapters=args.with_adapters,
+                write_agents_md=args.write_agents_md,
+                write_gitignore=args.write_gitignore,
+            )
+            current_config_path = config_path_for(workspace_root)
+            context = command_context(workspace_root, current_config_path)
+            event = event_payload(
+                command="init",
+                workspace_root=workspace_root,
+                project_root=context["project_root"],
+                profile=context["profile"],
+                primary_adapter=context["primary_adapter"],
+                supplemental_adapters=context["supplemental_adapters"],
+                task_id=None,
+                seed=None,
+                status="success",
+                output_paths=normalize_output_paths(workspace_root, output_paths_for_command("init", workspace_root, payload, current_config_path)),
+                warning_count=0,
+                error_code=None,
+                retryable=False,
+                suggested_next_step=success_next_step("init"),
+            )
+            write_event(workspace_root, event)
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return 0
+
+        ensure_config_exists(config_path)
+        context = command_context(workspace_root, config_path)
+
+        if args.command == "doctor":
+            payload = doctor_payload(workspace_root, config_path)
+            warning_count = sum(1 for item in payload["statuses"] if item["level"] == "WARN")
+            if payload["overall"] == "FAIL":
+                error_code = (
+                    "SUPPLEMENTAL_ADAPTER_MISSING"
+                    if any("sql_postgres enabled but no configured SQL source/test paths were found" in item["message"] for item in payload["statuses"])
+                    else "DOCTOR_FAILED"
+                )
+                raise CIGUserError(
+                    error_code,
+                    "Doctor checks reported a blocking failure.",
+                    retryable=True,
+                    suggested_next_step="Read TROUBLESHOOTING.md and fix the failing doctor checks before retrying.",
+                )
+            event = event_payload(
+                command="doctor",
+                workspace_root=workspace_root,
+                project_root=context["project_root"],
+                profile=context["profile"],
+                primary_adapter=context["primary_adapter"],
+                supplemental_adapters=context["supplemental_adapters"],
+                task_id=None,
+                seed=None,
+                status="success",
+                output_paths={},
+                warning_count=warning_count,
+                error_code=None,
+                retryable=False,
+                suggested_next_step=success_next_step("doctor"),
+            )
+            write_event(workspace_root, event)
+            print_doctor(payload)
+            return 0
+
+        if args.command == "detect":
+            payload = detect_payload(workspace_root, config_path)
+        elif args.command == "build":
+            payload = build_graph.build_graph(workspace_root=workspace_root, config_path=config_path)
+        elif args.command == "seeds":
+            payload = list_seeds.list_seeds(workspace_root=workspace_root, config_path=config_path)
+        elif args.command == "report":
+            payload = generate_report.generate_report(
+                workspace_root=workspace_root,
+                config_path=config_path,
+                task_id=args.task_id,
+                seed=args.seed,
+                max_depth=args.max_depth,
+            )
+        elif args.command == "after-edit":
+            payload = after_edit_update.after_edit_update(
+                workspace_root=workspace_root,
+                config_path=config_path,
+                task_id=args.task_id,
+                seed=args.seed,
+                changed_files=args.changed_file,
+            )
+            if payload["tests"]["status"] != "passed":
+                handoff_path = write_handoff(
+                    workspace_root,
+                    task_id=args.task_id,
+                    command="after-edit",
+                    status="failed",
+                    failure_point="TEST_COMMAND_FAILED",
+                    suggested_next_step="Inspect test-results.json and the output log, fix the test command or code, then rerun after-edit.",
+                    seed=args.seed,
+                    report_path=payload["report"]["report_path"],
+                    test_results_path=str(workspace_root / ".ai" / "codegraph" / "test-results.json"),
+                )
+                raise CIGUserError(
+                    "TEST_COMMAND_FAILED",
+                    "after-edit refreshed the graph and report, but the test command failed.",
+                    retryable=True,
+                    suggested_next_step="Inspect handoff/latest.md and test-results.json, then rerun after-edit after fixing the failure.",
+                    output_paths={
+                        "report_path": payload["report"]["report_path"],
+                        "test_results_path": str(workspace_root / ".ai" / "codegraph" / "test-results.json"),
+                        "handoff_path": str(handoff_path),
+                    },
+                )
+            write_handoff(
+                workspace_root,
+                task_id=args.task_id,
+                command="after-edit",
+                status="completed",
+                failure_point="none",
+                suggested_next_step="Review the updated report and test results, then continue with the next task.",
+                seed=args.seed,
+                report_path=payload["report"]["report_path"],
+                test_results_path=str(workspace_root / ".ai" / "codegraph" / "test-results.json"),
+            )
+        elif args.command == "status":
+            payload = status_payload(workspace_root, config_path)
+        else:
+            raise CIGUserError(
+                "COMMAND_UNHANDLED",
+                f"Unhandled command: {args.command}",
+                retryable=False,
+                suggested_next_step="Use one of the supported commands from cig.py --help.",
+            )
+
+        event = event_payload(
+            command=args.command,
+            workspace_root=workspace_root,
+            project_root=context["project_root"],
+            profile=context["profile"],
+            primary_adapter=context["primary_adapter"],
+            supplemental_adapters=context["supplemental_adapters"],
+            task_id=task_id,
+            seed=seed,
+            status="success",
+            output_paths=normalize_output_paths(workspace_root, output_paths_for_command(args.command, workspace_root, payload, config_path)),
+            warning_count=0,
+            error_code=None,
+            retryable=False,
+            suggested_next_step=success_next_step(args.command),
         )
+        write_event(workspace_root, event)
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
-    raise SystemExit(f"Unknown command: {args.command}")
+    except Exception as exc:
+        error_info = error_payload_from_exception(
+            command=args.command,
+            workspace_root=workspace_root,
+            project_root=context["project_root"],
+            profile=context["profile"],
+            primary_adapter=context["primary_adapter"],
+            supplemental_adapters=context["supplemental_adapters"],
+            task_id=task_id,
+            seed=seed,
+            exc=exc,
+            debug=args.debug,
+        )
+        write_error(workspace_root, error_info)
+        write_event(workspace_root, error_info)
+        write_handoff(
+            workspace_root,
+            task_id=task_id,
+            command=args.command,
+            status="failed",
+            failure_point=error_info["error_code"],
+            suggested_next_step=error_info["suggested_next_step"],
+            seed=seed,
+            report_path=error_info["output_paths"].get("report_path"),
+            test_results_path=error_info["output_paths"].get("test_results_path"),
+        )
+        if args.debug:
+            traceback.print_exc()
+        else:
+            print(f"ERROR [{error_info['error_code']}]: {error_info['message']}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import hashlib
 import json
-import pathlib
 from datetime import datetime, timezone
 
 
@@ -17,35 +16,6 @@ GENERATED_PATTERNS = (
     "gen/",
     "out/",
 )
-
-DEPENDENCY_FINGERPRINT_FILES = (
-    "package.json",
-    "package-lock.json",
-    "pnpm-lock.yaml",
-    "yarn.lock",
-    "bun.lock",
-    "bun.lockb",
-    "pyproject.toml",
-    "requirements.txt",
-    "requirements-dev.txt",
-    "poetry.lock",
-    "Pipfile",
-    "Pipfile.lock",
-    "tsconfig.json",
-)
-
-DEPENDENCY_FINGERPRINT_PREFIXES = (
-    "migrations/",
-    "supabase/migrations/",
-    "db/migrations/",
-    "schema/",
-)
-
-DEPENDENCY_FINGERPRINT_CONTAINS = (
-    "vite.config.",
-    "next.config.",
-)
-
 
 def stable_hash(payload: dict) -> str:
     return hashlib.sha1(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
@@ -101,16 +71,6 @@ def manifest_age_hours(previous_manifest: dict | None) -> float | None:
     return max((utc_now() - created_at).total_seconds() / 3600.0, 0.0)
 
 
-def is_dependency_fingerprint_file(path: str) -> bool:
-    normalized = path.replace("\\", "/")
-    name = pathlib.PurePosixPath(normalized).name
-    if name in DEPENDENCY_FINGERPRINT_FILES:
-        return True
-    if any(token in normalized for token in DEPENDENCY_FINGERPRINT_CONTAINS):
-        return True
-    return any(normalized.startswith(prefix) for prefix in DEPENDENCY_FINGERPRINT_PREFIXES)
-
-
 def should_shadow_verify(*, build_mode: str, changed_files: list[str], tracked_count: int) -> bool:
     if build_mode != "incremental":
         return False
@@ -133,7 +93,8 @@ def build_decision(
     reason_codes: list[str] = []
     generated_noise_source = requested_changed_files or changed_files
     generated_noise = sorted(path for path in generated_noise_source if is_generated_or_cache_file(path))
-    dependency_files = sorted(path for path in changed_files if is_dependency_fingerprint_file(path))
+    dependency_files = sorted(plan.get("dependency_files", []))
+    current_dependency_fingerprint = plan.get("dependency_fingerprint") or {}
     config_hash = config_fingerprint(
         config=config,
         profile_name=profile_name,
@@ -146,9 +107,22 @@ def build_decision(
     previous_profile = previous_meta.get("profile_name")
     previous_primary = previous_meta.get("primary_adapter")
     previous_supplemental = previous_meta.get("supplemental_adapters", [])
+    previous_dependency_fingerprint = (
+        previous_meta.get("dependency_fingerprint")
+        if isinstance(previous_meta.get("dependency_fingerprint"), dict)
+        else None
+    )
     tracked_count = len(plan.get("files", {}))
     ttl_hours = float(config.get("graph", {}).get("freshness_ttl_hours", 24))
     age_hours = manifest_age_hours(previous_manifest)
+    dependency_fingerprint_status = "not_applicable"
+    if current_dependency_fingerprint:
+        if previous_dependency_fingerprint is None:
+            dependency_fingerprint_status = "unknown"
+        elif current_dependency_fingerprint == previous_dependency_fingerprint:
+            dependency_fingerprint_status = "unchanged"
+        else:
+            dependency_fingerprint_status = "changed"
 
     if not previous_manifest:
         reason_codes.append("NO_PREVIOUS_MANIFEST")
@@ -164,8 +138,6 @@ def build_decision(
         reason_codes.append("LARGE_CHANGESET")
     if any(path.endswith(".md") and "/rules/" in path.replace("\\", "/") for path in changed_files):
         reason_codes.append("RULE_FILES_CHANGED")
-    if dependency_files:
-        reason_codes.append("DEPENDENCY_FINGERPRINT_CHANGED")
     if any(adapter_scope_for_path(path) != primary_adapter for path in changed_files if adapter_scope_for_path(path) != "generic"):
         if any(adapter_scope_for_path(path) == primary_adapter for path in changed_files):
             reason_codes.append("CROSS_ADAPTER_BOUNDARY")
@@ -177,6 +149,10 @@ def build_decision(
         reason_codes.append("GRAPH_TTL_EXCEEDED")
 
     decision_mode = "incremental" if plan.get("build_mode") in {"incremental", "reused"} else "full"
+    if dependency_fingerprint_status == "changed":
+        reason_codes.append("DEPENDENCY_FINGERPRINT_CHANGED")
+    elif dependency_fingerprint_status == "unknown":
+        reason_codes.append("DEPENDENCY_FINGERPRINT_UNKNOWN")
     if any(code in reason_codes for code in {"NO_PREVIOUS_MANIFEST", "CONFIG_CHANGED", "PROFILE_CHANGED", "PRIMARY_ADAPTER_CHANGED", "SUPPLEMENTAL_ADAPTERS_CHANGED", "RULE_FILES_CHANGED", "CROSS_ADAPTER_BOUNDARY", "DEPENDENCY_FINGERPRINT_CHANGED"}):
         decision_mode = "full"
 
@@ -191,12 +167,10 @@ def build_decision(
     else:
         graph_freshness = "fresh"
 
-    dependency_fingerprint_status = "changed" if dependency_files else ("unknown" if not previous_manifest else "unchanged")
-
     graph_trust = "medium"
     if generated_noise or "GRAPH_TTL_EXCEEDED" in reason_codes:
         graph_trust = "low"
-    elif any(code in reason_codes for code in {"CONFIG_CHANGED", "PROFILE_CHANGED", "PRIMARY_ADAPTER_CHANGED", "SUPPLEMENTAL_ADAPTERS_CHANGED", "RULE_FILES_CHANGED", "CROSS_ADAPTER_BOUNDARY", "DEPENDENCY_FINGERPRINT_CHANGED"}):
+    elif any(code in reason_codes for code in {"CONFIG_CHANGED", "PROFILE_CHANGED", "PRIMARY_ADAPTER_CHANGED", "SUPPLEMENTAL_ADAPTERS_CHANGED", "RULE_FILES_CHANGED", "CROSS_ADAPTER_BOUNDARY", "DEPENDENCY_FINGERPRINT_CHANGED", "DEPENDENCY_FINGERPRINT_UNKNOWN"}):
         graph_trust = "medium"
     elif execution_mode == "reused":
         graph_trust = "high" if graph_freshness == "fresh" else "medium"
@@ -207,7 +181,7 @@ def build_decision(
 
     if graph_freshness != "fresh":
         graph_trust = "medium" if graph_trust == "high" else graph_trust
-    if dependency_fingerprint_status == "changed" and graph_trust == "high":
+    if dependency_fingerprint_status in {"changed", "unknown"} and graph_trust == "high":
         graph_trust = "medium"
     if generated_noise:
         graph_trust = "low"

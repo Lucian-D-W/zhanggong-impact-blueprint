@@ -67,6 +67,13 @@ python .agents/skills/code-impact-guardian/cig.py finish
 - `tests passed` does not mean the change is proven safe; always read `report_completeness`, `graph_trust`, and `test_signal` together.
 - If `analyze` says the context is incomplete, do not keep editing as if the report were complete.
 
+## When you normally do not trigger the workflow
+
+- comment-only edits outside `docs/rules`
+- formatting-only edits that do not change tokens or behavior
+- generated/cache/build output files
+- README/docs copy edits that do not modify rules, setup commands, or test commands
+
 ## When you still need to pass `--seed`
 
 Most of the time you should not need it. You normally only pass `--seed` when:
@@ -81,6 +88,7 @@ candidates and ask you to be explicit.
 ## Where to look on failure
 
 - Status: run `python .agents/skills/code-impact-guardian/cig.py status`
+- Health: run `python .agents/skills/code-impact-guardian/cig.py health --workspace-root .`
 - Handoff: `.ai/codegraph/handoff/latest.md`
 - Recent task: `.ai/codegraph/last-task.json`
 - Context inference: `.ai/codegraph/context-resolution.json`

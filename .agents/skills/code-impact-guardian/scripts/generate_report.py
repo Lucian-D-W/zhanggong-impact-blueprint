@@ -217,7 +217,8 @@ def test_signal_payload(*, sections: dict, test_summary: dict | None) -> dict:
     if not test_summary:
         return {
             "status": "not-run",
-            "tests_run": 0,
+            "tests_run": None,
+            "test_count_status": "unknown",
             "tests_passed": False,
             "coverage_available": False,
             "affected_tests_found": affected_tests_found,
@@ -240,7 +241,8 @@ def test_signal_payload(*, sections: dict, test_summary: dict | None) -> dict:
         relevance = "tests-skipped-or-unavailable"
     return {
         "status": status,
-        "tests_run": 1 if command else 0,
+        "tests_run": test_summary.get("tests_run"),
+        "test_count_status": test_summary.get("test_count_status", "unknown"),
         "tests_passed": status == "passed",
         "coverage_available": coverage_available,
         "affected_tests_found": affected_tests_found,

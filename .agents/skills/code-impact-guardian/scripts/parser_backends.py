@@ -87,6 +87,21 @@ def python_method_symbol(class_name: str, method_name: str) -> str:
     return f"{class_name}.{method_name}"
 
 
+def infer_python_instance_types(node: ast.AST) -> dict[str, str]:
+    instance_type_map: dict[str, str] = {}
+    for child in ast.walk(node):
+        if isinstance(child, ast.Assign) and len(child.targets) == 1 and isinstance(child.targets[0], ast.Name):
+            target_name = child.targets[0].id
+            if isinstance(child.value, ast.Call) and isinstance(child.value.func, ast.Name):
+                instance_type_map[target_name] = child.value.func.id
+        elif isinstance(child, ast.AnnAssign) and isinstance(child.target, ast.Name):
+            target_name = child.target.id
+            annotation = child.annotation.id if isinstance(child.annotation, ast.Name) else None
+            if annotation and isinstance(child.value, ast.Call) and isinstance(child.value.func, ast.Name) and child.value.func.id == annotation:
+                instance_type_map[target_name] = annotation
+    return instance_type_map
+
+
 def extract_python_called_targets(
     *,
     node: ast.AST,
@@ -94,12 +109,14 @@ def extract_python_called_targets(
     imported_function_map: dict[str, str],
     imported_module_map: dict[str, str],
     imported_symbol_map: dict[str, tuple[str, str]] | None = None,
+    instance_type_map: dict[str, str] | None = None,
     class_method_ids: dict[str, str] | None = None,
     all_class_method_ids: dict[str, dict[str, str]] | None = None,
 ) -> list[tuple[str, int]]:
     class_method_ids = class_method_ids or {}
     all_class_method_ids = all_class_method_ids or {}
     imported_symbol_map = imported_symbol_map or {}
+    instance_type_map = instance_type_map or {}
     targets: list[tuple[str, int]] = []
     for child in ast.walk(node):
         if not isinstance(child, ast.Call):
@@ -120,6 +137,12 @@ def extract_python_called_targets(
                 target_id = function_node_id(target_file, python_method_symbol(symbol_name, func.attr))
             elif alias in {"self", "cls"} and func.attr in class_method_ids:
                 target_id = class_method_ids[func.attr]
+            elif alias in instance_type_map:
+                class_name = instance_type_map[alias]
+                target_id = all_class_method_ids.get(class_name, {}).get(func.attr)
+                if target_id is None and class_name in imported_symbol_map:
+                    target_file, symbol_name = imported_symbol_map[class_name]
+                    target_id = function_node_id(target_file, python_method_symbol(symbol_name, func.attr))
             elif alias in all_class_method_ids and func.attr in all_class_method_ids[alias]:
                 target_id = all_class_method_ids[alias][func.attr]
         if target_id:
@@ -206,6 +229,7 @@ def parse_python_backend(project_root: pathlib.Path, config: dict, include_files
                     "imported_function_map": imported_function_map,
                     "imported_module_map": imported_module_map,
                     "imported_symbol_map": imported_symbol_map,
+                    "instance_type_map": infer_python_instance_types(function_node),
                     "class_method_ids": {},
                     "all_class_method_ids": all_class_method_ids,
                     "node": function_node,
@@ -244,6 +268,7 @@ def parse_python_backend(project_root: pathlib.Path, config: dict, include_files
                     "imported_function_map": imported_function_map,
                     "imported_module_map": imported_module_map,
                     "imported_symbol_map": imported_symbol_map,
+                    "instance_type_map": infer_python_instance_types(function_node),
                     "class_method_ids": all_class_method_ids.get(class_name, {}),
                     "all_class_method_ids": all_class_method_ids,
                     "node": function_node,
@@ -282,6 +307,7 @@ def parse_python_backend(project_root: pathlib.Path, config: dict, include_files
                     "imported_function_map": imported_function_map,
                     "imported_module_map": imported_module_map,
                     "imported_symbol_map": imported_symbol_map,
+                    "instance_type_map": infer_python_instance_types(test_node),
                     "class_method_ids": class_method_map,
                     "all_class_method_ids": all_class_method_ids,
                     "node": test_node,
@@ -328,6 +354,7 @@ def parse_python_backend(project_root: pathlib.Path, config: dict, include_files
             imported_function_map=context["imported_function_map"],
             imported_module_map=context["imported_module_map"],
             imported_symbol_map=context.get("imported_symbol_map"),
+            instance_type_map=context.get("instance_type_map"),
             class_method_ids=context.get("class_method_ids"),
             all_class_method_ids=context.get("all_class_method_ids"),
         ):
@@ -352,6 +379,7 @@ def parse_python_backend(project_root: pathlib.Path, config: dict, include_files
             imported_function_map=context["imported_function_map"],
             imported_module_map=context["imported_module_map"],
             imported_symbol_map=context.get("imported_symbol_map"),
+            instance_type_map=context.get("instance_type_map"),
             class_method_ids=context.get("class_method_ids"),
             all_class_method_ids=context.get("all_class_method_ids"),
         ):
@@ -372,8 +400,13 @@ def parse_python_backend(project_root: pathlib.Path, config: dict, include_files
 
 JS_FUNCTION_RE = re.compile(r"^\s*(?:export\s+default\s+|export\s+)?(?:async\s+)?function\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 JS_ARROW_RE = re.compile(r"^\s*(?:export\s+)?const\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:async\s+)?(?:<[^>]+>\s*)?(?:\([^=]*\)|[A-Za-z_][A-Za-z0-9_]*)\s*=>")
+JS_ARROW_START_RE = re.compile(r"^\s*(?:export\s+)?const\s+([A-Za-z_][A-Za-z0-9_]*)\s*=")
+JS_ARROW_MULTILINE_RE = re.compile(
+    r"^\s*(?:export\s+)?const\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:async\s+)?(?:<[^>]+>\s*)?(?:\(.+?\)|[A-Za-z_][A-Za-z0-9_]*)\s*=>",
+    re.DOTALL,
+)
 JS_CLASS_RE = re.compile(r"^\s*(?:export\s+default\s+|export\s+)?class\s+([A-Za-z_][A-Za-z0-9_]*)\b")
-JS_METHOD_RE = re.compile(r"^\s*(?:async\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\([^;]*\)\s*\{")
+JS_METHOD_RE = re.compile(r"^\s*(?:(?:public|private|protected|static|readonly|async|get|set)\s+)*([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 JS_TEST_RE = re.compile(r"^\s*(?:test(?:\.only)?|it(?:\.only)?|describe|test\.describe)\s*\(\s*['\"]([^'\"]+)['\"]")
 JS_IMPORT_FROM_RE = re.compile(r"^\s*import\s+(.+?)\s+from\s+['\"]([^'\"]+)['\"]\s*;?\s*$")
 JS_EXPORT_FROM_RE = re.compile(r"^\s*export\s+(?:\{([^}]*)\}|\*)\s+from\s+['\"]([^'\"]+)['\"]\s*;?\s*$")
@@ -452,22 +485,89 @@ def block_end_line(lines: list[str], start_index: int, limit: int | None = None)
 
 
 def arrow_end_line(lines: list[str], start_index: int) -> int:
-    line = lines[start_index]
-    if "{" in line:
-        return scan_js_block(lines, start_index)["end_line"]
+    body_open = find_js_body_open_brace(lines, start_index, kind="arrow")
+    if body_open:
+        return scan_js_block(lines, start_index, kind="arrow")["end_line"]
     return start_index + 1
 
 
-def scan_js_block(lines: list[str], start_index: int, limit: int | None = None) -> dict:
+def match_js_arrow_name(lines: list[str], start_index: int, limit: int | None = None) -> str | None:
+    line = lines[start_index]
+    arrow_match = JS_ARROW_RE.match(line)
+    if arrow_match:
+        return arrow_match.group(1)
+
+    if not JS_ARROW_START_RE.match(line):
+        return None
+
+    last_index = min(limit if limit is not None else len(lines), start_index + 8)
+    header_text = "\n".join(lines[start_index:last_index])
+    multiline_match = JS_ARROW_MULTILINE_RE.match(header_text)
+    if multiline_match:
+        return multiline_match.group(1)
+    return None
+
+
+def previous_js_word(line: str, char_index: int) -> str:
+    index = char_index - 1
+    while index >= 0 and line[index].isspace():
+        index -= 1
+    end_index = index + 1
+    while index >= 0 and (line[index].isalnum() or line[index] in {"_", "$"}):
+        index -= 1
+    return line[index + 1:end_index]
+
+
+def should_start_js_regex(line: str, char_index: int, prev_significant_char: str | None) -> bool:
+    next_char = line[char_index + 1] if char_index + 1 < len(line) else ""
+    if next_char in {"/", "*"}:
+        return False
+    if prev_significant_char is None:
+        return True
+    if prev_significant_char in "([{:;,=!&|?+-*%^~<>":
+        return True
+    return previous_js_word(line, char_index) in {
+        "case",
+        "delete",
+        "do",
+        "else",
+        "in",
+        "instanceof",
+        "new",
+        "of",
+        "return",
+        "throw",
+        "typeof",
+        "void",
+        "yield",
+    }
+
+
+def find_js_body_open_brace(
+    lines: list[str],
+    start_index: int,
+    *,
+    kind: str | None = None,
+    limit: int | None = None,
+) -> tuple[int, int] | None:
     last_index = limit if limit is not None else len(lines)
-    depth = 0
-    started = False
     in_single = False
     in_double = False
     in_template = False
     in_block_comment = False
+    in_regex = False
+    regex_char_class = False
     template_expr_depth = 0
-    parser_warning: str | None = None
+    prev_significant_char: str | None = None
+    paren_depth = 0
+    saw_params = kind in {"class", None}
+    arrow_seen = kind not in {"arrow"}
+    in_return_type = False
+    return_type_seen_token = False
+    type_object_depth = 0
+    type_angle_depth = 0
+    type_paren_depth = 0
+    type_bracket_depth = 0
 
     for index in range(start_index, last_index):
         line = lines[index]
@@ -503,6 +603,28 @@ def scan_js_block(lines: list[str], start_index: int, limit: int | None = None) 
                     continue
                 if char == '"':
                     in_double = False
+                char_index += 1
+                continue
+
+            if in_regex:
+                if char == "\\":
+                    char_index += 2
+                    continue
+                if char == "[":
+                    regex_char_class = True
+                    char_index += 1
+                    continue
+                if char == "]" and regex_char_class:
+                    regex_char_class = False
+                    char_index += 1
+                    continue
+                if char == "/" and not regex_char_class:
+                    in_regex = False
+                    char_index += 1
+                    while char_index < len(line) and line[char_index].isalpha():
+                        char_index += 1
+                    prev_significant_char = "/"
+                    continue
                 char_index += 1
                 continue
 
@@ -553,6 +675,294 @@ def scan_js_block(lines: list[str], start_index: int, limit: int | None = None) 
                 in_block_comment = True
                 char_index += 2
                 continue
+            if char == "/" and should_start_js_regex(line, char_index, prev_significant_char):
+                in_regex = True
+                regex_char_class = False
+                char_index += 1
+                continue
+            if char == "'":
+                in_single = True
+                char_index += 1
+                continue
+            if char == '"':
+                in_double = True
+                char_index += 1
+                continue
+            if char == "`":
+                in_template = True
+                char_index += 1
+                continue
+
+            if kind == "arrow" and not arrow_seen:
+                if char == "=" and next_char == ">":
+                    arrow_seen = True
+                    prev_significant_char = ">"
+                    char_index += 2
+                    continue
+                if not char.isspace():
+                    prev_significant_char = char
+                char_index += 1
+                continue
+
+            if kind not in {"class", "arrow", None} and not saw_params:
+                if char == "(":
+                    saw_params = True
+                    paren_depth = 1
+                if not char.isspace():
+                    prev_significant_char = char
+                char_index += 1
+                continue
+
+            if saw_params and paren_depth > 0:
+                if char == "(":
+                    paren_depth += 1
+                elif char == ")":
+                    paren_depth -= 1
+                if not char.isspace():
+                    prev_significant_char = char
+                char_index += 1
+                continue
+
+            if kind in {"class", None}:
+                if char == "{":
+                    return index, char_index
+                if not char.isspace():
+                    prev_significant_char = char
+                char_index += 1
+                continue
+
+            if kind == "arrow":
+                if char == "{":
+                    return index, char_index
+                if not char.isspace():
+                    return None
+                char_index += 1
+                continue
+
+            if char.isspace():
+                char_index += 1
+                continue
+
+            if not in_return_type and char == ":":
+                in_return_type = True
+                return_type_seen_token = False
+                prev_significant_char = char
+                char_index += 1
+                continue
+
+            if not in_return_type and char == "{":
+                return index, char_index
+
+            if in_return_type:
+                if char == "{":
+                    if not return_type_seen_token:
+                        type_object_depth += 1
+                        return_type_seen_token = True
+                    elif type_object_depth == 0 and type_angle_depth == 0 and type_paren_depth == 0 and type_bracket_depth == 0:
+                        return index, char_index
+                    else:
+                        type_object_depth += 1
+                    prev_significant_char = char
+                    char_index += 1
+                    continue
+                if char == "}":
+                    if type_object_depth > 0:
+                        type_object_depth -= 1
+                    prev_significant_char = char
+                    char_index += 1
+                    continue
+                if char == "<":
+                    type_angle_depth += 1
+                    return_type_seen_token = True
+                    prev_significant_char = char
+                    char_index += 1
+                    continue
+                if char == ">" and type_angle_depth > 0:
+                    type_angle_depth -= 1
+                    prev_significant_char = char
+                    char_index += 1
+                    continue
+                if char == "[":
+                    type_bracket_depth += 1
+                    return_type_seen_token = True
+                    prev_significant_char = char
+                    char_index += 1
+                    continue
+                if char == "]" and type_bracket_depth > 0:
+                    type_bracket_depth -= 1
+                    prev_significant_char = char
+                    char_index += 1
+                    continue
+                if char == "(":
+                    type_paren_depth += 1
+                    return_type_seen_token = True
+                    prev_significant_char = char
+                    char_index += 1
+                    continue
+                if char == ")" and type_paren_depth > 0:
+                    type_paren_depth -= 1
+                    prev_significant_char = char
+                    char_index += 1
+                    continue
+                return_type_seen_token = True
+                prev_significant_char = char
+                char_index += 1
+                continue
+
+            prev_significant_char = char
+            char_index += 1
+    return None
+
+
+def js_body_text(lines: list[str], scan: dict) -> str:
+    body_start = scan.get("body_start")
+    body_end = scan.get("body_end")
+    if not body_start or not body_end:
+        return ""
+    start_line, start_col = body_start
+    end_line, end_col = body_end
+    if start_line == end_line:
+        return lines[start_line][start_col + 1:end_col]
+    parts = [lines[start_line][start_col + 1:]]
+    parts.extend(lines[start_line + 1:end_line])
+    parts.append(lines[end_line][:end_col])
+    return "\n".join(parts)
+
+
+def scan_js_block(lines: list[str], start_index: int, limit: int | None = None, *, kind: str | None = None) -> dict:
+    last_index = limit if limit is not None else len(lines)
+    body_open = find_js_body_open_brace(lines, start_index, kind=kind, limit=last_index)
+    if body_open is None:
+        return {
+            "end_line": min(last_index, start_index + 1),
+            "parser_warning": "parser_warning: unstable function boundary scan",
+            "parser_confidence": 0.35,
+            "body_start": None,
+            "body_end": None,
+        }
+
+    depth = 0
+    in_single = False
+    in_double = False
+    in_template = False
+    in_block_comment = False
+    in_regex = False
+    regex_char_class = False
+    template_expr_depth = 0
+    parser_warning: str | None = None
+    prev_significant_char: str | None = None
+
+    for index in range(body_open[0], last_index):
+        line = lines[index]
+        in_line_comment = False
+        char_index = body_open[1] if index == body_open[0] else 0
+        while char_index < len(line):
+            char = line[char_index]
+            next_char = line[char_index + 1] if char_index + 1 < len(line) else ""
+
+            if in_line_comment:
+                break
+
+            if in_block_comment:
+                if char == "*" and next_char == "/":
+                    in_block_comment = False
+                    char_index += 2
+                    continue
+                char_index += 1
+                continue
+
+            if in_single:
+                if char == "\\":
+                    char_index += 2
+                    continue
+                if char == "'":
+                    in_single = False
+                char_index += 1
+                continue
+
+            if in_double:
+                if char == "\\":
+                    char_index += 2
+                    continue
+                if char == '"':
+                    in_double = False
+                char_index += 1
+                continue
+
+            if in_regex:
+                if char == "\\":
+                    char_index += 2
+                    continue
+                if char == "[":
+                    regex_char_class = True
+                    char_index += 1
+                    continue
+                if char == "]" and regex_char_class:
+                    regex_char_class = False
+                    char_index += 1
+                    continue
+                if char == "/" and not regex_char_class:
+                    in_regex = False
+                    char_index += 1
+                    while char_index < len(line) and line[char_index].isalpha():
+                        char_index += 1
+                    prev_significant_char = "/"
+                    continue
+                char_index += 1
+                continue
+
+            if in_template:
+                if template_expr_depth == 0:
+                    if char == "\\":
+                        char_index += 2
+                        continue
+                    if char == "`":
+                        in_template = False
+                        char_index += 1
+                        continue
+                    if char == "$" and next_char == "{":
+                        template_expr_depth = 1
+                        char_index += 2
+                        continue
+                    char_index += 1
+                    continue
+                if char == "'" and not in_single:
+                    in_single = True
+                    char_index += 1
+                    continue
+                if char == '"' and not in_double:
+                    in_double = True
+                    char_index += 1
+                    continue
+                if char == "/" and next_char == "*":
+                    in_block_comment = True
+                    char_index += 2
+                    continue
+                if char == "/" and next_char == "/":
+                    in_line_comment = True
+                    break
+                if char == "{":
+                    template_expr_depth += 1
+                elif char == "}":
+                    template_expr_depth -= 1
+                    if template_expr_depth == 0:
+                        char_index += 1
+                        continue
+                char_index += 1
+                continue
+
+            if char == "/" and next_char == "/":
+                in_line_comment = True
+                break
+            if char == "/" and next_char == "*":
+                in_block_comment = True
+                char_index += 2
+                continue
+            if char == "/" and should_start_js_regex(line, char_index, prev_significant_char):
+                in_regex = True
+                regex_char_class = False
+                char_index += 1
+                continue
             if char == "'":
                 in_single = True
                 char_index += 1
@@ -566,27 +976,32 @@ def scan_js_block(lines: list[str], start_index: int, limit: int | None = None) 
                 char_index += 1
                 continue
             if char == "{":
-                started = True
                 depth += 1
             elif char == "}":
                 depth -= 1
-                if started and depth <= 0:
+                if depth <= 0:
                     warning = parser_warning
-                    if in_template or in_block_comment:
+                    if in_template or in_block_comment or in_regex:
                         warning = warning or "parser_warning: unterminated template/comment recovered"
                     return {
                         "end_line": index + 1,
                         "parser_warning": warning,
                         "parser_confidence": 0.6 if warning else 0.92,
+                        "body_start": body_open,
+                        "body_end": (index, char_index),
                     }
+            if not char.isspace():
+                prev_significant_char = char
             char_index += 1
 
-    if in_template or in_block_comment or in_single or in_double:
+    if in_template or in_block_comment or in_single or in_double or in_regex:
         parser_warning = "parser_warning: unstable function boundary scan"
     return {
         "end_line": min(last_index, start_index + 1),
         "parser_warning": parser_warning or "parser_warning: unterminated block scan",
         "parser_confidence": 0.35,
+        "body_start": body_open,
+        "body_end": None,
     }
 
 
@@ -850,7 +1265,7 @@ def parse_tsjs_backend(project_root: pathlib.Path, config: dict, include_files: 
             class_match = JS_CLASS_RE.match(line)
             if class_match:
                 class_name = class_match.group(1)
-                class_scan = scan_js_block(lines, index)
+                class_scan = scan_js_block(lines, index, kind="class")
                 class_end = class_scan["end_line"]
                 class_methods: dict[str, str] = {}
                 inner_index = index + 1
@@ -859,14 +1274,15 @@ def parse_tsjs_backend(project_root: pathlib.Path, config: dict, include_files: 
                     method_match = JS_METHOD_RE.match(inner_line)
                     if method_match and method_match.group(1) != "constructor":
                         method_name = method_match.group(1)
-                        method_scan = scan_js_block(lines, inner_index, class_end)
+                        method_scan = scan_js_block(lines, inner_index, class_end, kind="method")
                         end_line = method_scan["end_line"]
                         symbol = f"{class_name}.{method_name}"
                         node_id = function_node_id(relative, symbol)
                         class_methods[method_name] = node_id
                         local_function_ids[symbol] = node_id
                         known_function_ids.add(node_id)
-                        body_text = "\n".join(lines[inner_index:end_line])
+                        full_text = "\n".join(lines[inner_index:end_line])
+                        body_text = js_body_text(lines, method_scan)
                         export_names = export_names_by_symbol.get(class_name, [])
                         adapter_graph.functions.append(
                             {
@@ -877,7 +1293,7 @@ def parse_tsjs_backend(project_root: pathlib.Path, config: dict, include_files: 
                                 "start_line": inner_index + 1,
                                 "end_line": end_line,
                                 "language": "tsjs",
-                                "body_hash": sha1_text(body_text),
+                                "body_hash": sha1_text(full_text),
                         "attrs": {
                             "definition_kind": "class_method",
                             "class_name": class_name,
@@ -920,9 +1336,10 @@ def parse_tsjs_backend(project_root: pathlib.Path, config: dict, include_files: 
                 node_id = function_node_id(relative, name)
                 local_function_ids[name] = node_id
                 known_function_ids.add(node_id)
-                function_scan = scan_js_block(lines, index)
+                function_scan = scan_js_block(lines, index, kind="function")
                 end_line = function_scan["end_line"]
-                body_text = "\n".join(lines[index:end_line])
+                full_text = "\n".join(lines[index:end_line])
+                body_text = js_body_text(lines, function_scan)
                 export_names = export_names_by_symbol.get(name, [])
                 exported = line.strip().startswith("export ") or bool(export_names)
                 definition_kind, is_component, is_hook = tsjs_definition_kind(name, relative, exported)
@@ -935,7 +1352,7 @@ def parse_tsjs_backend(project_root: pathlib.Path, config: dict, include_files: 
                         "start_line": index + 1,
                         "end_line": end_line,
                         "language": "tsjs",
-                        "body_hash": sha1_text(body_text),
+                        "body_hash": sha1_text(full_text),
                         "attrs": {
                             "definition_kind": definition_kind,
                             "exported": exported,
@@ -970,15 +1387,23 @@ def parse_tsjs_backend(project_root: pathlib.Path, config: dict, include_files: 
                 index = end_line
                 continue
 
-            arrow_match = JS_ARROW_RE.match(line)
-            if arrow_match:
-                name = arrow_match.group(1)
+            arrow_name = match_js_arrow_name(lines, index)
+            if arrow_name:
+                name = arrow_name
                 node_id = function_node_id(relative, name)
                 local_function_ids[name] = node_id
                 known_function_ids.add(node_id)
-                arrow_scan = scan_js_block(lines, index) if "{" in line else {"end_line": index + 1, "parser_warning": None, "parser_confidence": 0.92}
+                arrow_body_open = find_js_body_open_brace(lines, index, kind="arrow")
+                arrow_scan = (
+                    scan_js_block(lines, index, kind="arrow")
+                    if arrow_body_open
+                    else {"end_line": index + 1, "parser_warning": None, "parser_confidence": 0.92, "body_start": None, "body_end": None}
+                )
                 end_line = arrow_scan["end_line"]
-                body_text = "\n".join(lines[index:end_line])
+                full_text = "\n".join(lines[index:end_line])
+                body_text = js_body_text(lines, arrow_scan)
+                if not body_text and "=>" in full_text:
+                    body_text = full_text.split("=>", 1)[1].strip()
                 export_names = export_names_by_symbol.get(name, [])
                 exported = line.strip().startswith("export ") or bool(export_names)
                 _, is_component, is_hook = tsjs_definition_kind(name, relative, exported)
@@ -992,7 +1417,7 @@ def parse_tsjs_backend(project_root: pathlib.Path, config: dict, include_files: 
                         "start_line": index + 1,
                         "end_line": end_line,
                         "language": "tsjs",
-                        "body_hash": sha1_text(body_text),
+                        "body_hash": sha1_text(full_text),
                         "attrs": {
                             "definition_kind": definition_kind,
                             "exported": exported,

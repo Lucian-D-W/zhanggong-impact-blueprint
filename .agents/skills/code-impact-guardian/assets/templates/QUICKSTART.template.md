@@ -58,6 +58,13 @@ python .agents/skills/code-impact-guardian/cig.py finish
 - use `--changed-line <path:line>` only when auto context inference still needs help
 - if `analyze` cannot infer enough context, it will tell you to pass `--changed-file`, `--patch-file`, initialize git, or use `--allow-fallback`
 
+## When you normally do not trigger the workflow
+
+- comment-only edits outside `docs/rules`
+- formatting-only edits that do not change tokens or behavior
+- generated/cache/build output files
+- README/docs copy edits that do not modify rules, setup commands, or test commands
+
 Low-level commands remain available for advanced use:
 
 ```bash
@@ -81,3 +88,4 @@ python .agents/skills/code-impact-guardian/cig.py after-edit --seed <seed> --cha
 - Context inference: `.ai/codegraph/context-resolution.json`
 - Seed candidates: `.ai/codegraph/seed-candidates.json`
 - Next action: `.ai/codegraph/next-action.json`
+- Health: `python .agents/skills/code-impact-guardian/cig.py health --workspace-root .`

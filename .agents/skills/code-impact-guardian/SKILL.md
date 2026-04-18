@@ -16,6 +16,13 @@ You MUST use this skill when a task will:
 - change behavior
 - add or remove functions, routines, rules, or test commands
 
+Do NOT trigger for:
+
+- comment-only edits outside `docs/rules`
+- formatting-only edits that do not change tokens or behavior
+- generated/cache/build output files
+- README/docs copy edits that do not modify rules, setup commands, or test commands
+
 ## Required flow
 
 1. If `.code-impact-guardian/config.json` is missing, run `setup` automatically.
@@ -98,4 +105,3 @@ After `finish`, expect:
 - refreshed graph/report/evidence/tests
 - structured logs
 - updated handoff
-

@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 import pathlib
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -38,6 +39,34 @@ def normalize_test_command(command: list[str]) -> list[str]:
     return command
 
 
+def parse_test_count(output: str, adapter_name: str) -> tuple[int | None, str]:
+    del adapter_name
+    if not output:
+        return None, "unknown"
+
+    unittest_match = re.search(r"Ran\s+(\d+)\s+tests?\s+in\s+[0-9.]+s", output)
+    if unittest_match:
+        return int(unittest_match.group(1)), "parsed"
+
+    node_match = re.search(r"(?m)^#\s*tests\s+(\d+)\s*$", output)
+    if node_match:
+        return int(node_match.group(1)), "parsed"
+
+    vitest_match = re.search(r"(?m)^\s*Tests\s+(\d+)\s+passed\b", output)
+    if vitest_match:
+        return int(vitest_match.group(1)), "parsed"
+
+    if any(token in output for token in (" passed", " failed", " skipped", " error", " errors")):
+        total = 0
+        for count, label in re.findall(r"(\d+)\s+(passed|failed|skipped|error|errors|xfailed|xpassed)", output):
+            del label
+            total += int(count)
+        if total:
+            return total, "parsed"
+
+    return None, "unknown"
+
+
 def run_tests_with_coverage(*, workspace_root: pathlib.Path, config_path: pathlib.Path, task_id: str) -> dict:
     config = build_graph.load_config(config_path)
     paths = build_graph.graph_paths(workspace_root, config)
@@ -55,7 +84,8 @@ def run_tests_with_coverage(*, workspace_root: pathlib.Path, config_path: pathli
             "task_id": task_id,
             "command": [],
             "status": "skipped",
-            "tests_run": 0,
+            "tests_run": None,
+            "test_count_status": "unknown",
             "tests_passed": False,
             "exit_code": None,
             "output_path": str(output_path.relative_to(workspace_root)),
@@ -96,6 +126,10 @@ def run_tests_with_coverage(*, workspace_root: pathlib.Path, config_path: pathli
         except FileNotFoundError:
             result = subprocess.CompletedProcess(coverage_command, 1, "", "coverage.py is not installed")
             output_path.write_text(result.stderr, encoding="utf-8")
+        parsed_tests_run, test_count_status = parse_test_count(
+            result.stdout + "\n" + result.stderr,
+            adapter_name,
+        )
 
         coverage_status = "available"
         coverage_reason = None
@@ -123,7 +157,8 @@ def run_tests_with_coverage(*, workspace_root: pathlib.Path, config_path: pathli
             "task_id": task_id,
             "command": coverage_command,
             "status": "passed" if result.returncode == 0 else "failed",
-            "tests_run": 1,
+            "tests_run": parsed_tests_run,
+            "test_count_status": test_count_status,
             "tests_passed": result.returncode == 0,
             "exit_code": result.returncode,
             "output_path": str(output_path.relative_to(workspace_root)),
@@ -156,6 +191,10 @@ def run_tests_with_coverage(*, workspace_root: pathlib.Path, config_path: pathli
             check=False,
         )
         output_path.write_text(result.stdout + "\n" + result.stderr, encoding="utf-8")
+        parsed_tests_run, test_count_status = parse_test_count(
+            result.stdout + "\n" + result.stderr,
+            adapter_name,
+        )
         coverage_payload = {"result": [], "summary": {"files": {}}}
         coverage_status = "available"
         coverage_reason = None
@@ -195,7 +234,8 @@ def run_tests_with_coverage(*, workspace_root: pathlib.Path, config_path: pathli
             "task_id": task_id,
             "command": command,
             "status": "passed" if result.returncode == 0 else "failed",
-            "tests_run": 1,
+            "tests_run": parsed_tests_run,
+            "test_count_status": test_count_status,
             "tests_passed": result.returncode == 0,
             "exit_code": result.returncode,
             "output_path": str(output_path.relative_to(workspace_root)),
@@ -222,11 +262,16 @@ def run_tests_with_coverage(*, workspace_root: pathlib.Path, config_path: pathli
         check=False,
     )
     output_path.write_text(result.stdout + "\n" + result.stderr, encoding="utf-8")
+    parsed_tests_run, test_count_status = parse_test_count(
+        result.stdout + "\n" + result.stderr,
+        adapter_name,
+    )
     summary = {
         "task_id": task_id,
         "command": command,
         "status": "passed" if result.returncode == 0 else "failed",
-        "tests_run": 1,
+        "tests_run": parsed_tests_run,
+        "test_count_status": test_count_status,
         "tests_passed": result.returncode == 0,
         "exit_code": result.returncode,
         "output_path": str(output_path.relative_to(workspace_root)),
@@ -572,7 +617,7 @@ def after_edit_update(
             f"- updated_at: {utc_now()}",
             f"- graph_refresh: complete ({graph_summary['node_count']} nodes, {graph_summary['edge_count']} edges)",
             f"- tests: {test_summary['status']} (exit_code={test_summary['exit_code']})",
-            f"- tests_run: {test_summary.get('tests_run', 0)}",
+            f"- tests_run: {test_summary.get('tests_run') if test_summary.get('tests_run') is not None else 'unknown'}",
             f"- tests_passed: {test_summary.get('tests_passed', False)}",
             f"- affected_tests_found: {test_summary.get('affected_tests_found', False)}",
             f"- coverage_status: {test_summary['coverage_status']}",

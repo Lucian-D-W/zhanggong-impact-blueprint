@@ -988,6 +988,53 @@ def status_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
     }
 
 
+def health_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> dict:
+    paths = runtime_paths(workspace_root)
+    config_exists = config_path.exists()
+    issues: list[str] = []
+    fix_commands: list[str] = []
+    graph_trust = "unknown"
+    graph_freshness = "unknown"
+    dependency_fingerprint_status = "unknown"
+    last_task = read_last_task(workspace_root) or {}
+
+    if not config_exists:
+        issues.append("config_missing")
+        fix_commands.append("python .agents/skills/code-impact-guardian/cig.py setup --workspace-root . --project-root .")
+        issues.append("graph_stale")
+        fix_commands.append("python .agents/skills/code-impact-guardian/cig.py build --workspace-root . --full-rebuild")
+    else:
+        config = build_graph.load_config(config_path)
+        graph = build_graph.graph_paths(workspace_root, config)
+        build_decision_payload = read_json(paths["build_decision"]) or {}
+        graph_trust = build_decision_payload.get("graph_trust", build_decision_payload.get("trust_level", "unknown"))
+        graph_freshness = build_decision_payload.get("graph_freshness", "unknown")
+        dependency_fingerprint_status = build_decision_payload.get("dependency_fingerprint_status", "unknown")
+        if not graph["db_path"].exists() or graph_freshness != "fresh":
+            issues.append("graph_stale")
+            fix_commands.append("python .agents/skills/code-impact-guardian/cig.py build --workspace-root . --full-rebuild")
+
+    last_task_phase = last_task.get("command", "none") if last_task else "none"
+    needs_finish = last_task_phase in {"analyze", "report"} and (last_task.get("status") == "success")
+    ready = not issues and not needs_finish
+    if needs_finish:
+        issues.append("finish_pending")
+        fix_commands.insert(0, "python .agents/skills/code-impact-guardian/cig.py finish --workspace-root .")
+    next_command = fix_commands[0] if fix_commands else "python .agents/skills/code-impact-guardian/cig.py analyze --workspace-root . --changed-file <relative-path>"
+
+    return {
+        "ready": ready,
+        "issues": issues,
+        "fix_commands": fix_commands,
+        "next_command": next_command,
+        "graph_trust": graph_trust,
+        "graph_freshness": graph_freshness,
+        "dependency_fingerprint_status": dependency_fingerprint_status,
+        "last_task_phase": last_task_phase,
+        "needs_finish": needs_finish,
+    }
+
+
 def candidate_brief(item: dict) -> dict:
     return {
         "node_id": item.get("node_id"),
@@ -1222,6 +1269,15 @@ def persist_last_task(
     return str(path)
 
 
+def context_missing_recovery_commands() -> list[str]:
+    return [
+        "python .agents/skills/code-impact-guardian/cig.py analyze --workspace-root . --allow-fallback",
+        "python .agents/skills/code-impact-guardian/cig.py analyze --workspace-root . --changed-file <relative-path>",
+        "python .agents/skills/code-impact-guardian/cig.py analyze --workspace-root . --patch-file <patch-file>",
+        "git init",
+    ]
+
+
 def run_analyze_command(
     *,
     workspace_root: pathlib.Path,
@@ -1269,6 +1325,7 @@ def run_analyze_command(
                 "Could not infer a stable seed or changed-file context for analyze.",
                 retryable=True,
                 suggested_next_step="Pass --changed-file, pass --patch-file, initialize git with `git init`, or rerun with --allow-fallback to continue file-level only.",
+                recovery_commands=context_missing_recovery_commands(),
             )
 
         build_payload = build_graph.build_graph(
@@ -1289,6 +1346,7 @@ def run_analyze_command(
                 "Could not infer a stable seed or changed-file context for analyze.",
                 retryable=True,
                 suggested_next_step="Pass --changed-file, pass --patch-file, initialize git with `git init`, or rerun with --seed to continue explicitly.",
+                recovery_commands=context_missing_recovery_commands(),
             )
 
         selected_file = seeds_payload["file_details"][0]
@@ -1964,6 +2022,10 @@ def main() -> int:
     status_parser.add_argument("--brief", action="store_true")
     status_parser.add_argument("--full", action="store_true")
 
+    health_parser = subparsers.add_parser("health", help="Return a compact machine-readable readiness summary")
+    health_parser.add_argument("--workspace-root", default=".")
+    health_parser.add_argument("--config", default=".code-impact-guardian/config.json")
+
     args = parser.parse_args()
     workspace_root = pathlib.Path(getattr(args, "workspace_root", ".")).resolve()
     ensure_runtime_dirs(workspace_root)
@@ -2103,8 +2165,11 @@ def main() -> int:
 
         if args.command in {"report", "analyze", "after-edit", "finish"}:
             auto_setup_if_missing(workspace_root, config_path)
-        ensure_config_exists(config_path)
-        context = command_context(workspace_root, config_path)
+        if args.command not in {"status", "health"}:
+            ensure_config_exists(config_path)
+            context = command_context(workspace_root, config_path)
+        elif config_path.exists():
+            context = command_context(workspace_root, config_path)
 
         if args.command == "doctor":
             payload = doctor_payload(workspace_root, config_path, fix_safe=args.fix_safe)
@@ -2263,6 +2328,8 @@ def main() -> int:
             seed = resolved_seed
         elif args.command == "status":
             payload = status_payload(workspace_root, config_path)
+        elif args.command == "health":
+            payload = health_payload(workspace_root, config_path)
         else:
             raise CIGUserError(
                 "COMMAND_UNHANDLED",

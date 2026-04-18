@@ -26,6 +26,13 @@ This file defines the recovery protocol for agents and humans.
 5. If generated/cache files polluted the diff, ignore them or add them to `.gitignore` before retrying
 6. Retry with `--debug` only if the structured error is not enough
 
+## Build is locked
+
+1. Run `python .agents/skills/code-impact-guardian/cig.py status --workspace-root .`
+2. Confirm no other build is still running before touching `.ai/codegraph/build.lock`
+3. Only then remove the stale lock file and retry
+4. Do not delete the lock preemptively while another agent or process may still be building
+
 ## Report failed
 
 1. Confirm the seed exists in `cig.py seeds`
@@ -62,6 +69,7 @@ This file defines the recovery protocol for agents and humans.
 ## Error code guide
 
 - `CONFIG_MISSING`: run `init`
+- `BUILD_LOCKED`: inspect status first and only remove `.ai/codegraph/build.lock` after confirming no active build is running
 - `CONTEXT_MISSING`: pass `--changed-file`, pass `--patch-file`, initialize git, or use `--allow-fallback` only if file-level continuation is acceptable
 - `INVALID_PROFILE`: choose a supported profile and run `init` again
 - `SUPPLEMENTAL_ADAPTER_MISSING`: add the expected files or disable the supplemental adapter

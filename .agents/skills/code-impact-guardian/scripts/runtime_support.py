@@ -18,12 +18,16 @@ class CIGUserError(Exception):
         retryable: bool,
         suggested_next_step: str,
         output_paths: dict | None = None,
+        recovery_commands: list[str] | None = None,
+        alternatives: list[dict] | None = None,
     ) -> None:
         super().__init__(message)
         self.error_code = error_code
         self.retryable = retryable
         self.suggested_next_step = suggested_next_step
         self.output_paths = output_paths or {}
+        self.recovery_commands = recovery_commands or []
+        self.alternatives = alternatives or []
 
 
 def runtime_paths(workspace_root: pathlib.Path) -> dict[str, pathlib.Path]:
@@ -209,6 +213,8 @@ def event_payload(
     error_code: str | None,
     retryable: bool,
     suggested_next_step: str,
+    recovery_commands: list[str] | None = None,
+    alternatives: list[dict] | None = None,
 ) -> dict:
     return {
         "timestamp": utc_now(),
@@ -226,6 +232,8 @@ def event_payload(
         "error_code": error_code,
         "retryable": retryable,
         "suggested_next_step": suggested_next_step,
+        "recovery_commands": recovery_commands or [],
+        "alternatives": alternatives or [],
     }
 
 
@@ -248,12 +256,16 @@ def error_payload_from_exception(
         suggested_next_step = exc.suggested_next_step
         message = str(exc)
         output_paths = exc.output_paths
+        recovery_commands = exc.recovery_commands
+        alternatives = exc.alternatives
     else:
         error_code = "UNEXPECTED_ERROR"
         retryable = False
         suggested_next_step = "Run the same command again with --debug and inspect the latest error log."
         message = str(exc)
         output_paths = {}
+        recovery_commands = []
+        alternatives = []
     payload = event_payload(
         command=command,
         workspace_root=workspace_root,
@@ -269,6 +281,8 @@ def error_payload_from_exception(
         error_code=error_code,
         retryable=retryable,
         suggested_next_step=suggested_next_step,
+        recovery_commands=recovery_commands,
+        alternatives=alternatives,
     )
     payload["message"] = message
     if debug:

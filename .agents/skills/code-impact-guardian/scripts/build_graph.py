@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import argparse
+import contextlib
 import hashlib
 import json
+import os
 import pathlib
 import sqlite3
 import subprocess
@@ -22,6 +24,7 @@ from adapters import (
 )
 from doc_sources import collect_rule_documents_from_sources
 from incremental_refresh import load_manifest, refresh_plan, save_manifest
+from runtime_support import CIGUserError
 from trust_policy import apply_shadow_verification_result, build_decision
 
 
@@ -123,32 +126,64 @@ def ensure_schema(db_path: pathlib.Path, schema_path: pathlib.Path) -> None:
         conn.commit()
 
 
-def parse_frontmatter(text: str) -> tuple[dict, str]:
+def parse_frontmatter_strict(text: str) -> tuple[dict, str, list[str]]:
     if not text.startswith("---\n"):
-        return {}, text
+        return {}, text, []
     end_marker = "\n---\n"
     end_index = text.find(end_marker, 4)
     if end_index == -1:
-        return {}, text
+        return {}, text, []
     block = text[4:end_index]
     body = text[end_index + len(end_marker) :]
     data: dict[str, object] = {}
     current_key: str | None = None
+    warnings: list[str] = []
     for raw_line in block.splitlines():
         line = raw_line.rstrip()
         if not line.strip():
             continue
         if line.lstrip().startswith("- ") and current_key:
-            data.setdefault(current_key, [])
-            assert isinstance(data[current_key], list)
-            data[current_key].append(line.split("- ", 1)[1].strip())
+            existing = data.get(current_key)
+            item = line.split("- ", 1)[1].strip()
+            if isinstance(existing, list):
+                existing.append(item)
+            elif existing in (None, ""):
+                data[current_key] = [item]
+            else:
+                data[current_key] = [existing, item]
+                warnings.append(f"FRONTMATTER_DUPLICATE_KEY {current_key}")
             continue
         if ":" not in line:
+            warnings.append(f"FRONTMATTER_PARSE_WARNING {line.strip()}")
             continue
         key, value = line.split(":", 1)
         current_key = key.strip()
         value = value.strip()
-        data[current_key] = value if value else []
+        if current_key not in data:
+            data[current_key] = value if value else []
+            continue
+
+        warnings.append(f"FRONTMATTER_DUPLICATE_KEY {current_key}")
+        existing = data[current_key]
+        new_value: object = value if value else []
+        if current_key == "governs":
+            existing_list = existing if isinstance(existing, list) else [existing]
+            if isinstance(new_value, list):
+                data[current_key] = existing_list
+            else:
+                data[current_key] = [*existing_list, new_value]
+        elif isinstance(existing, list):
+            if isinstance(new_value, list):
+                data[current_key] = existing
+            else:
+                data[current_key] = [*existing, new_value]
+        else:
+            data[current_key] = existing
+    return data, body, sorted(set(warnings))
+
+
+def parse_frontmatter(text: str) -> tuple[dict, str]:
+    data, body, _ = parse_frontmatter_strict(text)
     return data, body
 
 
@@ -190,6 +225,36 @@ def make_evidence(
         confidence=confidence,
         attrs_json=json.dumps(attrs, ensure_ascii=False, sort_keys=True),
     )
+
+
+@contextlib.contextmanager
+def build_lock(lock_path: pathlib.Path):
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd: int | None = None
+    try:
+        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError as exc:
+        raise CIGUserError(
+            "BUILD_LOCKED",
+            "Another graph build is already in progress.",
+            retryable=True,
+            suggested_next_step="Check the current build status and only remove the lock after confirming no active build process is running.",
+            recovery_commands=[
+                "python .agents/skills/code-impact-guardian/cig.py status --workspace-root .",
+                "rm .ai/codegraph/build.lock",
+            ],
+        ) from exc
+    try:
+        if fd is not None:
+            os.write(fd, str(os.getpid()).encode("utf-8"))
+        yield
+    finally:
+        if fd is not None:
+            os.close(fd)
+        try:
+            lock_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def clear_graph_tables(conn: sqlite3.Connection) -> None:
@@ -514,20 +579,22 @@ def collect_rule_documents(
     config: dict,
     git: dict,
     known_nodes: set[str],
-) -> tuple[list[Node], list[Edge], list[Evidence], list[tuple[str, str, str, str]]]:
+) -> tuple[list[Node], list[Edge], list[Evidence], list[tuple[str, str, str, str]], list[str]]:
     documents = collect_rule_documents_from_sources(project_root, config)
     if not documents:
-        return [], [], [], []
+        return [], [], [], [], []
 
     nodes: list[Node] = []
     edges: list[Edge] = []
     evidence_rows: list[Evidence] = []
     rule_docs: list[tuple[str, str, str, str]] = []
+    warnings: list[str] = []
 
     for document in documents:
         relative = document["relative_path"]
         text = document["text"]
-        frontmatter, body = parse_frontmatter(text)
+        frontmatter, body, frontmatter_warnings = parse_frontmatter_strict(text)
+        warnings.extend(f"{item} {relative}" for item in frontmatter_warnings)
         rule_name = str(frontmatter.get("id", pathlib.Path(relative).stem))
         governs = frontmatter.get("governs", [])
         if isinstance(governs, str):
@@ -552,7 +619,14 @@ def collect_rule_documents(
                 symbol=rule_name,
                 start_line=1,
                 end_line=len(text.splitlines()),
-                attrs_json=json.dumps({"summary": frontmatter.get("summary", ""), "doc_source": document["source_adapter"]}, ensure_ascii=False),
+                attrs_json=json.dumps(
+                    {
+                        "summary": frontmatter.get("summary", ""),
+                        "doc_source": document["source_adapter"],
+                        "frontmatter_warnings": frontmatter_warnings,
+                    },
+                    ensure_ascii=False,
+                ),
             )
         )
         define_evidence = make_evidence(
@@ -582,7 +656,7 @@ def collect_rule_documents(
             )
             evidence_rows.append(governs_evidence)
             edges.append(Edge(rule_id_full, "GOVERNS", target_id, governs_evidence.evidence_id))
-    return nodes, edges, evidence_rows, rule_docs
+    return nodes, edges, evidence_rows, rule_docs, warnings
 
 
 def adapter_graph_to_rows(
@@ -905,7 +979,7 @@ def collect_full_graph(
     )
 
     known_nodes = set(all_nodes)
-    rule_nodes, rule_edges, rule_evidence, rule_docs = collect_rule_documents(
+    rule_nodes, rule_edges, rule_evidence, rule_docs, rule_warnings = collect_rule_documents(
         workspace_root=workspace_root,
         project_root=project_root,
         config=config,
@@ -918,6 +992,7 @@ def collect_full_graph(
         all_edges[(edge.src_id, edge.edge_type, edge.dst_id)] = edge
     for item in rule_evidence:
         all_evidence[item.evidence_id] = item
+    warnings.extend(rule_warnings)
     return all_nodes, all_edges, all_evidence, rule_docs, warnings
 
 
@@ -980,7 +1055,17 @@ def summary_from_db(
     }
 
 
-def build_graph(*, workspace_root: pathlib.Path, config_path: pathlib.Path, changed_files: list[str] | None = None, force_full: bool = False) -> dict:
+def manifest_meta_payload(decision: dict, *, profile_name: str, primary_adapter: str, supplemental_adapters: list[str], plan: dict) -> dict:
+    return {
+        "config_fingerprint": decision.get("config_fingerprint"),
+        "profile_name": profile_name,
+        "primary_adapter": primary_adapter,
+        "supplemental_adapters": supplemental_adapters,
+        "dependency_fingerprint": plan.get("dependency_fingerprint", {}),
+    }
+
+
+def _build_graph_unlocked(*, workspace_root: pathlib.Path, config_path: pathlib.Path, changed_files: list[str] | None = None, force_full: bool = False) -> dict:
     requested_changed_files = [item.replace("\\", "/") for item in (changed_files or [])]
     config = load_config(config_path)
     paths = graph_paths(workspace_root, config)
@@ -1049,12 +1134,13 @@ def build_graph(*, workspace_root: pathlib.Path, config_path: pathlib.Path, chan
                 "timestamp": utc_now(),
                 "files": plan["files"],
                 "summary": summary,
-                "meta": {
-                    "config_fingerprint": decision.get("config_fingerprint"),
-                    "profile_name": profile_name,
-                    "primary_adapter": adapter_name,
-                    "supplemental_adapters": supplemental_adapters,
-                },
+                "meta": manifest_meta_payload(
+                    decision,
+                    profile_name=profile_name,
+                    primary_adapter=adapter_name,
+                    supplemental_adapters=supplemental_adapters,
+                    plan=plan,
+                ),
             },
         )
         with paths["build_log_path"].open("a", encoding="utf-8") as fh:
@@ -1161,12 +1247,13 @@ def build_graph(*, workspace_root: pathlib.Path, config_path: pathlib.Path, chan
                     "timestamp": utc_now(),
                     "files": plan["files"],
                     "summary": summary,
-                    "meta": {
-                        "config_fingerprint": decision.get("config_fingerprint"),
-                        "profile_name": profile_name,
-                        "primary_adapter": adapter_name,
-                        "supplemental_adapters": supplemental_adapters,
-                    },
+                    "meta": manifest_meta_payload(
+                        decision,
+                        profile_name=profile_name,
+                        primary_adapter=adapter_name,
+                        supplemental_adapters=supplemental_adapters,
+                        plan=plan,
+                    ),
                 },
             )
             build_decision_path.write_text(json.dumps(decision, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -1220,17 +1307,29 @@ def build_graph(*, workspace_root: pathlib.Path, config_path: pathlib.Path, chan
             "timestamp": utc_now(),
             "files": plan["files"],
             "summary": summary,
-            "meta": {
-                "config_fingerprint": decision.get("config_fingerprint"),
-                "profile_name": profile_name,
-                "primary_adapter": adapter_name,
-                "supplemental_adapters": supplemental_adapters,
-            },
+            "meta": manifest_meta_payload(
+                decision,
+                profile_name=profile_name,
+                primary_adapter=adapter_name,
+                supplemental_adapters=supplemental_adapters,
+                plan=plan,
+            ),
         },
     )
     with paths["build_log_path"].open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(summary, ensure_ascii=False) + "\n")
     return summary
+
+
+def build_graph(*, workspace_root: pathlib.Path, config_path: pathlib.Path, changed_files: list[str] | None = None, force_full: bool = False) -> dict:
+    lock_path = workspace_root / ".ai" / "codegraph" / "build.lock"
+    with build_lock(lock_path):
+        return _build_graph_unlocked(
+            workspace_root=workspace_root,
+            config_path=config_path,
+            changed_files=changed_files,
+            force_full=force_full,
+        )
 
 
 def main() -> int:

@@ -18,9 +18,11 @@ import build_graph  # noqa: E402
 import generate_report  # noqa: E402
 import list_seeds  # noqa: E402
 from adapters import SQL_POSTGRES_ADAPTER, configured_supplemental_adapters, detect_language_adapter, detect_project_profile_name, detect_supplemental_adapters  # noqa: E402
+from consumer_install import ensure_agents_md as ensure_consumer_agents_md, ensure_consumer_docs, ensure_gitignore as ensure_consumer_gitignore, export_single_folder  # noqa: E402
 from doc_sources import doc_source_doctor_status  # noqa: E402
 from profiles import AUTO_PROFILE, PROFILE_PRESETS, apply_profile_preset, detect_project_profile, package_json_data, profile_coverage_adapter, profile_test_command  # noqa: E402
-from runtime_support import CIGUserError, ensure_runtime_dirs, error_payload_from_exception, event_payload, latest_success_timestamp, normalize_output_paths, read_json, read_jsonl, recent_command_status, runtime_paths, write_error, write_event, write_handoff  # noqa: E402
+from recent_task import auto_task_id, latest_seed_candidates, read_last_task, seed_candidates_for_changed_files, utc_now as recent_task_utc_now, write_last_task  # noqa: E402
+from runtime_support import CIGUserError, ensure_runtime_dirs, error_payload_from_exception, event_payload, latest_success_timestamp, normalize_output_paths, read_json, read_jsonl, recent_command_status, relative_path_string, runtime_paths, write_error, write_event, write_handoff  # noqa: E402
 
 
 DEFAULT_CONFIG = {
@@ -358,8 +360,8 @@ def init_workspace(
     profile: str | None = None,
     project_root: str | None = None,
     with_adapters: list[str] | None = None,
-    write_agents_md: bool = False,
-    write_gitignore: bool = False,
+    write_agents_md: bool = True,
+    write_gitignore: bool = True,
 ) -> dict:
     ensure_supported_profile(profile)
     codegraph_dir = workspace_root / ".ai" / "codegraph"
@@ -413,10 +415,12 @@ def init_workspace(
 
     agents_md_path = None
     gitignore_path = None
+    consumer_docs = {}
     if write_agents_md:
-        agents_md_path = ensure_agents_md(workspace_root)
+        agents_md_path = ensure_consumer_agents_md(workspace_root)
     if write_gitignore:
-        gitignore_path = ensure_gitignore(workspace_root)
+        gitignore_path = ensure_consumer_gitignore(workspace_root)
+    consumer_docs = ensure_consumer_docs(workspace_root)
 
     return {
         "workspace_root": str(workspace_root),
@@ -430,6 +434,7 @@ def init_workspace(
         "supplemental_adapters": config_payload["supplemental_adapters"],
         "agents_md_path": agents_md_path,
         "gitignore_path": gitignore_path,
+        **consumer_docs,
     }
 
 
@@ -583,6 +588,8 @@ def detect_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
     detected_adapter = detect_language_adapter(project_root, config)
     detected_profile, confidence, reason = detect_project_profile(project_root, config, detected_adapter)
     supplemental_detected = detect_supplemental_adapters(project_root, config)
+    package_manager = detect_package_manager(project_root)
+    test_command_candidates = detect_test_command_candidates(project_root, config, detected_adapter, detected_profile)
     return {
         "workspace_root": str(workspace_root),
         "project_root": str(project_root),
@@ -594,6 +601,8 @@ def detect_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
         "detected_profile": detected_profile,
         "configured_supplemental_adapters": configured_supplemental_adapters(config),
         "supplemental_adapters_detected": supplemental_detected,
+        "package_manager": package_manager,
+        "test_command_candidates": test_command_candidates,
         "confidence": confidence,
         "reason": reason,
     }
@@ -610,7 +619,45 @@ def default_config_template_payload() -> dict:
     return payload
 
 
-def export_skill(*, workspace_root: pathlib.Path, out_dir: pathlib.Path) -> dict:
+def detect_package_manager(project_root: pathlib.Path) -> str | None:
+    markers = [
+        ("pnpm-lock.yaml", "pnpm"),
+        ("yarn.lock", "yarn"),
+        ("bun.lockb", "bun"),
+        ("bun.lock", "bun"),
+        ("package-lock.json", "npm"),
+    ]
+    for marker, manager in markers:
+        if (project_root / marker).exists():
+            return manager
+    if (project_root / "package.json").exists():
+        return "npm"
+    return None
+
+
+def detect_test_command_candidates(project_root: pathlib.Path, config: dict, adapter_name: str, profile_name: str) -> list[list[str]]:
+    if adapter_name == "python":
+        if (project_root / "pytest.ini").exists():
+            return [["pytest"]]
+        pyproject = project_root / "pyproject.toml"
+        if pyproject.exists() and "pytest" in pyproject.read_text(encoding="utf-8", errors="ignore").lower():
+            return [["pytest"]]
+        return [["python", "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"]]
+    if adapter_name == "tsjs":
+        preferred = profile_test_command(profile_name, project_root, config, "tsjs")
+        candidates = [preferred]
+        package_data = package_json_data(project_root)
+        scripts = package_data.get("scripts", {})
+        for script_name in ("test", "test:node-cli", "test:react-vite"):
+            if script_name in scripts:
+                candidates.append(["npm", "run", script_name])
+        return candidates
+    return []
+
+
+def export_skill(*, workspace_root: pathlib.Path, out_dir: pathlib.Path, mode: str = "full") -> dict:
+    if mode == "single-folder":
+        return export_single_folder(SKILL_DIR, out_dir)
     if out_dir.exists():
         shutil.rmtree(out_dir)
     (out_dir / ".agents" / "skills").mkdir(parents=True, exist_ok=True)
@@ -629,13 +676,17 @@ def export_skill(*, workspace_root: pathlib.Path, out_dir: pathlib.Path) -> dict
     shutil.copy2(template_asset("AGENTS.template.md"), out_dir / "AGENTS.template.md")
     shutil.copy2(template_asset("QUICKSTART.md"), out_dir / "QUICKSTART.md")
     shutil.copy2(template_asset("TROUBLESHOOTING.md"), out_dir / "TROUBLESHOOTING.md")
+    if template_asset("CONSUMER_GUIDE.md").exists():
+        shutil.copy2(template_asset("CONSUMER_GUIDE.md"), out_dir / "CONSUMER_GUIDE.md")
     return {
         "status": "exported",
+        "mode": "full",
         "out_dir": str(out_dir),
         "exported_files": [
             "AGENTS.template.md",
             "QUICKSTART.md",
             "TROUBLESHOOTING.md",
+            "CONSUMER_GUIDE.md",
             ".code-impact-guardian/config.template.json",
             ".code-impact-guardian/schema.sql",
             ".agents/skills/code-impact-guardian/",
@@ -647,9 +698,10 @@ def command_available(command_name: str) -> bool:
     return shutil.which(command_name) is not None
 
 
-def doctor_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> dict:
+def doctor_payload(workspace_root: pathlib.Path, config_path: pathlib.Path, *, fix_safe: bool = False) -> dict:
     statuses: list[dict] = []
     overall = "PASS"
+    safe_fixes: list[str] = []
 
     def add_status(level: str, message: str) -> None:
         nonlocal overall
@@ -659,18 +711,27 @@ def doctor_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
         elif level == "WARN" and overall != "FAIL":
             overall = "WARN"
 
+    if fix_safe:
+        ensure_runtime_dirs(workspace_root)
+        safe_fixes.append(relative_path_string(workspace_root, ensure_consumer_agents_md(workspace_root)))
+        safe_fixes.append(relative_path_string(workspace_root, ensure_consumer_gitignore(workspace_root)))
+        safe_fixes.extend(
+            relative_path_string(workspace_root, value)
+            for value in ensure_consumer_docs(workspace_root).values()
+        )
+
     if config_path.exists():
         add_status("PASS", f"config {config_path.relative_to(workspace_root)}")
     else:
         add_status("FAIL", f"config missing at {config_path.relative_to(workspace_root)}")
-        return {"overall": overall, "statuses": statuses}
+        return {"overall": overall, "statuses": statuses, "safe_fixes": [value for value in safe_fixes if value]}
 
     schema_path = schema_path_for(workspace_root)
     if schema_path.exists():
         add_status("PASS", f"schema {schema_path.relative_to(workspace_root)}")
     else:
         add_status("FAIL", f"schema missing at {schema_path.relative_to(workspace_root)}")
-        return {"overall": overall, "statuses": statuses}
+        return {"overall": overall, "statuses": statuses, "safe_fixes": [value for value in safe_fixes if value]}
 
     config = build_graph.load_config(config_path)
     project_root = build_graph.project_root_for(workspace_root, config)
@@ -678,7 +739,7 @@ def doctor_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
         add_status("PASS", f"project_root {project_root}")
     else:
         add_status("FAIL", f"project_root missing: {project_root}")
-        return {"overall": overall, "statuses": statuses}
+        return {"overall": overall, "statuses": statuses, "safe_fixes": [value for value in safe_fixes if value]}
 
     try:
         detected_adapter = detect_language_adapter(project_root, config)
@@ -692,7 +753,7 @@ def doctor_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
             add_status("PASS", f"supplemental detected: {', '.join(supplemental_detected)}")
     except Exception as exc:  # pragma: no cover - defensive
         add_status("FAIL", f"adapter detection failed: {exc}")
-        return {"overall": overall, "statuses": statuses}
+        return {"overall": overall, "statuses": statuses, "safe_fixes": [value for value in safe_fixes if value]}
 
     git_available = command_available("git")
     if not git_available:
@@ -714,6 +775,10 @@ def doctor_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
                 add_status("PASS", "coverage.py module available")
             except subprocess.CalledProcessError:
                 add_status("WARN", "coverage.py not available; graph/report still work but coverage import will be unavailable")
+        if fix_safe and not config.get("python", {}).get("test_command"):
+            config.setdefault("python", {})["test_command"] = ["python", "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"]
+            write_json(config_path, config)
+            safe_fixes.append(str(config_path.relative_to(workspace_root)))
     elif detected_adapter == "tsjs":
         if command_available("node"):
             add_status("PASS", "node runtime available")
@@ -750,6 +815,15 @@ def doctor_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
                 add_status("PASS", "tauri markers found")
             else:
                 add_status("WARN", "tauri-frontend profile is active; add src-tauri or related markers to fully confirm setup")
+        package_manager = detect_package_manager(project_root)
+        if package_manager:
+            add_status("PASS", f"package manager suggestion: {package_manager}")
+        else:
+            add_status("WARN", "package manager could not be inferred; npm is the default suggestion")
+        if fix_safe and not config.get("tsjs", {}).get("test_command"):
+            config.setdefault("tsjs", {})["test_command"] = profile_test_command(detected_profile, project_root, config, "tsjs")
+            write_json(config_path, config)
+            safe_fixes.append(str(config_path.relative_to(workspace_root)))
     else:
         add_status("PASS", "generic fallback available")
 
@@ -767,13 +841,16 @@ def doctor_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
     doc_level, doc_message = doc_source_doctor_status(project_root, config)
     add_status(doc_level, doc_message)
 
-    return {"overall": overall, "statuses": statuses}
+    return {"overall": overall, "statuses": statuses, "safe_fixes": [value for value in safe_fixes if value]}
 
 
 def print_doctor(payload: dict) -> None:
     print(f"OVERALL {payload['overall']}")
     for status in payload["statuses"]:
         print(f"{status['level']} {status['message']}")
+    safe_fixes = [item for item in payload.get("safe_fixes", []) if item]
+    if safe_fixes:
+        print("SAFE_FIXES " + ", ".join(safe_fixes))
 
 
 def status_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> dict:
@@ -783,9 +860,12 @@ def status_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
     project_root = str(build_graph.project_root_for(workspace_root, config)) if config_exists else None
     events = read_jsonl(paths["events"])
     last_error = read_json(paths["last_error"])
+    last_task = read_last_task(workspace_root)
     last_success = latest_success_timestamp(events)
     last_error_timestamp = (last_error or {}).get("timestamp")
     has_unhandled_error = bool(last_error_timestamp and (not last_success or last_error_timestamp > last_success))
+    recent_success = next((item for item in reversed(events) if item.get("status") == "success"), None)
+    recent_failure = next((item for item in reversed(events) if item.get("status") == "failed"), None)
     latest_report_path = None
     latest_test_results_path = None
     for item in reversed(events):
@@ -809,6 +889,19 @@ def status_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
                 file_count = conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'file'").fetchone()[0]
                 available_seed_count = function_count if function_count else file_count
 
+    if has_unhandled_error and last_error:
+        next_step = last_error.get("suggested_next_step")
+    elif (recent_success or {}).get("command") in {"after-edit", "finish"}:
+        next_step = "Review handoff/latest.md, then start the next task with `cig.py analyze --changed-file <path>`."
+    elif (recent_success or {}).get("command") in {"report", "analyze"}:
+        next_step = "Edit the code, then run `cig.py finish --changed-file <path>`."
+    elif (recent_success or {}).get("command") == "build":
+        next_step = "Run `cig.py analyze --changed-file <path>` to generate the next report."
+    elif config_exists:
+        next_step = "Run `cig.py analyze --changed-file <path>` or `cig.py seeds` to choose a seed."
+    else:
+        next_step = "Run `cig.py setup --project-root .` to initialize the repo-local workflow files."
+
     return {
         "config_path": str(config_path),
         "config_exists": config_exists,
@@ -822,14 +915,266 @@ def status_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
             "build": recent_command_status(events, "build"),
             "report": recent_command_status(events, "report"),
             "after-edit": recent_command_status(events, "after-edit"),
+            "setup": recent_command_status(events, "setup"),
+            "analyze": recent_command_status(events, "analyze"),
+            "finish": recent_command_status(events, "finish"),
         },
+        "recent_success_step": recent_success,
+        "recent_failed_step": recent_failure,
         "last_error": last_error,
+        "last_task": last_task,
         "latest_report_path": latest_report_path,
         "latest_test_results_path": latest_test_results_path,
         "available_seed_count": available_seed_count or 0,
         "has_unhandled_error": has_unhandled_error,
         "handoff_path": str(paths["handoff_latest"]) if paths["handoff_latest"].exists() else None,
+        "next_step": next_step,
     }
+
+
+def candidate_brief(item: dict) -> dict:
+    return {
+        "node_id": item.get("node_id"),
+        "kind": item.get("kind"),
+        "path": item.get("path"),
+        "symbol": item.get("symbol"),
+    }
+
+
+def resolve_seed_selection(
+    *,
+    workspace_root: pathlib.Path,
+    config_path: pathlib.Path,
+    explicit_seed: str | None,
+    changed_files: list[str],
+    allow_fallback: bool,
+) -> tuple[str, dict]:
+    if explicit_seed:
+        return explicit_seed, {"mode": "explicit", "candidates": [explicit_seed]}
+
+    candidates = seed_candidates_for_changed_files(workspace_root, config_path, changed_files)
+    if not candidates:
+        candidates = latest_seed_candidates(workspace_root, config_path)
+    if not candidates:
+        raise CIGUserError(
+            "SEED_NOT_FOUND",
+            "No seed candidates were found for the current graph.",
+            retryable=True,
+            suggested_next_step="Run `cig.py build` first, then rerun `cig.py seeds` or `cig.py analyze --changed-file <path>`.",
+        )
+    if len(candidates) == 1:
+        return candidates[0]["node_id"], {"mode": "auto-single", "candidates": [candidate_brief(candidates[0])]}
+    if allow_fallback:
+        file_candidates = [item for item in candidates if item.get("kind") == "file"]
+        if len(file_candidates) == 1:
+            return file_candidates[0]["node_id"], {"mode": "auto-fallback-file", "candidates": [candidate_brief(file_candidates[0])]}
+    shortlist = [candidate_brief(item) for item in candidates[:5]]
+    suggestions = ", ".join(item["node_id"] for item in shortlist)
+    raise CIGUserError(
+        "SEED_SELECTION_REQUIRED",
+        "Multiple seed candidates matched the current files.",
+        retryable=True,
+        suggested_next_step=f"Run the command again with --seed using one of: {suggestions}",
+    )
+
+
+def persist_last_task(
+    workspace_root: pathlib.Path,
+    *,
+    command_name: str,
+    task_id: str,
+    seed: str,
+    changed_files: list[str],
+    config_path: pathlib.Path,
+    context: dict,
+    report_path: str | None = None,
+    status: str = "success",
+) -> str:
+    path = write_last_task(
+        workspace_root,
+        {
+            "timestamp": recent_task_utc_now(),
+            "command": command_name,
+            "task_id": task_id,
+            "seed": seed,
+            "changed_files": changed_files,
+            "config_path": str(config_path),
+            "project_root": context.get("project_root"),
+            "profile": context.get("profile"),
+            "primary_adapter": context.get("primary_adapter"),
+            "supplemental_adapters": context.get("supplemental_adapters", []),
+            "report_path": report_path,
+            "status": status,
+        },
+    )
+    return str(path)
+
+
+def run_analyze_command(
+    *,
+    workspace_root: pathlib.Path,
+    config_path: pathlib.Path,
+    task_id: str | None,
+    seed: str | None,
+    changed_files: list[str],
+    max_depth: int | None,
+    allow_fallback: bool,
+) -> dict:
+    build_payload = build_graph.build_graph(workspace_root=workspace_root, config_path=config_path)
+    detect = detect_payload(workspace_root, config_path)
+    selected_seed, seed_selection = resolve_seed_selection(
+        workspace_root=workspace_root,
+        config_path=config_path,
+        explicit_seed=seed,
+        changed_files=changed_files,
+        allow_fallback=allow_fallback,
+    )
+    resolved_task_id = task_id or auto_task_id(seed=selected_seed, changed_files=changed_files, prefix="analyze")
+    report_payload = generate_report.generate_report(
+        workspace_root=workspace_root,
+        config_path=config_path,
+        task_id=resolved_task_id,
+        seed=selected_seed,
+        max_depth=max_depth,
+    )
+    context = command_context(workspace_root, config_path)
+    last_task_path_str = persist_last_task(
+        workspace_root,
+        command_name="analyze",
+        task_id=resolved_task_id,
+        seed=selected_seed,
+        changed_files=changed_files,
+        config_path=config_path,
+        context=context,
+        report_path=report_payload.get("report_path"),
+    )
+    return {
+        "task_id": resolved_task_id,
+        "seed": selected_seed,
+        "changed_files": changed_files,
+        "seed_selection": seed_selection,
+        "detect": detect,
+        "build": build_payload,
+        "report": report_payload,
+        "last_task_path": last_task_path_str,
+    }
+
+
+def resolve_finish_context(
+    *,
+    workspace_root: pathlib.Path,
+    config_path: pathlib.Path,
+    task_id: str | None,
+    seed: str | None,
+    changed_files: list[str],
+    allow_fallback: bool,
+) -> tuple[str, str, list[str], dict]:
+    last_task = read_last_task(workspace_root) or {}
+    resolved_task_id = task_id or last_task.get("task_id")
+    resolved_seed = seed or last_task.get("seed")
+    resolved_changed_files = changed_files or list(last_task.get("changed_files", []))
+    if not resolved_seed and resolved_changed_files:
+        resolved_seed, _ = resolve_seed_selection(
+            workspace_root=workspace_root,
+            config_path=config_path,
+            explicit_seed=None,
+            changed_files=resolved_changed_files,
+            allow_fallback=allow_fallback,
+        )
+    if not resolved_task_id:
+        resolved_task_id = auto_task_id(seed=resolved_seed, changed_files=resolved_changed_files, prefix="finish")
+    if not resolved_seed:
+        raise CIGUserError(
+            "TASK_CONTEXT_MISSING",
+            "No recent analyze/report context is available for finish.",
+            retryable=True,
+            suggested_next_step="Run `cig.py analyze --changed-file <path>` first, or rerun finish with --seed and --task-id.",
+        )
+    return resolved_task_id, resolved_seed, resolved_changed_files, last_task
+
+
+def finalize_after_edit(
+    *,
+    workspace_root: pathlib.Path,
+    config_path: pathlib.Path,
+    task_id: str,
+    seed: str,
+    changed_files: list[str],
+    command_name: str,
+) -> dict:
+    payload = after_edit_update.after_edit_update(
+        workspace_root=workspace_root,
+        config_path=config_path,
+        task_id=task_id,
+        seed=seed,
+        changed_files=changed_files,
+    )
+    context = command_context(workspace_root, config_path)
+    if payload["tests"]["status"] == "failed":
+        handoff_path = write_handoff(
+            workspace_root,
+            task_id=task_id,
+            command=command_name,
+            status="failed",
+            failure_point="TEST_COMMAND_FAILED",
+            suggested_next_step="Inspect test-results.json and the output log, fix the test command or code, then rerun finish/after-edit.",
+            seed=seed,
+            report_path=payload["report"]["report_path"],
+            test_results_path=str(workspace_root / ".ai" / "codegraph" / "test-results.json"),
+        )
+        persist_last_task(
+            workspace_root,
+            command_name=command_name,
+            task_id=task_id,
+            seed=seed,
+            changed_files=changed_files,
+            config_path=config_path,
+            context=context,
+            report_path=payload["report"]["report_path"],
+            status="failed",
+        )
+        raise CIGUserError(
+            "TEST_COMMAND_FAILED",
+            "Graph/report refresh succeeded, but the configured test command failed.",
+            retryable=True,
+            suggested_next_step="Inspect handoff/latest.md and test-results.json, fix the failing command or code, then rerun finish/after-edit.",
+            output_paths={
+                "report_path": payload["report"]["report_path"],
+                "test_results_path": str(workspace_root / ".ai" / "codegraph" / "test-results.json"),
+                "handoff_path": str(handoff_path),
+            },
+        )
+    write_handoff(
+        workspace_root,
+        task_id=task_id,
+        command=command_name,
+        status="completed" if payload["tests"]["status"] == "passed" else "completed-with-warnings",
+        failure_point="none" if payload["tests"]["status"] == "passed" else "TESTS_SKIPPED",
+        suggested_next_step=(
+            "Review the updated report and test results, then continue with the next task."
+            if payload["tests"]["status"] == "passed"
+            else "Tests were skipped. Review test-results.json, confirm that is acceptable for this repo, then continue or configure a real test command."
+        ),
+        seed=seed,
+        report_path=payload["report"]["report_path"],
+        test_results_path=str(workspace_root / ".ai" / "codegraph" / "test-results.json"),
+    )
+    last_task_path_str = persist_last_task(
+        workspace_root,
+        command_name=command_name,
+        task_id=task_id,
+        seed=seed,
+        changed_files=changed_files,
+        config_path=config_path,
+        context=context,
+        report_path=payload["report"]["report_path"],
+        status="success",
+    )
+    payload["task_id"] = task_id
+    payload["seed"] = seed
+    payload["changed_files"] = changed_files
+    payload["last_task_path"] = last_task_path_str
+    return payload
 
 
 def run_demo(fixture: str, workspace: str | None) -> pathlib.Path:
@@ -898,14 +1243,17 @@ def command_context(workspace_root: pathlib.Path, config_path: pathlib.Path | No
 def success_next_step(command_name: str) -> str:
     mapping = {
         "init": "Run `cig.py doctor` next.",
+        "setup": "Run `cig.py analyze --changed-file <path>` next.",
         "doctor": "Run `cig.py detect` next.",
         "detect": "Run `cig.py build` next.",
         "build": "Run `cig.py seeds` next.",
         "seeds": "Pick a seed and run `cig.py report`.",
         "report": "Read the report, edit the code, then run `cig.py after-edit`.",
         "after-edit": "Review the updated report, test results, and handoff note.",
+        "analyze": "Edit the code, then run `cig.py finish --changed-file <path>`.",
+        "finish": "Review handoff/latest.md and start the next task when ready.",
         "demo": "Inspect the generated graph, report, logs, and handoff artifacts.",
-        "export-skill": "Copy the exported package into a new repo and run `cig.py init` there.",
+        "export-skill": "Copy the exported package into a new repo and run `cig.py setup` there.",
         "status": "Inspect the latest error or continue from the suggested next command.",
     }
     return mapping.get(command_name, "Continue with the next workflow step.")
@@ -918,6 +1266,16 @@ def output_paths_for_command(command_name: str, workspace_root: pathlib.Path, pa
             "schema_path": payload.get("schema_path") if isinstance(payload, dict) else None,
             "agents_md_path": payload.get("agents_md_path") if isinstance(payload, dict) else None,
             "gitignore_path": payload.get("gitignore_path") if isinstance(payload, dict) else None,
+            "quickstart_path": payload.get("quickstart_path") if isinstance(payload, dict) else None,
+            "troubleshooting_path": payload.get("troubleshooting_path") if isinstance(payload, dict) else None,
+            "consumer_guide_path": payload.get("consumer_guide_path") if isinstance(payload, dict) else None,
+        }
+    if command_name == "setup" and isinstance(payload, dict):
+        return {
+            "config_path": payload.get("init", {}).get("config_path"),
+            "schema_path": payload.get("init", {}).get("schema_path"),
+            "agents_md_path": payload.get("init", {}).get("agents_md_path"),
+            "gitignore_path": payload.get("init", {}).get("gitignore_path"),
         }
     if command_name == "doctor":
         return {}
@@ -930,18 +1288,33 @@ def output_paths_for_command(command_name: str, workspace_root: pathlib.Path, pa
         }
     if command_name == "report" and isinstance(payload, dict):
         return {"report_path": payload.get("report_path"), "mermaid_path": payload.get("mermaid_path")}
+    if command_name == "analyze" and isinstance(payload, dict):
+        return {
+            "report_path": payload.get("report", {}).get("report_path"),
+            "last_task_path": payload.get("last_task_path"),
+        }
     if command_name == "after-edit" and isinstance(payload, dict):
         return {
             "report_path": payload.get("report", {}).get("report_path"),
             "test_results_path": str((workspace_root / ".ai" / "codegraph" / "test-results.json")),
             "handoff_path": str(runtime_paths(workspace_root)["handoff_latest"]),
         }
+    if command_name == "finish" and isinstance(payload, dict):
+        return {
+            "report_path": payload.get("report", {}).get("report_path"),
+            "test_results_path": str((workspace_root / ".ai" / "codegraph" / "test-results.json")),
+            "handoff_path": str(runtime_paths(workspace_root)["handoff_latest"]),
+            "last_task_path": payload.get("last_task_path"),
+        }
     if command_name == "demo":
         return {"workspace_root": str(payload) if isinstance(payload, pathlib.Path) else None}
     if command_name == "export-skill" and isinstance(payload, dict):
         return {"out_dir": payload.get("out_dir")}
     if command_name == "status":
-        return {"handoff_path": str(runtime_paths(workspace_root)["handoff_latest"])}
+        return {
+            "handoff_path": str(runtime_paths(workspace_root)["handoff_latest"]),
+            "last_task_path": str(workspace_root / ".ai" / "codegraph" / "last-task.json"),
+        }
     return {}
 
 
@@ -958,13 +1331,21 @@ def main() -> int:
     init_parser.add_argument("--write-agents-md", action="store_true")
     init_parser.add_argument("--write-gitignore", action="store_true")
 
+    setup_parser = subparsers.add_parser("setup", help="High-level setup for a copied skill in a real repo")
+    setup_parser.add_argument("--workspace-root", default=".")
+    setup_parser.add_argument("--profile", default=None)
+    setup_parser.add_argument("--project-root", default=None)
+    setup_parser.add_argument("--with", dest="with_adapters", action="append", default=[])
+
     doctor_parser = subparsers.add_parser("doctor", help="Run a lightweight workspace health check")
     doctor_parser.add_argument("--workspace-root", default=".")
     doctor_parser.add_argument("--config", default=".code-impact-guardian/config.json")
+    doctor_parser.add_argument("--fix-safe", action="store_true")
 
     detect_parser = subparsers.add_parser("detect", help="Detect the active adapter")
     detect_parser.add_argument("--workspace-root", default=".")
     detect_parser.add_argument("--config", default=".code-impact-guardian/config.json")
+    detect_parser.add_argument("--allow-fallback", action="store_true")
 
     build_parser = subparsers.add_parser("build", help="Build or refresh the graph")
     build_parser.add_argument("--workspace-root", default=".")
@@ -977,16 +1358,36 @@ def main() -> int:
     report_parser = subparsers.add_parser("report", help="Generate an impact report")
     report_parser.add_argument("--workspace-root", default=".")
     report_parser.add_argument("--config", default=".code-impact-guardian/config.json")
-    report_parser.add_argument("--task-id", required=True)
-    report_parser.add_argument("--seed", required=True)
+    report_parser.add_argument("--task-id", default=None)
+    report_parser.add_argument("--seed", default=None)
+    report_parser.add_argument("--changed-file", action="append", default=[])
+    report_parser.add_argument("--allow-fallback", action="store_true")
     report_parser.add_argument("--max-depth", type=int, default=None)
+
+    analyze_parser = subparsers.add_parser("analyze", help="High-level build + report command with automatic context")
+    analyze_parser.add_argument("--workspace-root", default=".")
+    analyze_parser.add_argument("--config", default=".code-impact-guardian/config.json")
+    analyze_parser.add_argument("--task-id", default=None)
+    analyze_parser.add_argument("--seed", default=None)
+    analyze_parser.add_argument("--changed-file", action="append", default=[])
+    analyze_parser.add_argument("--max-depth", type=int, default=None)
+    analyze_parser.add_argument("--allow-fallback", action="store_true")
 
     after_parser = subparsers.add_parser("after-edit", help="Refresh graph, report, evidence, and tests after an edit")
     after_parser.add_argument("--workspace-root", default=".")
     after_parser.add_argument("--config", default=".code-impact-guardian/config.json")
-    after_parser.add_argument("--task-id", required=True)
-    after_parser.add_argument("--seed", required=True)
+    after_parser.add_argument("--task-id", default=None)
+    after_parser.add_argument("--seed", default=None)
     after_parser.add_argument("--changed-file", action="append", default=[])
+    after_parser.add_argument("--allow-fallback", action="store_true")
+
+    finish_parser = subparsers.add_parser("finish", help="High-level after-edit command that reuses recent analyze context")
+    finish_parser.add_argument("--workspace-root", default=".")
+    finish_parser.add_argument("--config", default=".code-impact-guardian/config.json")
+    finish_parser.add_argument("--task-id", default=None)
+    finish_parser.add_argument("--seed", default=None)
+    finish_parser.add_argument("--changed-file", action="append", default=[])
+    finish_parser.add_argument("--allow-fallback", action="store_true")
 
     demo_parser = subparsers.add_parser("demo", help="Run a fixture end-to-end demo")
     demo_parser.add_argument("--fixture", choices=["python_minimal", "tsjs_minimal", "generic_minimal", "tsjs_node_cli", "tsx_react_vite", "sql_pg_minimal", "tsjs_pg_compound"], default="python_minimal")
@@ -995,6 +1396,7 @@ def main() -> int:
     export_parser = subparsers.add_parser("export-skill", help="Export a minimal distribution package")
     export_parser.add_argument("--workspace-root", default=".")
     export_parser.add_argument("--out", required=True)
+    export_parser.add_argument("--mode", choices=["full", "single-folder"], default="full")
 
     status_parser = subparsers.add_parser("status", help="Show current config, recent runs, and handoff state")
     status_parser.add_argument("--workspace-root", default=".")
@@ -1038,7 +1440,7 @@ def main() -> int:
             return 0
 
         if args.command == "export-skill":
-            payload = export_skill(workspace_root=workspace_root, out_dir=pathlib.Path(args.out).resolve())
+            payload = export_skill(workspace_root=workspace_root, out_dir=pathlib.Path(args.out).resolve(), mode=args.mode)
             event = event_payload(
                 command="export-skill",
                 workspace_root=workspace_root,
@@ -1065,8 +1467,8 @@ def main() -> int:
                 profile=args.profile,
                 project_root=args.project_root,
                 with_adapters=args.with_adapters,
-                write_agents_md=args.write_agents_md,
-                write_gitignore=args.write_gitignore,
+                write_agents_md=True if not hasattr(args, "write_agents_md") else (args.write_agents_md or True),
+                write_gitignore=True if not hasattr(args, "write_gitignore") else (args.write_gitignore or True),
             )
             current_config_path = config_path_for(workspace_root)
             context = command_context(workspace_root, current_config_path)
@@ -1090,11 +1492,58 @@ def main() -> int:
             print(json.dumps(payload, ensure_ascii=False, indent=2))
             return 0
 
+        if args.command == "setup":
+            init_payload = init_workspace(
+                workspace_root,
+                profile=args.profile,
+                project_root=args.project_root,
+                with_adapters=args.with_adapters,
+                write_agents_md=True,
+                write_gitignore=True,
+            )
+            current_config_path = config_path_for(workspace_root)
+            context = command_context(workspace_root, current_config_path)
+            doctor = doctor_payload(workspace_root, current_config_path, fix_safe=True)
+            if doctor["overall"] == "FAIL":
+                error_code = (
+                    "SUPPLEMENTAL_ADAPTER_MISSING"
+                    if any("sql_postgres enabled but no configured SQL source/test paths were found" in item["message"] for item in doctor["statuses"])
+                    else "DOCTOR_FAILED"
+                )
+                raise CIGUserError(
+                    error_code,
+                    "Setup completed initialization, but doctor still found a blocking problem.",
+                    retryable=True,
+                    suggested_next_step="Read TROUBLESHOOTING.md, fix the blocking doctor checks, then rerun `cig.py setup` or `cig.py doctor --fix-safe`.",
+                )
+            detect = detect_payload(workspace_root, current_config_path)
+            payload = {"init": init_payload, "doctor": doctor, "detect": detect}
+            warning_count = sum(1 for item in doctor["statuses"] if item["level"] == "WARN")
+            event = event_payload(
+                command="setup",
+                workspace_root=workspace_root,
+                project_root=context["project_root"],
+                profile=context["profile"],
+                primary_adapter=context["primary_adapter"],
+                supplemental_adapters=context["supplemental_adapters"],
+                task_id=None,
+                seed=None,
+                status="success",
+                output_paths=normalize_output_paths(workspace_root, output_paths_for_command("setup", workspace_root, payload, current_config_path)),
+                warning_count=warning_count,
+                error_code=None,
+                retryable=False,
+                suggested_next_step=success_next_step("setup"),
+            )
+            write_event(workspace_root, event)
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return 0
+
         ensure_config_exists(config_path)
         context = command_context(workspace_root, config_path)
 
         if args.command == "doctor":
-            payload = doctor_payload(workspace_root, config_path)
+            payload = doctor_payload(workspace_root, config_path, fix_safe=args.fix_safe)
             warning_count = sum(1 for item in payload["statuses"] if item["level"] == "WARN")
             if payload["overall"] == "FAIL":
                 error_code = (
@@ -1130,60 +1579,95 @@ def main() -> int:
 
         if args.command == "detect":
             payload = detect_payload(workspace_root, config_path)
+            payload["fallback_allowed"] = bool(getattr(args, "allow_fallback", False))
+            payload["fallback_used"] = bool(payload["detected_adapter"] == "generic" and getattr(args, "allow_fallback", False))
         elif args.command == "build":
             payload = build_graph.build_graph(workspace_root=workspace_root, config_path=config_path)
         elif args.command == "seeds":
             payload = list_seeds.list_seeds(workspace_root=workspace_root, config_path=config_path)
         elif args.command == "report":
+            if args.changed_file:
+                build_graph.build_graph(workspace_root=workspace_root, config_path=config_path)
+            selected_seed, seed_selection = resolve_seed_selection(
+                workspace_root=workspace_root,
+                config_path=config_path,
+                explicit_seed=args.seed,
+                changed_files=args.changed_file,
+                allow_fallback=args.allow_fallback,
+            )
+            resolved_task_id = args.task_id or auto_task_id(seed=selected_seed, changed_files=args.changed_file, prefix="report")
             payload = generate_report.generate_report(
                 workspace_root=workspace_root,
                 config_path=config_path,
-                task_id=args.task_id,
-                seed=args.seed,
+                task_id=resolved_task_id,
+                seed=selected_seed,
                 max_depth=args.max_depth,
             )
-        elif args.command == "after-edit":
-            payload = after_edit_update.after_edit_update(
+            persist_last_task(
+                workspace_root,
+                command_name="report",
+                task_id=resolved_task_id,
+                seed=selected_seed,
+                changed_files=args.changed_file,
+                config_path=config_path,
+                context=context,
+                report_path=payload.get("report_path"),
+            )
+            payload["task_id"] = resolved_task_id
+            payload["seed"] = selected_seed
+            payload["seed_selection"] = seed_selection
+            task_id = resolved_task_id
+            seed = selected_seed
+        elif args.command == "analyze":
+            payload = run_analyze_command(
                 workspace_root=workspace_root,
                 config_path=config_path,
                 task_id=args.task_id,
                 seed=args.seed,
                 changed_files=args.changed_file,
+                max_depth=args.max_depth,
+                allow_fallback=args.allow_fallback,
             )
-            if payload["tests"]["status"] != "passed":
-                handoff_path = write_handoff(
-                    workspace_root,
-                    task_id=args.task_id,
-                    command="after-edit",
-                    status="failed",
-                    failure_point="TEST_COMMAND_FAILED",
-                    suggested_next_step="Inspect test-results.json and the output log, fix the test command or code, then rerun after-edit.",
-                    seed=args.seed,
-                    report_path=payload["report"]["report_path"],
-                    test_results_path=str(workspace_root / ".ai" / "codegraph" / "test-results.json"),
-                )
-                raise CIGUserError(
-                    "TEST_COMMAND_FAILED",
-                    "after-edit refreshed the graph and report, but the test command failed.",
-                    retryable=True,
-                    suggested_next_step="Inspect handoff/latest.md and test-results.json, then rerun after-edit after fixing the failure.",
-                    output_paths={
-                        "report_path": payload["report"]["report_path"],
-                        "test_results_path": str(workspace_root / ".ai" / "codegraph" / "test-results.json"),
-                        "handoff_path": str(handoff_path),
-                    },
-                )
-            write_handoff(
-                workspace_root,
+            task_id = payload["task_id"]
+            seed = payload["seed"]
+        elif args.command == "after-edit":
+            resolved_task_id, resolved_seed, resolved_changed_files, _ = resolve_finish_context(
+                workspace_root=workspace_root,
+                config_path=config_path,
                 task_id=args.task_id,
-                command="after-edit",
-                status="completed",
-                failure_point="none",
-                suggested_next_step="Review the updated report and test results, then continue with the next task.",
                 seed=args.seed,
-                report_path=payload["report"]["report_path"],
-                test_results_path=str(workspace_root / ".ai" / "codegraph" / "test-results.json"),
+                changed_files=args.changed_file,
+                allow_fallback=args.allow_fallback,
             )
+            payload = finalize_after_edit(
+                workspace_root=workspace_root,
+                config_path=config_path,
+                task_id=resolved_task_id,
+                seed=resolved_seed,
+                changed_files=resolved_changed_files,
+                command_name="after-edit",
+            )
+            task_id = resolved_task_id
+            seed = resolved_seed
+        elif args.command == "finish":
+            resolved_task_id, resolved_seed, resolved_changed_files, _ = resolve_finish_context(
+                workspace_root=workspace_root,
+                config_path=config_path,
+                task_id=args.task_id,
+                seed=args.seed,
+                changed_files=args.changed_file,
+                allow_fallback=args.allow_fallback,
+            )
+            payload = finalize_after_edit(
+                workspace_root=workspace_root,
+                config_path=config_path,
+                task_id=resolved_task_id,
+                seed=resolved_seed,
+                changed_files=resolved_changed_files,
+                command_name="finish",
+            )
+            task_id = resolved_task_id
+            seed = resolved_seed
         elif args.command == "status":
             payload = status_payload(workspace_root, config_path)
         else:
@@ -1194,6 +1678,9 @@ def main() -> int:
                 suggested_next_step="Use one of the supported commands from cig.py --help.",
             )
 
+        if isinstance(payload, dict):
+            task_id = payload.get("task_id", task_id)
+            seed = payload.get("seed", seed)
         event = event_payload(
             command=args.command,
             workspace_root=workspace_root,

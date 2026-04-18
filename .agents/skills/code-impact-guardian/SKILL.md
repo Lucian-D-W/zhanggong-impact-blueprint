@@ -7,32 +7,31 @@ description: Use this repo-local workflow before changing code. Build or refresh
 
 This skill is a copyable repository workflow template.
 
-It is not a platform product.
 It is not a plugin.
-It is not tied to any existing business codebase.
+It is not a platform product.
+It is not tied to any business repo.
 
 ## Fixed workflow
 
-1. `build`
-2. `report`
+The workflow never changes:
+
+1. build / refresh graph
+2. generate impact report
 3. read the report
 4. edit code
-5. `after-edit`
+5. update graph / report / evidence / tests
 
-The workflow stays fixed even when adapters, profiles, or fixtures change.
+## Stage7 scope
 
-## Stage 6 scope
+Stage7 keeps the template lightweight and focuses on usability:
 
-Stage6 keeps the template lightweight and focuses on:
+- official single-folder install path
+- high-level `setup / analyze / finish` commands
+- automatic task and seed reuse
+- stronger `status` and `handoff` outputs
+- consumer-facing docs generated in the target repo
 
-- distribution through `export-skill`
-- stronger `init`
-- structured runtime logs
-- explicit recovery protocol
-- `status` and handoff support
-- setup-ready profile presets
-
-TS/JS remains the main app-facing adapter family.
+TS/JS remains the main app-facing family.
 Python remains the stable regression baseline.
 `sql_postgres` remains supplemental rather than a second system.
 
@@ -46,34 +45,52 @@ Python remains the stable regression baseline.
 
 ## Preferred commands
 
-Start with:
+Use these first:
 
 ```bash
-python .agents/skills/code-impact-guardian/cig.py init --project-root . --write-agents-md --write-gitignore
+python .agents/skills/code-impact-guardian/cig.py setup --project-root .
+python .agents/skills/code-impact-guardian/cig.py analyze --changed-file <path>
+python .agents/skills/code-impact-guardian/cig.py finish --changed-file <path>
+```
+
+What they do:
+
+- `setup` initializes config/schema/docs and then runs doctor + detect
+- `analyze` builds the graph if needed, generates a task id when missing, chooses or recommends a seed, and writes the report
+- `finish` reuses the latest task context when possible and refreshes report/evidence/tests after the edit
+
+Low-level commands remain available:
+
+```bash
+python .agents/skills/code-impact-guardian/cig.py init
 python .agents/skills/code-impact-guardian/cig.py doctor
 python .agents/skills/code-impact-guardian/cig.py detect
-```
-
-Then:
-
-```bash
 python .agents/skills/code-impact-guardian/cig.py build
 python .agents/skills/code-impact-guardian/cig.py seeds
-python .agents/skills/code-impact-guardian/cig.py report --task-id your-task --seed <seed>
-python .agents/skills/code-impact-guardian/cig.py after-edit --task-id your-task --seed <seed> --changed-file <path>
-```
-
-Exporting a distribution package:
-
-```bash
-python .agents/skills/code-impact-guardian/cig.py export-skill --out path/to/exported-skill
-```
-
-Status and handoff:
-
-```bash
+python .agents/skills/code-impact-guardian/cig.py report --seed <seed>
+python .agents/skills/code-impact-guardian/cig.py after-edit --seed <seed> --changed-file <path>
 python .agents/skills/code-impact-guardian/cig.py status
 ```
+
+## Single-folder install promise
+
+Copying only this folder into:
+
+```text
+.agents/skills/code-impact-guardian/
+```
+
+is now a supported path.
+
+After that, `setup` or `init` must be able to generate:
+
+- `AGENTS.md`
+- `.gitignore`
+- `.code-impact-guardian/config.json`
+- `.code-impact-guardian/schema.sql`
+- `QUICKSTART.md`
+- `TROUBLESHOOTING.md`
+- `CONSUMER_GUIDE.md`
 
 ## Generic fallback rule
 
@@ -82,7 +99,7 @@ In generic mode:
 - graph stays file-level only
 - `seeds` must list file seeds
 - `report` must accept file seeds
-- test and git evidence still need to be recorded
+- `finish` / `after-edit` must still record test and evidence outcomes
 
 Do not pretend generic mode has function-level precision.
 
@@ -91,7 +108,7 @@ Do not pretend generic mode has function-level precision.
 Use supplemental adapters when another language should enrich the same graph
 and report rather than create a separate workflow.
 
-For SQL query hints:
+For SQL hints:
 
 - high confidence + unique target -> direct `CALLS`
 - otherwise -> attrs/report hint only
@@ -107,11 +124,11 @@ Read these in order:
 
 The recovery policy is:
 
-- doctor fail -> fix config or environment first
-- detect uncertain -> explicitly choose a profile or fall back to generic
+- doctor fail -> fix config or environment first, optionally with `doctor --fix-safe`
+- detect uncertain -> explicitly choose a profile or allow generic fallback
 - build fail -> verify config, project root, and matching globs
 - report fail -> rebuild and choose a narrower seed
-- after-edit test fail -> preserve evidence, inspect handoff, retry after fixing
+- finish / after-edit test fail -> preserve evidence, inspect handoff, retry after fixing
 - coverage unavailable -> continue honestly, never fabricate
 - supplemental adapter fail -> downgrade to primary flow unless the task truly requires the supplemental graph
 
@@ -121,8 +138,8 @@ The recovery policy is:
 - `.ai/codegraph/logs/`
 - `.ai/codegraph/reports/impact-<task-id>.md`
 - `.ai/codegraph/test-results.json`
+- `.ai/codegraph/last-task.json`
 - `.ai/codegraph/handoff/latest.md`
-- function seeds or file seeds from `seeds`
 
 ## Evidence policy
 
@@ -135,6 +152,11 @@ The recovery policy is:
 
 ## Distribution note
 
-This development repo is not the same thing as the distribution package.
-Use `export-skill` to create the minimal package that should be copied into
-another repository.
+This development repo is not the same thing as the consumer install.
+
+For a distributable artifact use:
+
+```bash
+python .agents/skills/code-impact-guardian/cig.py export-skill --out path/to/export
+python .agents/skills/code-impact-guardian/cig.py export-skill --mode single-folder --out path/to/export
+```

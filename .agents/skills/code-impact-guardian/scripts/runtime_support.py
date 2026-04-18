@@ -127,17 +127,34 @@ def write_handoff(
     test_results_path: str | None = None,
 ) -> pathlib.Path:
     paths = ensure_runtime_dirs(workspace_root)
+    events = read_jsonl(paths["events"])
+    recent_success = next((item for item in reversed(events) if item.get("status") == "success"), None)
+    recent_failure = next((item for item in reversed(events) if item.get("status") == "failed"), None)
+    critical_paths = {
+        "report": report_path or "none",
+        "test_results": test_results_path or "none",
+        "logs": str(paths["logs_dir"]),
+        "last_error": str(paths["last_error"]) if paths["last_error"].exists() else "none",
+        "last_task": str(paths["codegraph_dir"] / "last-task.json") if (paths["codegraph_dir"] / "last-task.json").exists() else "none",
+    }
     lines = [
         "# Code Impact Guardian Handoff",
         "",
         f"- Timestamp: {utc_now()}",
-        f"- Command: {command}",
-        f"- Status: {status}",
-        f"- Task: {task_id or 'none'}",
+        f"- Current task: {task_id or 'none'}",
+        f"- Current phase: {command}",
+        f"- Current status: {status}",
         f"- Seed: {seed or 'none'}",
+        f"- Recent successful step: {(recent_success or {}).get('command', 'none')} @ {(recent_success or {}).get('timestamp', 'n/a')}",
+        f"- Recent failed step: {(recent_failure or {}).get('command', 'none')} @ {(recent_failure or {}).get('timestamp', 'n/a')}",
         f"- Failure point: {failure_point}",
-        f"- Latest report: {report_path or 'none'}",
-        f"- Latest test results: {test_results_path or 'none'}",
+        "",
+        "## Critical paths",
+        f"- Report: {critical_paths['report']}",
+        f"- Test results: {critical_paths['test_results']}",
+        f"- Logs: {critical_paths['logs']}",
+        f"- Last error: {critical_paths['last_error']}",
+        f"- Last task: {critical_paths['last_task']}",
         "",
         "## Next step",
         suggested_next_step,

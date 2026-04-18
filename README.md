@@ -1,25 +1,23 @@
 # Code Impact Guardian
 
 Code Impact Guardian is a lightweight, repo-local skill template for safer code
-edits.
+changes.
 
-It is intentionally shaped as:
+It stays intentionally small:
 
-- `AGENTS.md`
-- one repo-scoped skill
-- one SQLite fact store
-- one fixed impact report flow
-- one unified CLI entry
-- one exportable skill package
+- one repo-local skill folder
+- one SQLite graph
+- one fixed direct-edge workflow
+- one unified CLI
+- one export path for consumers
 
 It is not a plugin.
 It is not a platform product.
-It is designed to be copied into another repository and then used through
-config, profiles, and thin parser backends.
+It is meant to be copied into another repository and used quickly.
 
 ## Fixed workflow
 
-The workflow stays fixed:
+The workflow does not change:
 
 1. build / refresh graph
 2. generate impact report
@@ -27,13 +25,24 @@ The workflow stays fixed:
 4. update graph / report / evidence after edit
 5. run relevant tests and record outcome
 
-## Support level
+## Stage7 focus
+
+Stage7 does not widen the language matrix.
+It makes the template lower-friction and more directly usable:
+
+- official single-folder distribution mode
+- higher-level `setup / analyze / finish` commands
+- automatic task and seed reuse
+- stronger status, handoff, and recovery guidance
+- consumer-facing docs generated during setup
+
+## Current support level
 
 ### Python
 
 - stable regression baseline
 - `file`, `function`, `test`, `rule`
-- `DEFINES`, `CALLS`, `IMPORTS`, `COVERS`, `GOVERNS`
+- direct `DEFINES`, `CALLS`, `IMPORTS`, `COVERS`, `GOVERNS`
 - real `coverage.py` path
 
 ### TS/JS family
@@ -45,18 +54,19 @@ The workflow stays fixed:
 - custom hooks
 - minimal class methods
 - import / export / re-export / require / module.exports
-- node:test and common JS test markers
+- node:test / jest / vitest style detection
 - real raw V8 coverage path
 
-### SQL/PostgreSQL
+### SQL/PostgreSQL supplemental
 
-- real supplemental adapter in stage5+
+- real supplemental adapter
 - SQL files become `file` nodes
 - PostgreSQL routines become `function` nodes
-- routine subtype stored in attrs via `sql_kind`
-- high-confidence SQL-to-SQL `CALLS`
+- SQL subtype stored in attrs via `sql_kind`
+- high-confidence SQL `CALLS`
 - high-confidence SQL test `COVERS`
-- test outcome recorded even when coverage is unavailable
+- app-to-SQL query hints only become edges when confidence is high enough
+- test outcome is real even when SQL coverage is unavailable
 
 ### Generic fallback
 
@@ -64,19 +74,7 @@ The workflow stays fixed:
 - still supports build / report / after-edit / test outcome
 - never pretends to have function-level precision
 
-## Stage6 focus
-
-Stage6 does not widen the language matrix.
-Instead it turns the existing system into a more reusable skill template:
-
-- exportable minimal skill package
-- stronger `init`
-- unified structured event and error logging
-- explicit recovery protocol
-- `status` and handoff support for agent takeover
-- setup-ready profile presets for more real TS/JS repo shapes
-
-## Development repo vs exported skill package
+## Development repo vs consumer install
 
 This repository is the development source.
 
@@ -84,73 +82,99 @@ It contains:
 
 - examples
 - tests
-- implementation history
-- working fixtures for stage1 through stage6
+- stage history
+- fixtures used to validate the template
 
-The exported skill package is the distribution artifact.
+The consumer-facing install path is now:
 
-It contains only the minimum copyable pieces:
+1. copy only `.agents/skills/code-impact-guardian/` into the target repo
+2. run `python .agents/skills/code-impact-guardian/cig.py setup --project-root .`
 
-- `AGENTS.template.md`
-- `.agents/skills/code-impact-guardian/`
-- `.code-impact-guardian/config.template.json`
+That single-folder install will generate:
+
+- `AGENTS.md`
+- `.gitignore`
+- `.code-impact-guardian/config.json`
 - `.code-impact-guardian/schema.sql`
 - `QUICKSTART.md`
 - `TROUBLESHOOTING.md`
-
-The exported package intentionally excludes:
-
-- `.git`
-- `.ai`
-- `tests`
-- `examples`
-- `dist`
-- `__pycache__`
-- old review zips
+- `CONSUMER_GUIDE.md`
 
 ## Exporting the skill
+
+### Full package export
 
 ```bash
 python .agents/skills/code-impact-guardian/cig.py export-skill --out path/to/exported-skill
 ```
 
-## Copying to a new project
+This keeps the stage6-style distribution package.
 
-1. Export the skill package.
-2. Copy the exported package contents into the target repo.
-3. Run `init`.
-
-Shortest path:
+### Single-folder export
 
 ```bash
-python .agents/skills/code-impact-guardian/cig.py init --project-root . --write-agents-md --write-gitignore
+python .agents/skills/code-impact-guardian/cig.py export-skill --mode single-folder --out path/to/exported-skill
+```
+
+This produces only the folder that should be copied into:
+
+```text
+.agents/skills/code-impact-guardian/
+```
+
+## Recommended commands
+
+### High-level commands
+
+These are the main user-facing commands now:
+
+```bash
+python .agents/skills/code-impact-guardian/cig.py setup --project-root .
+python .agents/skills/code-impact-guardian/cig.py analyze --changed-file <path>
+python .agents/skills/code-impact-guardian/cig.py finish --changed-file <path>
+```
+
+What they do:
+
+- `setup` = init + write AGENTS.md + write .gitignore + write consumer docs + doctor + detect
+- `analyze` = build + automatic task id + seed resolution + report
+- `finish` = after-edit + recent task reuse + tests + handoff/status refresh
+
+### Low-level commands
+
+Advanced users can still use:
+
+```bash
+python .agents/skills/code-impact-guardian/cig.py init
 python .agents/skills/code-impact-guardian/cig.py doctor
 python .agents/skills/code-impact-guardian/cig.py detect
 python .agents/skills/code-impact-guardian/cig.py build
 python .agents/skills/code-impact-guardian/cig.py seeds
-python .agents/skills/code-impact-guardian/cig.py report --task-id my-task --seed <seed>
-python .agents/skills/code-impact-guardian/cig.py after-edit --task-id my-task --seed <seed> --changed-file <path>
+python .agents/skills/code-impact-guardian/cig.py report --seed <seed>
+python .agents/skills/code-impact-guardian/cig.py after-edit --seed <seed> --changed-file <path>
+python .agents/skills/code-impact-guardian/cig.py status
 ```
 
-### Python repo
+## Profiles
 
-```bash
-python .agents/skills/code-impact-guardian/cig.py init --profile python-basic --project-root . --write-agents-md --write-gitignore
-```
+Real working profiles:
 
-### TS/JS repo
+- `python-basic`
+- `node-cli`
+- `react-vite`
 
-```bash
-python .agents/skills/code-impact-guardian/cig.py init --profile node-cli --project-root . --write-agents-md --write-gitignore
-```
+Setup-ready profiles:
 
-### TS/JS + PostgreSQL repo
+- `next-basic`
+- `electron-renderer`
+- `obsidian-plugin`
+- `tauri-frontend`
 
-```bash
-python .agents/skills/code-impact-guardian/cig.py init --profile react-vite --with sql-postgres --project-root . --write-agents-md --write-gitignore
-```
+These profiles only change config defaults, doctor expectations, and suggested
+commands.
+They do not create new graph systems or new adapter families.
 
-## Primary and supplemental adapters
+## Supplemental adapters
 
 Stage5+ uses:
 
@@ -161,90 +185,49 @@ Stage5+ uses:
 }
 ```
 
-Use a supplemental adapter when another language should enrich the same graph
-and report rather than become a second workflow.
+Use supplemental adapters when another language should enrich the same graph
+and report rather than create a second workflow.
 
-## Profiles
-
-Real working profiles:
-
-- `python-basic`
-- `node-cli`
-- `react-vite`
-
-Setup-ready profiles in stage6:
-
-- `next-basic`
-- `electron-renderer`
-- `obsidian-plugin`
-- `tauri-frontend`
-
-These setup-ready profiles do not create new graph systems.
-They improve:
-
-- init defaults
-- doctor expectations
-- default rule globs
-- recommended test-command shape
-
-## Seeds and report behavior
-
-`seeds` exposes graph-derived candidates and metadata.
-
-`report` shows:
-
-- adapter/profile context
-- seed definition metadata
-- direct callers / callees / tests / rules
-- transitive paths computed only at report time
-- hint data where a relation is useful but not strong enough to become graph truth
-
-### Hint vs real edge
-
-For cross-language SQL hints:
+For SQL hints:
 
 - high confidence + unique target -> direct `CALLS`
 - otherwise -> attrs/report hint only
 
-This keeps the graph clean and direct-edge-only.
+## Structured runtime artifacts
 
-## Structured runtime logs
-
-All CLI commands now write unified logs under:
+Runtime data is written under:
 
 ```text
-.ai/codegraph/logs/
+.ai/codegraph/
 ```
 
-Files:
+Key files:
+
+- graph DB: `.ai/codegraph/codegraph.db`
+- reports: `.ai/codegraph/reports/`
+- structured logs: `.ai/codegraph/logs/`
+- recent task: `.ai/codegraph/last-task.json`
+- handoff card: `.ai/codegraph/handoff/latest.md`
+
+Structured logs include:
 
 - `events.jsonl`
 - `errors.jsonl`
 - `last-run.json`
 - `last-error.json`
 
-Each event/error carries machine-readable fields such as:
+Normal failures stay concise.
+Tracebacks only print when `--debug` is used.
 
-- `timestamp`
-- `command`
-- `workspace_root`
-- `project_root`
-- `profile`
-- `primary_adapter`
-- `supplemental_adapters`
-- `task_id`
-- `seed`
-- `status`
-- `output_paths`
-- `warning_count`
-- `error_code`
-- `retryable`
-- `suggested_next_step`
+## Recovery and handoff
 
-Normal failures stay concise on the terminal.
-Tracebacks are only printed when `--debug` is used.
+Recovery is part of the skill, not just the code.
 
-## Status and handoff
+Read in this order:
+
+1. `.ai/codegraph/logs/last-error.json`
+2. `.ai/codegraph/handoff/latest.md`
+3. `TROUBLESHOOTING.md`
 
 Use:
 
@@ -252,64 +235,31 @@ Use:
 python .agents/skills/code-impact-guardian/cig.py status
 ```
 
-It reports:
+to see:
 
-- current config path
-- current profile / primary / supplemental
-- latest build / report / after-edit status
-- latest error summary
-- latest report path
-- latest test-results path
+- current config/profile/primary/supplemental
+- latest build/report/after-edit/analyze/finish status
+- latest error
+- latest report/test paths
 - available seed count
-- whether an unhandled error is present
+- recent task context
+- recommended next step
 
-Agent handoff is written to:
-
-```text
-.ai/codegraph/handoff/latest.md
-```
-
-It includes:
-
-- current command/task
-- current phase
-- latest failure point
-- latest report/test artifact paths
-- the next action another agent should take
-
-## Troubleshooting and recovery
-
-The recovery protocol is part of the skill, not just an implementation detail.
-
-Read:
-
-- `TROUBLESHOOTING.md`
-- `.ai/codegraph/logs/last-error.json`
-- `.ai/codegraph/handoff/latest.md`
-
-Examples:
-
-- `CONFIG_MISSING`: run `init`
-- `INVALID_PROFILE`: choose a supported profile and rerun `init`
-- `SUPPLEMENTAL_ADAPTER_MISSING`: add the expected files or disable the supplemental adapter
-- `TEST_COMMAND_FAILED`: inspect test output, fix the command or failing code, then rerun `after-edit`
-
-## What the scripts guarantee vs what the agent decides
+## What scripts guarantee vs what the agent decides
 
 ### Script-guaranteed
 
 - direct-edge-only persistence
-- build / report / after-edit flow
-- SQLite schema and process tables
-- structured logs and last-error snapshots
-- handoff artifact generation
-- deterministic export package shape
+- unified graph/report/after-edit flow
+- structured runtime logs and last-error snapshots
+- recent task persistence
+- deterministic single-folder and full-package exports
 
 ### Agent-guided
 
-- whether to fall back to generic when detection is uncertain
-- whether a warning can be accepted for the current task
-- how to narrow a seed when report scope is too broad
+- whether a warning is acceptable for the current task
+- whether generic fallback is acceptable when detection is uncertain
+- how to narrow scope when multiple seeds are plausible
 - how to proceed after a test failure while preserving evidence
 
 ## Verification
@@ -321,4 +271,5 @@ python -m unittest tests.test_stage3_workflow -v
 python -m unittest tests.test_stage4_workflow -v
 python -m unittest tests.test_stage5_workflow -v
 python -m unittest tests.test_stage6_workflow -v
+python -m unittest tests.test_stage7_workflow -v
 ```

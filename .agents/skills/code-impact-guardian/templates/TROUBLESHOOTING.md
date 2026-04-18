@@ -5,15 +5,16 @@ This file defines the recovery protocol for agents and humans.
 ## Doctor failed
 
 1. Read `.ai/codegraph/logs/last-error.json`
-2. If the error is config-related, run `init` again with the right profile and project root.
+2. If the error is config-related, run `setup` again with the right profile and project root.
 3. If the error is supplemental-adapter-related, either add the expected files or remove that supplemental adapter from config.
-4. Re-run `doctor`
+4. Re-run `doctor`, or try `doctor --fix-safe` for safe repairs only
 
 ## Detect is uncertain
 
 1. If `detect` falls back to `generic`, decide whether that is acceptable for this repo.
 2. If the repo should be Python or TS/JS, set `--profile` or `primary_adapter` explicitly.
 3. If the parser still cannot recognize the project, continue with generic fallback instead of fabricating function-level truth.
+4. `analyze --allow-fallback` and `finish --allow-fallback` will continue in file-level mode when that is the safest choice.
 
 ## Build failed
 
@@ -27,14 +28,16 @@ This file defines the recovery protocol for agents and humans.
 1. Confirm the seed exists in `cig.py seeds`
 2. If the seed is too broad or stale, rebuild and pick a narrower seed
 3. If needed, start from a file seed before returning to a function seed
+4. If multiple candidates were found, use one of the suggested seeds from the structured error
 
 ## After-edit test failed
 
 1. Do not fabricate success
 2. Keep `test-results.json` and the report as evidence
 3. Read `handoff/latest.md`
-4. Fix the test command or the code under test
-5. Re-run `after-edit`
+4. Read `.ai/codegraph/last-task.json` to recover the last analyze context
+5. Fix the test command or the code under test
+6. Re-run `finish` or `after-edit`
 
 ## Coverage unavailable
 

@@ -22,7 +22,7 @@ from consumer_install import ensure_agents_md as ensure_consumer_agents_md, ensu
 from doc_sources import doc_source_doctor_status  # noqa: E402
 from profiles import AUTO_PROFILE, PROFILE_PRESETS, apply_profile_preset, detect_project_profile, package_json_data, profile_coverage_adapter, profile_test_command  # noqa: E402
 from recent_task import auto_task_id, latest_seed_candidates, read_last_task, utc_now as recent_task_utc_now, write_last_task  # noqa: E402
-from runtime_support import CIGUserError, ensure_runtime_dirs, error_payload_from_exception, event_payload, latest_success_timestamp, normalize_output_paths, read_json, read_jsonl, recent_command_status, relative_path_string, runtime_paths, write_error, write_event, write_handoff, write_json  # noqa: E402
+from runtime_support import CIGUserError, ensure_runtime_dirs, error_payload_from_exception, event_payload, latest_success_timestamp, normalize_output_paths, read_json, read_jsonl, recent_command_status, relative_path_string, runtime_paths, shell_quote_path, write_error, write_event, write_handoff, write_json  # noqa: E402
 from context_inference import infer_context, stdin_patch_if_available  # noqa: E402
 from seed_ranker import rank_seed_candidates  # noqa: E402
 
@@ -1000,9 +1000,10 @@ def health_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
 
     if not config_exists:
         issues.append("config_missing")
-        fix_commands.append("python .agents/skills/code-impact-guardian/cig.py setup --workspace-root . --project-root .")
+        quoted_workspace_root = shell_quote_path(workspace_root)
+        fix_commands.append(f"python .agents/skills/code-impact-guardian/cig.py setup --workspace-root {quoted_workspace_root} --project-root .")
         issues.append("graph_stale")
-        fix_commands.append("python .agents/skills/code-impact-guardian/cig.py build --workspace-root . --full-rebuild")
+        fix_commands.append(f"python .agents/skills/code-impact-guardian/cig.py build --workspace-root {quoted_workspace_root} --full-rebuild")
     else:
         config = build_graph.load_config(config_path)
         graph = build_graph.graph_paths(workspace_root, config)
@@ -1012,15 +1013,16 @@ def health_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
         dependency_fingerprint_status = build_decision_payload.get("dependency_fingerprint_status", "unknown")
         if not graph["db_path"].exists() or graph_freshness != "fresh":
             issues.append("graph_stale")
-            fix_commands.append("python .agents/skills/code-impact-guardian/cig.py build --workspace-root . --full-rebuild")
+            quoted_workspace_root = shell_quote_path(workspace_root)
+            fix_commands.append(f"python .agents/skills/code-impact-guardian/cig.py build --workspace-root {quoted_workspace_root} --full-rebuild")
 
     last_task_phase = last_task.get("command", "none") if last_task else "none"
     needs_finish = last_task_phase in {"analyze", "report"} and (last_task.get("status") == "success")
     ready = not issues and not needs_finish
     if needs_finish:
         issues.append("finish_pending")
-        fix_commands.insert(0, "python .agents/skills/code-impact-guardian/cig.py finish --workspace-root .")
-    next_command = fix_commands[0] if fix_commands else "python .agents/skills/code-impact-guardian/cig.py analyze --workspace-root . --changed-file <relative-path>"
+        fix_commands.insert(0, f"python .agents/skills/code-impact-guardian/cig.py finish --workspace-root {shell_quote_path(workspace_root)}")
+    next_command = fix_commands[0] if fix_commands else f"python .agents/skills/code-impact-guardian/cig.py analyze --workspace-root {shell_quote_path(workspace_root)} --changed-file <relative-path>"
 
     return {
         "ready": ready,
@@ -1269,12 +1271,13 @@ def persist_last_task(
     return str(path)
 
 
-def context_missing_recovery_commands() -> list[str]:
+def context_missing_recovery_commands(workspace_root: pathlib.Path) -> list[str]:
+    quoted_workspace_root = shell_quote_path(workspace_root)
     return [
-        "python .agents/skills/code-impact-guardian/cig.py analyze --workspace-root . --allow-fallback",
-        "python .agents/skills/code-impact-guardian/cig.py analyze --workspace-root . --changed-file <relative-path>",
-        "python .agents/skills/code-impact-guardian/cig.py analyze --workspace-root . --patch-file <patch-file>",
-        "git init",
+        f"python .agents/skills/code-impact-guardian/cig.py analyze --workspace-root {quoted_workspace_root} --allow-fallback",
+        f"python .agents/skills/code-impact-guardian/cig.py analyze --workspace-root {quoted_workspace_root} --changed-file <relative-path>",
+        f"python .agents/skills/code-impact-guardian/cig.py analyze --workspace-root {quoted_workspace_root} --patch-file <patch-file>",
+        f"git -C {quoted_workspace_root} init",
     ]
 
 
@@ -1325,7 +1328,7 @@ def run_analyze_command(
                 "Could not infer a stable seed or changed-file context for analyze.",
                 retryable=True,
                 suggested_next_step="Pass --changed-file, pass --patch-file, initialize git with `git init`, or rerun with --allow-fallback to continue file-level only.",
-                recovery_commands=context_missing_recovery_commands(),
+                recovery_commands=context_missing_recovery_commands(workspace_root),
             )
 
         build_payload = build_graph.build_graph(
@@ -1346,7 +1349,7 @@ def run_analyze_command(
                 "Could not infer a stable seed or changed-file context for analyze.",
                 retryable=True,
                 suggested_next_step="Pass --changed-file, pass --patch-file, initialize git with `git init`, or rerun with --seed to continue explicitly.",
-                recovery_commands=context_missing_recovery_commands(),
+                recovery_commands=context_missing_recovery_commands(workspace_root),
             )
 
         selected_file = seeds_payload["file_details"][0]

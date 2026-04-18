@@ -1,4 +1,5 @@
 import json
+import os
 import pathlib
 import shutil
 import sqlite3
@@ -17,6 +18,39 @@ def copy_example(repo_root: pathlib.Path, example_name: str) -> None:
 
 def config_path(repo_root: pathlib.Path) -> pathlib.Path:
     return repo_root / ".code-impact-guardian" / "config.json"
+
+
+def init_git_repo(repo_root: pathlib.Path) -> None:
+    subprocess.run(["git", "init"], cwd=repo_root, check=True, text=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "codex@example.com"], cwd=repo_root, check=True, text=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Codex"], cwd=repo_root, check=True, text=True, capture_output=True)
+    subprocess.run(["git", "add", "-A"], cwd=repo_root, check=True, text=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "baseline"], cwd=repo_root, check=True, text=True, capture_output=True)
+
+
+def controlled_stage11_tempdir() -> tempfile.TemporaryDirectory[str]:
+    base_dir = pathlib.Path(tempfile.gettempdir()) / "stage11-workspaces"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    return tempfile.TemporaryDirectory(dir=base_dir, ignore_cleanup_errors=True)
+
+
+def run_emitted_command(command: str, *, cwd: pathlib.Path) -> subprocess.CompletedProcess[str]:
+    if os.name == "nt":
+        shell = shutil.which("powershell") or shutil.which("pwsh")
+        if shell is None:
+            raise unittest.SkipTest("PowerShell is required to verify emitted recovery commands")
+        return subprocess.run(
+            [shell, "-NoProfile", "-Command", command],
+            cwd=cwd,
+            text=True,
+            capture_output=True,
+        )
+    return subprocess.run(
+        ["sh", "-lc", command],
+        cwd=cwd,
+        text=True,
+        capture_output=True,
+    )
 
 
 def setup_repo(repo_cig: pathlib.Path, repo_root: pathlib.Path, *, profile: str | None = None) -> dict:
@@ -451,8 +485,8 @@ class Stage11WorkflowTest(unittest.TestCase):
             self.assertEqual(finish_payload["tests"]["test_count_status"], "unknown")
 
     def test_context_missing_writes_machine_recovery_commands(self):
-        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
-            repo_root = pathlib.Path(tmp) / "context-missing"
+        with controlled_stage11_tempdir() as tmp:
+            repo_root = pathlib.Path(tmp) / "context $missing space"
             repo_cig = copy_single_skill_folder(self.single_export, repo_root)
             write_python_repo(repo_root)
 
@@ -471,8 +505,53 @@ class Stage11WorkflowTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             last_error = json.loads((repo_root / ".ai" / "codegraph" / "logs" / "last-error.json").read_text(encoding="utf-8"))
             self.assertEqual(last_error["error_code"], "CONTEXT_MISSING")
-            self.assertTrue(last_error["recovery_commands"][0].startswith("python "))
-            self.assertIn("--allow-fallback", last_error["recovery_commands"][0])
+            quoted_workspace_root = f"'{repo_root}'"
+            self.assertEqual(
+                last_error["recovery_commands"],
+                [
+                    f"python .agents/skills/code-impact-guardian/cig.py analyze --workspace-root {quoted_workspace_root} --allow-fallback",
+                    f"python .agents/skills/code-impact-guardian/cig.py analyze --workspace-root {quoted_workspace_root} --changed-file <relative-path>",
+                    f"python .agents/skills/code-impact-guardian/cig.py analyze --workspace-root {quoted_workspace_root} --patch-file <patch-file>",
+                    f'git -C {quoted_workspace_root} init',
+                ],
+            )
+            self.assertFalse((repo_root / ".git").exists())
+            init_result = run_emitted_command(last_error["recovery_commands"][-1], cwd=repo_root.parent)
+            self.assertEqual(init_result.returncode, 0, init_result.stderr or init_result.stdout)
+            self.assertTrue((repo_root / ".git").exists())
+            self.assertFalse((repo_root.parent / ".git").exists())
+
+    def test_delete_only_working_tree_change_infers_context(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            repo_root = pathlib.Path(tmp) / "delete-only-context"
+            repo_cig = copy_single_skill_folder(self.single_export, repo_root)
+            write_python_repo(repo_root)
+            init_git_repo(repo_root)
+            setup_repo(repo_cig, repo_root, profile="python-basic")
+
+            (repo_root / "src" / "app.py").unlink()
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(repo_cig),
+                    "analyze",
+                    "--workspace-root",
+                    str(repo_root),
+                    "--config",
+                    str(config_path(repo_root)),
+                ],
+                cwd=repo_root,
+                text=True,
+                capture_output=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn("CONTEXT_MISSING", result.stderr)
+            context_resolution = json.loads((repo_root / ".ai" / "codegraph" / "context-resolution.json").read_text(encoding="utf-8"))
+            self.assertIn("src/app.py", context_resolution["changed_files"])
+            self.assertIn("src/app.py", context_resolution["effective_changed_files"])
+            last_error = json.loads((repo_root / ".ai" / "codegraph" / "logs" / "last-error.json").read_text(encoding="utf-8"))
+            self.assertEqual(last_error["error_code"], "SEED_SELECTION_REQUIRED")
 
     def test_python_instance_method_calls_create_call_and_cover_edges(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
@@ -497,8 +576,8 @@ class Stage11WorkflowTest(unittest.TestCase):
             )
 
     def test_health_command_reports_read_only_recovery_state(self):
-        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
-            repo_root = pathlib.Path(tmp) / "health-state"
+        with controlled_stage11_tempdir() as tmp:
+            repo_root = pathlib.Path(tmp) / "health $ state"
             repo_cig = copy_single_skill_folder(self.single_export, repo_root)
 
             payload = run_json(
@@ -513,16 +592,31 @@ class Stage11WorkflowTest(unittest.TestCase):
             )
             self.assertFalse(payload["ready"])
             self.assertIn("config_missing", payload["issues"])
-            self.assertTrue(payload["next_command"].startswith("python "))
+            quoted_workspace_root = f"'{repo_root}'"
+            self.assertEqual(
+                payload["fix_commands"],
+                [
+                    f"python .agents/skills/code-impact-guardian/cig.py setup --workspace-root {quoted_workspace_root} --project-root .",
+                    f"python .agents/skills/code-impact-guardian/cig.py build --workspace-root {quoted_workspace_root} --full-rebuild",
+                ],
+            )
+            self.assertEqual(
+                payload["next_command"],
+                f"python .agents/skills/code-impact-guardian/cig.py setup --workspace-root {quoted_workspace_root} --project-root .",
+            )
             self.assertEqual(payload["graph_trust"], "unknown")
             self.assertEqual(payload["dependency_fingerprint_status"], "unknown")
             self.assertEqual(payload["last_task_phase"], "none")
             self.assertFalse(payload["needs_finish"])
             self.assertFalse((repo_root / ".code-impact-guardian" / "config.json").exists())
+            setup_result = run_emitted_command(payload["next_command"], cwd=repo_root)
+            self.assertEqual(setup_result.returncode, 0, setup_result.stderr or setup_result.stdout)
+            self.assertTrue((repo_root / ".code-impact-guardian" / "config.json").exists())
+            self.assertFalse((repo_root.parent / ".code-impact-guardian" / "config.json").exists())
 
     def test_build_lock_surfaces_recovery_commands(self):
-        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
-            repo_root = pathlib.Path(tmp) / "build-lock"
+        with controlled_stage11_tempdir() as tmp:
+            repo_root = pathlib.Path(tmp) / "build $ lock"
             repo_cig = copy_single_skill_folder(self.single_export, repo_root)
             write_python_repo(repo_root)
             setup_repo(repo_cig, repo_root, profile="python-basic")
@@ -549,8 +643,18 @@ class Stage11WorkflowTest(unittest.TestCase):
             self.assertIn("BUILD_LOCKED", result.stderr)
             last_error = json.loads((repo_root / ".ai" / "codegraph" / "logs" / "last-error.json").read_text(encoding="utf-8"))
             self.assertEqual(last_error["error_code"], "BUILD_LOCKED")
-            self.assertIn("status --workspace-root .", " ".join(last_error["recovery_commands"]))
-            self.assertIn("build.lock", " ".join(last_error["recovery_commands"]))
+            quoted_workspace_root = f"'{repo_root}'"
+            quoted_lock_path = f"'{repo_root / '.ai' / 'codegraph' / 'build.lock'}'"
+            self.assertEqual(
+                last_error["recovery_commands"],
+                [
+                    f"python .agents/skills/code-impact-guardian/cig.py status --workspace-root {quoted_workspace_root}",
+                    f"rm {quoted_lock_path}",
+                ],
+            )
+            remove_result = run_emitted_command(last_error["recovery_commands"][-1], cwd=repo_root.parent)
+            self.assertEqual(remove_result.returncode, 0, remove_result.stderr or remove_result.stdout)
+            self.assertFalse(lock_path.exists())
 
 
 if __name__ == "__main__":

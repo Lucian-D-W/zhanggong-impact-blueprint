@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import os
 import pathlib
 import traceback
 from datetime import datetime, timezone
@@ -74,6 +75,13 @@ def normalize_output_paths(workspace_root: pathlib.Path, payload: dict | None) -
     for key, value in payload.items():
         normalized[key] = relative_path_string(workspace_root, value)
     return normalized
+
+
+def shell_quote_path(value: str | pathlib.Path) -> str:
+    text = str(value)
+    if os.name == "nt":
+        return "'" + text.replace("'", "''") + "'"
+    return "'" + text.replace("'", "'\"'\"'") + "'"
 
 
 def append_jsonl(path: pathlib.Path, payload: dict) -> None:

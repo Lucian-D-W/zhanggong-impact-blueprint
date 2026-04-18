@@ -47,14 +47,26 @@ def parse_unified_diff(
     changed_line_map: dict[str, set[int]] = {}
     out_of_scope_files: list[str] = []
     current_file: str | None = None
+    deleted_file: str | None = None
 
     for raw_line in diff_text.splitlines():
         line = raw_line.rstrip("\n")
+        if line.startswith("--- "):
+            source = line[4:].strip()
+            if source == "/dev/null":
+                deleted_file = None
+            elif source.startswith("a/"):
+                deleted_file = source[2:]
+            else:
+                deleted_file = source
+            continue
         if line.startswith("+++ "):
             target = line[4:].strip()
             if target == "/dev/null":
-                current_file = None
-                continue
+                if deleted_file is None:
+                    current_file = None
+                    continue
+                target = deleted_file
             if target.startswith("b/"):
                 target = target[2:]
             relative = project_relative_path(target, workspace_root, project_root)

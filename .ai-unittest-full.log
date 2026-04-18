@@ -1,0 +1,997 @@
+test_non_git_missing_context_errors_cleanly_and_auto_setup_runs (test_stage10_workflow.Stage10WorkflowTest.test_non_git_missing_context_errors_cleanly_and_auto_setup_runs) ... ok
+test_python_class_methods_are_seeded_reported_and_finished (test_stage10_workflow.Stage10WorkflowTest.test_python_class_methods_are_seeded_reported_and_finished) ... ok
+test_skill_structure_and_export_modes_are_normalized (test_stage10_workflow.Stage10WorkflowTest.test_skill_structure_and_export_modes_are_normalized) ... ok
+test_stale_trust_recent_task_bias_and_test_signal_warnings (test_stage10_workflow.Stage10WorkflowTest.test_stale_trust_recent_task_bias_and_test_signal_warnings) ... ok
+test_tsjs_brace_edge_cases_do_not_break_boundaries (test_stage10_workflow.Stage10WorkflowTest.test_tsjs_brace_edge_cases_do_not_break_boundaries) ... ok
+test_build_lock_surfaces_recovery_commands (test_stage11_workflow.Stage11WorkflowTest.test_build_lock_surfaces_recovery_commands) ... ok
+test_context_missing_writes_machine_recovery_commands (test_stage11_workflow.Stage11WorkflowTest.test_context_missing_writes_machine_recovery_commands) ... ok
+test_dependency_file_changes_force_full_rebuild_and_lower_trust (test_stage11_workflow.Stage11WorkflowTest.test_dependency_file_changes_force_full_rebuild_and_lower_trust) ... ok
+test_frontmatter_duplicate_governs_warns_and_merges (test_stage11_workflow.Stage11WorkflowTest.test_frontmatter_duplicate_governs_warns_and_merges) ... ok
+test_function_declaration_line_does_not_create_self_call (test_stage11_workflow.Stage11WorkflowTest.test_function_declaration_line_does_not_create_self_call) ... ok
+test_health_command_reports_read_only_recovery_state (test_stage11_workflow.Stage11WorkflowTest.test_health_command_reports_read_only_recovery_state) ... ok
+test_missing_dependency_fingerprint_keeps_trust_below_high (test_stage11_workflow.Stage11WorkflowTest.test_missing_dependency_fingerprint_keeps_trust_below_high) ... ok
+test_multiline_arrow_block_keeps_correct_boundary (test_stage11_workflow.Stage11WorkflowTest.test_multiline_arrow_block_keeps_correct_boundary) ... ok
+test_python_instance_method_calls_create_call_and_cover_edges (test_stage11_workflow.Stage11WorkflowTest.test_python_instance_method_calls_create_call_and_cover_edges) ... ok
+test_python_unittest_output_parses_real_test_count (test_stage11_workflow.Stage11WorkflowTest.test_python_unittest_output_parses_real_test_count) ... ok
+test_regex_literal_braces_do_not_truncate_function_boundary (test_stage11_workflow.Stage11WorkflowTest.test_regex_literal_braces_do_not_truncate_function_boundary) ... ok
+test_ts_type_literal_does_not_truncate_function_boundary (test_stage11_workflow.Stage11WorkflowTest.test_ts_type_literal_does_not_truncate_function_boundary) ... ok
+test_unrecognized_test_output_reports_unknown_count (test_stage11_workflow.Stage11WorkflowTest.test_unrecognized_test_output_reports_unknown_count) ... ok
+{
+  "timestamp": "2026-04-18T11:19:25+00:00",
+  "workspace_root": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpc7gzj5sh\\demo-copy",
+  "project_root": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpc7gzj5sh\\demo-copy\\examples\\python_minimal",
+  "git_sha": "a4f4c120a5c8f53a45ff5e72e540b5e44e9ca107",
+  "node_count": 11,
+  "edge_count": 13,
+  "evidence_count": 13,
+  "configured_language_adapter": "auto",
+  "configured_primary_adapter": "auto",
+  "detected_adapter": "python",
+  "primary_adapter": "python",
+  "detected_profile": "python-basic",
+  "supplemental_adapters_configured": [],
+  "supplemental_adapters_detected": [],
+  "available_function_seeds": [
+    "fn:src/app.py:login",
+    "fn:src/app.py:validate_password",
+    "fn:src/session.py:create_session"
+  ],
+  "available_file_seeds": [
+    "file:docs/rules/auth-session.md",
+    "file:src/__init__.py",
+    "file:src/app.py",
+    "file:src/session.py",
+    "file:tests/test_app.py"
+  ],
+  "build_mode": "full",
+  "changed_files": [
+    "docs/rules/auth-session.md",
+    "src/__init__.py",
+    "src/app.py",
+    "src/session.py",
+    "tests/test_app.py"
+  ],
+  "stale_reason": "no previous manifest",
+  "trust_level": "medium",
+  "graph_trust": "medium",
+  "graph_freshness": "fresh",
+  "dependency_fingerprint_status": "not_applicable",
+  "reason_codes": [
+    "NO_PREVIOUS_MANIFEST",
+    "RULE_FILES_CHANGED"
+  ],
+  "verification_status": "skipped",
+  "build_decision": {
+    "build_mode": "full",
+    "execution_mode": "full",
+    "trust_level": "medium",
+    "graph_trust": "medium",
+    "reason_codes": [
+      "NO_PREVIOUS_MANIFEST",
+      "RULE_FILES_CHANGED"
+    ],
+    "verification_status": "skipped",
+    "verification_reason": "shadow verification not requested",
+    "generated_noise": [],
+    "dependency_files": [],
+    "graph_freshness": "fresh",
+    "ttl_hours": 24.0,
+    "manifest_age_hours": null,
+    "dependency_fingerprint_status": "not_applicable",
+    "tracked_file_count": 5,
+    "config_fingerprint": "bfd84d66385dd7a3b6d2cf57c5c69623e100b7cf",
+    "shadow_verify": false
+  },
+  "warnings": []
+}
+{
+  "task_id": "demo-login-impact",
+  "seed": "fn:src/app.py:login",
+  "git_sha": "a4f4c120a5c8f53a45ff5e72e540b5e44e9ca107",
+  "report_path": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpc7gzj5sh\\demo-copy\\.ai\\codegraph\\reports\\impact-demo-login-impact.md",
+  "json_report_path": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpc7gzj5sh\\demo-copy\\.ai\\codegraph\\reports\\impact-demo-login-impact.json",
+  "mermaid_path": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpc7gzj5sh\\demo-copy\\.ai\\codegraph\\reports\\impact-demo-login-impact.mmd",
+  "task_run_id": "taskrun-2ecd761b1ec0",
+  "detected_adapter": "python",
+  "detected_profile": "python-basic",
+  "mode": "default",
+  "brief": {
+    "selected_seed": "fn:src/app.py:login",
+    "why_this_seed": "seed selected from current context",
+    "seed_confidence": null,
+    "recent_task_influenced": false,
+    "changed_files_summary": [
+      "none"
+    ],
+    "direct_impact_summary": {
+      "callers": 0,
+      "callees": 2,
+      "tests": 2,
+      "rules": 1
+    },
+    "build_trust_summary": {
+      "build_mode": null,
+      "graph_trust": null,
+      "trust_level": null,
+      "reason_codes": [],
+      "verification_status": null,
+      "graph_freshness": null,
+      "dependency_fingerprint_status": null
+    },
+    "graph_trust": null,
+    "report_completeness": {
+      "level": "high",
+      "reason": "function_or_routine_seed_with_resolved_context"
+    },
+    "test_signal": {
+      "status": "not-run",
+      "tests_run": null,
+      "test_count_status": "unknown",
+      "tests_passed": false,
+      "coverage_available": false,
+      "affected_tests_found": true,
+      "coverage_relevance": "not-run",
+      "full_suite": false
+    },
+    "top_risks": [
+      "This seed has direct downstream links or governing rules, so side-effect changes need extra care."
+    ],
+    "next_tests": [
+      "Run direct test seed `test:tests/test_app.py:LoginFlowTest.test_login_creates_session`.",
+      "Run direct test seed `test:tests/test_app.py:LoginFlowTest.test_login_rejects_bad_credentials`."
+    ],
+    "key_evidence_paths": [
+      "src/app.py",
+      "tests/test_app.py",
+      "docs/rules/auth-session.md"
+    ],
+    "next_step": "Read the brief report, then edit the code if the selected seed looks right.",
+    "user_summary": "I identified `fn:src/app.py:login` as the main impact seed for the current diff. It directly links to test:tests/test_app.py:LoginFlowTest.test_login_creates_session, test:tests/test_app.py:LoginFlowTest.test_login_rejects_bad_credentials, rule:auth-session-invariant; next I would Run direct test seed `test:tests/test_app.py:LoginFlowTest.test_login_creates_session`."
+  },
+  "direct_tests": [
+    "test:tests/test_app.py:LoginFlowTest.test_login_creates_session",
+    "test:tests/test_app.py:LoginFlowTest.test_login_rejects_bad_credentials"
+  ],
+  "direct_rules": [
+    "rule:auth-session-invariant"
+  ],
+  "user_summary": "I identified `fn:src/app.py:login` as the main impact seed for the current diff. It directly links to test:tests/test_app.py:LoginFlowTest.test_login_creates_session, test:tests/test_app.py:LoginFlowTest.test_login_rejects_bad_credentials, rule:auth-session-invariant; next I would Run direct test seed `test:tests/test_app.py:LoginFlowTest.test_login_creates_session`."
+}
+{
+  "graph": {
+    "timestamp": "2026-04-18T11:19:26+00:00",
+    "workspace_root": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpc7gzj5sh\\demo-copy",
+    "project_root": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpc7gzj5sh\\demo-copy\\examples\\python_minimal",
+    "git_sha": "a4f4c120a5c8f53a45ff5e72e540b5e44e9ca107",
+    "node_count": 11,
+    "edge_count": 13,
+    "evidence_count": 13,
+    "configured_language_adapter": "auto",
+    "configured_primary_adapter": "auto",
+    "detected_adapter": "python",
+    "primary_adapter": "python",
+    "detected_profile": "python-basic",
+    "supplemental_adapters_configured": [],
+    "supplemental_adapters_detected": [],
+    "available_function_seeds": [
+      "fn:src/app.py:login",
+      "fn:src/app.py:validate_password",
+      "fn:src/session.py:create_session"
+    ],
+    "available_file_seeds": [
+      "file:docs/rules/auth-session.md",
+      "file:src/__init__.py",
+      "file:src/app.py",
+      "file:src/session.py",
+      "file:tests/test_app.py"
+    ],
+    "build_mode": "full",
+    "changed_files": [
+      "src/app.py"
+    ],
+    "stale_reason": "small tracked change set",
+    "trust_level": "low",
+    "graph_trust": "low",
+    "graph_freshness": "fresh",
+    "dependency_fingerprint_status": "not_applicable",
+    "reason_codes": [
+      "DEFAULT_SAFE_PATH",
+      "SHADOW_VERIFICATION_MISMATCH"
+    ],
+    "verification_status": "mismatched",
+    "build_decision": {
+      "build_mode": "full",
+      "execution_mode": "incremental",
+      "trust_level": "low",
+      "graph_trust": "low",
+      "reason_codes": [
+        "DEFAULT_SAFE_PATH",
+        "SHADOW_VERIFICATION_MISMATCH"
+      ],
+      "verification_status": "mismatched",
+      "verification_reason": "external direct edges target the changed files",
+      "generated_noise": [],
+      "dependency_files": [],
+      "graph_freshness": "fresh",
+      "ttl_hours": 24.0,
+      "manifest_age_hours": 0.0,
+      "dependency_fingerprint_status": "not_applicable",
+      "tracked_file_count": 5,
+      "config_fingerprint": "bfd84d66385dd7a3b6d2cf57c5c69623e100b7cf",
+      "shadow_verify": true
+    },
+    "warnings": [
+      "incremental_refresh_fallback: external direct edges target the changed files"
+    ]
+  },
+  "report": {
+    "task_id": "demo-login-impact",
+    "seed": "fn:src/app.py:login",
+    "git_sha": "a4f4c120a5c8f53a45ff5e72e540b5e44e9ca107",
+    "report_path": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpc7gzj5sh\\demo-copy\\.ai\\codegraph\\reports\\impact-demo-login-impact.md",
+    "json_report_path": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpc7gzj5sh\\demo-copy\\.ai\\codegraph\\reports\\impact-demo-login-impact.json",
+    "mermaid_path": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpc7gzj5sh\\demo-copy\\.ai\\codegraph\\reports\\impact-demo-login-impact.mmd",
+    "task_run_id": "taskrun-3985a8c11b8e",
+    "detected_adapter": "python",
+    "detected_profile": "python-basic",
+    "mode": "brief",
+    "brief": {
+      "selected_seed": "fn:src/app.py:login",
+      "why_this_seed": "seed selected from current context",
+      "seed_confidence": null,
+      "recent_task_influenced": false,
+      "changed_files_summary": [
+        "src/app.py"
+      ],
+      "direct_impact_summary": {
+        "callers": 0,
+        "callees": 2,
+        "tests": 2,
+        "rules": 1
+      },
+      "build_trust_summary": {
+        "build_mode": null,
+        "graph_trust": null,
+        "trust_level": null,
+        "reason_codes": [],
+        "verification_status": null,
+        "graph_freshness": null,
+        "dependency_fingerprint_status": null
+      },
+      "graph_trust": null,
+      "report_completeness": {
+        "level": "high",
+        "reason": "function_or_routine_seed_with_resolved_context"
+      },
+      "test_signal": {
+        "status": "passed",
+        "tests_run": 2,
+        "test_count_status": "parsed",
+        "tests_passed": true,
+        "coverage_available": true,
+        "affected_tests_found": true,
+        "coverage_relevance": "direct-impact-covered-by-available-coverage",
+        "full_suite": true
+      },
+      "top_risks": [
+        "This seed has direct downstream links or governing rules, so side-effect changes need extra care."
+      ],
+      "next_tests": [
+        "Run direct test seed `test:tests/test_app.py:LoginFlowTest.test_login_creates_session`.",
+        "Run direct test seed `test:tests/test_app.py:LoginFlowTest.test_login_rejects_bad_credentials`."
+      ],
+      "key_evidence_paths": [
+        "src/app.py",
+        "tests/test_app.py",
+        "docs/rules/auth-session.md"
+      ],
+      "next_step": "Read the brief report, then edit the code if the selected seed looks right.",
+      "user_summary": "I identified `fn:src/app.py:login` as the main impact seed for src/app.py. It directly links to test:tests/test_app.py:LoginFlowTest.test_login_creates_session, test:tests/test_app.py:LoginFlowTest.test_login_rejects_bad_credentials, rule:auth-session-invariant; next I would Run direct test seed `test:tests/test_app.py:LoginFlowTest.test_login_creates_session`."
+    },
+    "direct_tests": [
+      "test:tests/test_app.py:LoginFlowTest.test_login_creates_session",
+      "test:tests/test_app.py:LoginFlowTest.test_login_rejects_bad_credentials"
+    ],
+    "direct_rules": [
+      "rule:auth-session-invariant"
+    ],
+    "user_summary": "I identified `fn:src/app.py:login` as the main impact seed for src/app.py. It directly links to test:tests/test_app.py:LoginFlowTest.test_login_creates_session, test:tests/test_app.py:LoginFlowTest.test_login_rejects_bad_credentials, rule:auth-session-invariant; next I would Run direct test seed `test:tests/test_app.py:LoginFlowTest.test_login_creates_session`."
+  },
+  "tests": {
+    "task_id": "demo-login-impact",
+    "command": [
+      "C:\\Python314\\python.exe",
+      "-m",
+      "coverage",
+      "run",
+      "--data-file=C:\\Users\\6\\AppData\\Local\\Temp\\tmpc7gzj5sh\\demo-copy\\.ai\\codegraph\\coverage-demo-login-impact.data",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "tests",
+      "-p",
+      "test_*.py"
+    ],
+    "status": "passed",
+    "tests_run": 2,
+    "test_count_status": "parsed",
+    "tests_passed": true,
+    "exit_code": 0,
+    "output_path": ".ai\\codegraph\\test-output-demo-login-impact.log",
+    "coverage_path": ".ai\\codegraph\\coverage-demo-login-impact.json",
+    "coverage_status": "available",
+    "coverage_available": true,
+    "coverage_reason": null,
+    "totals": {
+      "covered_lines": 23,
+      "num_statements": 24,
+      "percent_covered": 95.83333333333333,
+      "percent_covered_display": "96",
+      "missing_lines": 1,
+      "excluded_lines": 0,
+      "percent_statements_covered": 95.83333333333333,
+      "percent_statements_covered_display": "96"
+    },
+    "full_suite": true,
+    "detected_adapter": "python",
+    "affected_tests_found": true,
+    "coverage_relevance": "direct-impact-covered-by-available-coverage"
+  },
+  "run_id": "testrun-06b4af5148dc",
+  "task_run_id": "taskrun-6e8fe01ce3a7",
+  "edit_round_id": "editround-7e230ed5cdef",
+  "round_summary": {
+    "changed_files": [
+      "src/app.py"
+    ],
+    "function_diffs": {
+      "added": [],
+      "removed": [],
+      "modified": [],
+      "renamed": []
+    },
+    "relation_diffs": {
+      "fn:src/app.py:login": {
+        "callers_added": [],
+        "callers_removed": [],
+        "callees_added": [],
+        "callees_removed": [],
+        "tests_added": [],
+        "tests_removed": [],
+        "rules_added": [],
+        "rules_removed": [],
+        "importers_added": [],
+        "importers_removed": [],
+        "imports_added": [],
+        "imports_removed": []
+      }
+    }
+  }
+}
+C:\Users\6\AppData\Local\Temp\tmpc7gzj5sh\demo-copy
+test_stage1_demo_generates_db_report_and_results (test_stage1_workflow.Stage1WorkflowTest.test_stage1_demo_generates_db_report_and_results) ... ok
+test_stage1_template_uses_json_config_and_gitignore (test_stage1_workflow.Stage1WorkflowTest.test_stage1_template_uses_json_config_and_gitignore) ... ok
+C:\Users\6\AppData\Local\Temp\tmpf01qy2ha\generic-copy
+test_cig_generic_demo_runs_file_level_fallback (test_stage2_workflow.Stage2WorkflowTest.test_cig_generic_demo_runs_file_level_fallback) ... ok
+C:\Users\6\AppData\Local\Temp\tmp9_zgk0ks\tsjs-copy
+test_cig_tsjs_demo_runs_end_to_end (test_stage2_workflow.Stage2WorkflowTest.test_cig_tsjs_demo_runs_end_to_end) ... ok
+C:\Users\6\AppData\Local\Temp\tmpfxlo4fdq\stage3-copy
+{
+  "task_id": "stage3-process",
+  "seed": "fn:src/app.py:login",
+  "git_sha": "53ab8fc5a48d15369dfc9434995349535871e509",
+  "report_path": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpfxlo4fdq\\stage3-copy\\.ai\\codegraph\\reports\\impact-stage3-process.md",
+  "json_report_path": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpfxlo4fdq\\stage3-copy\\.ai\\codegraph\\reports\\impact-stage3-process.json",
+  "mermaid_path": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpfxlo4fdq\\stage3-copy\\.ai\\codegraph\\reports\\impact-stage3-process.mmd",
+  "task_run_id": "taskrun-b6718b42b901",
+  "detected_adapter": "python",
+  "detected_profile": "python-basic",
+  "mode": "brief",
+  "brief": {
+    "selected_seed": "fn:src/app.py:login",
+    "why_this_seed": "seed selected from current context",
+    "seed_confidence": null,
+    "recent_task_influenced": false,
+    "changed_files_summary": [
+      "none"
+    ],
+    "direct_impact_summary": {
+      "callers": 0,
+      "callees": 2,
+      "tests": 2,
+      "rules": 1
+    },
+    "build_trust_summary": {
+      "build_mode": null,
+      "graph_trust": null,
+      "trust_level": null,
+      "reason_codes": [],
+      "verification_status": null,
+      "graph_freshness": null,
+      "dependency_fingerprint_status": null
+    },
+    "graph_trust": null,
+    "report_completeness": {
+      "level": "high",
+      "reason": "function_or_routine_seed_with_resolved_context"
+    },
+    "test_signal": {
+      "status": "not-run",
+      "tests_run": null,
+      "test_count_status": "unknown",
+      "tests_passed": false,
+      "coverage_available": false,
+      "affected_tests_found": true,
+      "coverage_relevance": "not-run",
+      "full_suite": false
+    },
+    "top_risks": [
+      "This seed has direct downstream links or governing rules, so side-effect changes need extra care."
+    ],
+    "next_tests": [
+      "Run direct test seed `test:tests/test_app.py:LoginFlowTest.test_login_creates_session`.",
+      "Run direct test seed `test:tests/test_app.py:LoginFlowTest.test_login_rejects_bad_credentials`."
+    ],
+    "key_evidence_paths": [
+      "src/app.py",
+      "tests/test_app.py",
+      "docs/rules/auth-session.md"
+    ],
+    "next_step": "Read the brief report, then edit the code if the selected seed looks right.",
+    "user_summary": "I identified `fn:src/app.py:login` as the main impact seed for the current diff. It directly links to test:tests/test_app.py:LoginFlowTest.test_login_creates_session, test:tests/test_app.py:LoginFlowTest.test_login_rejects_bad_credentials, rule:auth-session-invariant; next I would Run direct test seed `test:tests/test_app.py:LoginFlowTest.test_login_creates_session`."
+  },
+  "direct_tests": [
+    "test:tests/test_app.py:LoginFlowTest.test_login_creates_session",
+    "test:tests/test_app.py:LoginFlowTest.test_login_rejects_bad_credentials"
+  ],
+  "direct_rules": [
+    "rule:auth-session-invariant"
+  ],
+  "user_summary": "I identified `fn:src/app.py:login` as the main impact seed for the current diff. It directly links to test:tests/test_app.py:LoginFlowTest.test_login_creates_session, test:tests/test_app.py:LoginFlowTest.test_login_rejects_bad_credentials, rule:auth-session-invariant; next I would Run direct test seed `test:tests/test_app.py:LoginFlowTest.test_login_creates_session`.",
+  "seed_selection": {
+    "mode": "explicit",
+    "seed_confidence": 1.0,
+    "confidence": 1.0,
+    "reason": "explicit seed provided",
+    "top_candidates": [
+      {
+        "node_id": "fn:src/app.py:login",
+        "confidence": 1.0,
+        "seed_confidence": 1.0,
+        "reason": "explicit seed provided",
+        "reason_details": [
+          "explicit seed provided"
+        ]
+      }
+    ],
+    "fallback_used": false,
+    "recent_task_influenced": false
+  }
+}
+{
+  "graph": {
+    "timestamp": "2026-04-18T11:19:41+00:00",
+    "workspace_root": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpfxlo4fdq\\stage3-copy",
+    "project_root": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpfxlo4fdq\\stage3-copy\\examples\\python_minimal",
+    "git_sha": "53ab8fc5a48d15369dfc9434995349535871e509",
+    "node_count": 12,
+    "edge_count": 15,
+    "evidence_count": 15,
+    "configured_language_adapter": "auto",
+    "configured_primary_adapter": "auto",
+    "detected_adapter": "python",
+    "primary_adapter": "python",
+    "detected_profile": "python-basic",
+    "supplemental_adapters_configured": [],
+    "supplemental_adapters_detected": [],
+    "available_function_seeds": [
+      "fn:src/app.py:audit_login_attempt",
+      "fn:src/app.py:login",
+      "fn:src/app.py:validate_password",
+      "fn:src/session.py:create_session"
+    ],
+    "available_file_seeds": [
+      "file:docs/rules/auth-session.md",
+      "file:src/__init__.py",
+      "file:src/app.py",
+      "file:src/session.py",
+      "file:tests/test_app.py"
+    ],
+    "build_mode": "full",
+    "changed_files": [
+      "src/__pycache__/__init__.cpython-314.pyc",
+      "src/__pycache__/app.cpython-314.pyc",
+      "src/__pycache__/session.cpython-314.pyc",
+      "src/app.py"
+    ],
+    "stale_reason": "change set too large for safe incremental refresh",
+    "trust_level": "high",
+    "graph_trust": "high",
+    "graph_freshness": "fresh",
+    "dependency_fingerprint_status": "not_applicable",
+    "reason_codes": [
+      "DEFAULT_SAFE_PATH"
+    ],
+    "verification_status": "skipped",
+    "build_decision": {
+      "build_mode": "full",
+      "execution_mode": "full",
+      "trust_level": "high",
+      "graph_trust": "high",
+      "reason_codes": [
+        "DEFAULT_SAFE_PATH"
+      ],
+      "verification_status": "skipped",
+      "verification_reason": "shadow verification not requested",
+      "generated_noise": [],
+      "dependency_files": [],
+      "graph_freshness": "fresh",
+      "ttl_hours": 24.0,
+      "manifest_age_hours": 0.0,
+      "dependency_fingerprint_status": "not_applicable",
+      "tracked_file_count": 8,
+      "config_fingerprint": "bfd84d66385dd7a3b6d2cf57c5c69623e100b7cf",
+      "shadow_verify": false
+    },
+    "warnings": []
+  },
+  "report": {
+    "task_id": "stage3-process",
+    "seed": "fn:src/app.py:login",
+    "git_sha": "53ab8fc5a48d15369dfc9434995349535871e509",
+    "report_path": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpfxlo4fdq\\stage3-copy\\.ai\\codegraph\\reports\\impact-stage3-process.md",
+    "json_report_path": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpfxlo4fdq\\stage3-copy\\.ai\\codegraph\\reports\\impact-stage3-process.json",
+    "mermaid_path": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpfxlo4fdq\\stage3-copy\\.ai\\codegraph\\reports\\impact-stage3-process.mmd",
+    "task_run_id": "taskrun-1b0a2f3ec5a7",
+    "detected_adapter": "python",
+    "detected_profile": "python-basic",
+    "mode": "brief",
+    "brief": {
+      "selected_seed": "fn:src/app.py:login",
+      "why_this_seed": "seed selected from current context",
+      "seed_confidence": null,
+      "recent_task_influenced": false,
+      "changed_files_summary": [
+        "src/app.py"
+      ],
+      "direct_impact_summary": {
+        "callers": 0,
+        "callees": 3,
+        "tests": 2,
+        "rules": 1
+      },
+      "build_trust_summary": {
+        "build_mode": null,
+        "graph_trust": null,
+        "trust_level": null,
+        "reason_codes": [],
+        "verification_status": null,
+        "graph_freshness": null,
+        "dependency_fingerprint_status": null
+      },
+      "graph_trust": null,
+      "report_completeness": {
+        "level": "high",
+        "reason": "function_or_routine_seed_with_resolved_context"
+      },
+      "test_signal": {
+        "status": "passed",
+        "tests_run": 2,
+        "test_count_status": "parsed",
+        "tests_passed": true,
+        "coverage_available": true,
+        "affected_tests_found": true,
+        "coverage_relevance": "direct-impact-covered-by-available-coverage",
+        "full_suite": true
+      },
+      "top_risks": [
+        "This seed has direct downstream links or governing rules, so side-effect changes need extra care."
+      ],
+      "next_tests": [
+        "Run direct test seed `test:tests/test_app.py:LoginFlowTest.test_login_creates_session`.",
+        "Run direct test seed `test:tests/test_app.py:LoginFlowTest.test_login_rejects_bad_credentials`."
+      ],
+      "key_evidence_paths": [
+        "src/app.py",
+        "tests/test_app.py",
+        "docs/rules/auth-session.md"
+      ],
+      "next_step": "Read the brief report, then edit the code if the selected seed looks right.",
+      "user_summary": "I identified `fn:src/app.py:login` as the main impact seed for src/app.py. It directly links to test:tests/test_app.py:LoginFlowTest.test_login_creates_session, test:tests/test_app.py:LoginFlowTest.test_login_rejects_bad_credentials, rule:auth-session-invariant; next I would Run direct test seed `test:tests/test_app.py:LoginFlowTest.test_login_creates_session`."
+    },
+    "direct_tests": [
+      "test:tests/test_app.py:LoginFlowTest.test_login_creates_session",
+      "test:tests/test_app.py:LoginFlowTest.test_login_rejects_bad_credentials"
+    ],
+    "direct_rules": [
+      "rule:auth-session-invariant"
+    ],
+    "user_summary": "I identified `fn:src/app.py:login` as the main impact seed for src/app.py. It directly links to test:tests/test_app.py:LoginFlowTest.test_login_creates_session, test:tests/test_app.py:LoginFlowTest.test_login_rejects_bad_credentials, rule:auth-session-invariant; next I would Run direct test seed `test:tests/test_app.py:LoginFlowTest.test_login_creates_session`."
+  },
+  "tests": {
+    "task_id": "stage3-process",
+    "command": [
+      "C:\\Python314\\python.exe",
+      "-m",
+      "coverage",
+      "run",
+      "--data-file=C:\\Users\\6\\AppData\\Local\\Temp\\tmpfxlo4fdq\\stage3-copy\\.ai\\codegraph\\coverage-stage3-process.data",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "tests",
+      "-p",
+      "test_*.py"
+    ],
+    "status": "passed",
+    "tests_run": 2,
+    "test_count_status": "parsed",
+    "tests_passed": true,
+    "exit_code": 0,
+    "output_path": ".ai\\codegraph\\test-output-stage3-process.log",
+    "coverage_path": ".ai\\codegraph\\coverage-stage3-process.json",
+    "coverage_status": "available",
+    "coverage_available": true,
+    "coverage_reason": null,
+    "totals": {
+      "covered_lines": 26,
+      "num_statements": 27,
+      "percent_covered": 96.29629629629629,
+      "percent_covered_display": "96",
+      "missing_lines": 1,
+      "excluded_lines": 0,
+      "percent_statements_covered": 96.29629629629629,
+      "percent_statements_covered_display": "96"
+    },
+    "full_suite": true,
+    "detected_adapter": "python",
+    "affected_tests_found": true,
+    "coverage_relevance": "direct-impact-covered-by-available-coverage"
+  },
+  "run_id": "testrun-0d9bb14736f3",
+  "task_run_id": "taskrun-d332d8093120",
+  "edit_round_id": "editround-35f66f752bab",
+  "round_summary": {
+    "changed_files": [
+      "src/app.py"
+    ],
+    "function_diffs": {
+      "added": [
+        {
+          "file_path": "src/app.py",
+          "symbol": "audit_login_attempt"
+        }
+      ],
+      "removed": [],
+      "modified": [
+        {
+          "file_path": "src/app.py",
+          "symbol": "login"
+        }
+      ],
+      "renamed": []
+    },
+    "relation_diffs": {
+      "fn:src/app.py:audit_login_attempt": {
+        "callers_added": [
+          "fn:src/app.py:login"
+        ],
+        "callers_removed": [],
+        "callees_added": [],
+        "callees_removed": [],
+        "tests_added": [],
+        "tests_removed": [],
+        "rules_added": [],
+        "rules_removed": [],
+        "importers_added": [],
+        "importers_removed": [],
+        "imports_added": [],
+        "imports_removed": []
+      },
+      "fn:src/app.py:login": {
+        "callers_added": [],
+        "callers_removed": [],
+        "callees_added": [
+          "fn:src/app.py:audit_login_attempt"
+        ],
+        "callees_removed": [],
+        "tests_added": [],
+        "tests_removed": [],
+        "rules_added": [],
+        "rules_removed": [],
+        "importers_added": [],
+        "importers_removed": [],
+        "imports_added": [],
+        "imports_removed": []
+      }
+    }
+  },
+  "task_id": "stage3-process",
+  "seed": "fn:src/app.py:login",
+  "changed_files": [
+    "src/app.py"
+  ],
+  "last_task_path": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpfxlo4fdq\\stage3-copy\\.ai\\codegraph\\last-task.json",
+  "context_resolution": {
+    "selected_seed": "fn:src/app.py:login",
+    "changed_files": [
+      "src/app.py"
+    ],
+    "changed_lines": [
+      ".code-impact-guardian/config.json:5",
+      ".code-impact-guardian/config.json:6",
+      "src/app.py:10",
+      "src/app.py:11",
+      "src/app.py:12",
+      "src/app.py:13",
+      "src/app.py:17",
+      "src/app.py:3"
+    ],
+    "effective_changed_files": [
+      "src/app.py"
+    ],
+    "effective_changed_lines": [
+      ".code-impact-guardian/config.json:5",
+      ".code-impact-guardian/config.json:6",
+      "src/app.py:10",
+      "src/app.py:11",
+      "src/app.py:12",
+      "src/app.py:13",
+      "src/app.py:17",
+      "src/app.py:3"
+    ],
+    "candidate_seeds": [],
+    "seed_confidence": 1.0,
+    "reason": "explicit parameters provided",
+    "context_sources": [
+      "explicit_seed",
+      "explicit_changed_files",
+      "git_working_tree"
+    ],
+    "fallback_used": false,
+    "out_of_scope_files": [],
+    "noise_files": [],
+    "context_status": "resolved"
+  },
+  "next_action": {
+    "command": "after-edit",
+    "task_id": "stage3-process",
+    "selected_seed": "fn:src/app.py:login",
+    "seed_reason": "explicit seed provided",
+    "candidate_seeds": [
+      {
+        "node_id": "fn:src/app.py:login",
+        "confidence": 1.0,
+        "seed_confidence": 1.0,
+        "reason": "explicit seed provided",
+        "reason_details": [
+          "explicit seed provided"
+        ]
+      }
+    ],
+    "seed_confidence": 1.0,
+    "recent_task_influenced": false,
+    "recommended_action": "edit_code",
+    "recommended_tests": [
+      "Run direct test seed `test:tests/test_app.py:LoginFlowTest.test_login_creates_session`.",
+      "Run direct test seed `test:tests/test_app.py:LoginFlowTest.test_login_rejects_bad_credentials`."
+    ],
+    "build_trust": {
+      "build_mode": "full",
+      "graph_trust": "high",
+      "reason_codes": [
+        "DEFAULT_SAFE_PATH"
+      ],
+      "verification_status": "skipped",
+      "graph_freshness": "fresh",
+      "dependency_fingerprint_status": "not_applicable"
+    },
+    "report_completeness": {
+      "level": "high",
+      "reason": "function_or_routine_seed_with_resolved_context"
+    },
+    "test_signal": {
+      "status": "passed",
+      "tests_run": 2,
+      "test_count_status": "parsed",
+      "tests_passed": true,
+      "coverage_available": true,
+      "affected_tests_found": true,
+      "coverage_relevance": "direct-impact-covered-by-available-coverage",
+      "full_suite": true
+    },
+    "user_summary": "I identified `fn:src/app.py:login` as the main impact seed for src/app.py. It directly links to test:tests/test_app.py:LoginFlowTest.test_login_creates_session, test:tests/test_app.py:LoginFlowTest.test_login_rejects_bad_credentials, rule:auth-session-invariant; next I would Run direct test seed `test:tests/test_app.py:LoginFlowTest.test_login_creates_session`.",
+    "brief": {
+      "selected_seed": "fn:src/app.py:login",
+      "why_this_seed": "seed selected from current context",
+      "seed_confidence": null,
+      "recent_task_influenced": false,
+      "changed_files_summary": [
+        "src/app.py"
+      ],
+      "direct_impact_summary": {
+        "callers": 0,
+        "callees": 3,
+        "tests": 2,
+        "rules": 1
+      },
+      "build_trust_summary": {
+        "build_mode": null,
+        "graph_trust": null,
+        "trust_level": null,
+        "reason_codes": [],
+        "verification_status": null,
+        "graph_freshness": null,
+        "dependency_fingerprint_status": null
+      },
+      "graph_trust": null,
+      "report_completeness": {
+        "level": "high",
+        "reason": "function_or_routine_seed_with_resolved_context"
+      },
+      "test_signal": {
+        "status": "passed",
+        "tests_run": 2,
+        "test_count_status": "parsed",
+        "tests_passed": true,
+        "coverage_available": true,
+        "affected_tests_found": true,
+        "coverage_relevance": "direct-impact-covered-by-available-coverage",
+        "full_suite": true
+      },
+      "top_risks": [
+        "This seed has direct downstream links or governing rules, so side-effect changes need extra care."
+      ],
+      "next_tests": [
+        "Run direct test seed `test:tests/test_app.py:LoginFlowTest.test_login_creates_session`.",
+        "Run direct test seed `test:tests/test_app.py:LoginFlowTest.test_login_rejects_bad_credentials`."
+      ],
+      "key_evidence_paths": [
+        "src/app.py",
+        "tests/test_app.py",
+        "docs/rules/auth-session.md"
+      ],
+      "next_step": "Read the brief report, then edit the code if the selected seed looks right.",
+      "user_summary": "I identified `fn:src/app.py:login` as the main impact seed for src/app.py. It directly links to test:tests/test_app.py:LoginFlowTest.test_login_creates_session, test:tests/test_app.py:LoginFlowTest.test_login_rejects_bad_credentials, rule:auth-session-invariant; next I would Run direct test seed `test:tests/test_app.py:LoginFlowTest.test_login_creates_session`."
+    },
+    "report_path": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpfxlo4fdq\\stage3-copy\\.ai\\codegraph\\reports\\impact-stage3-process.md",
+    "json_report_path": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpfxlo4fdq\\stage3-copy\\.ai\\codegraph\\reports\\impact-stage3-process.json",
+    "suggested_next_step": "Review the updated report, test results, and handoff note."
+  },
+  "machine_outputs": {
+    "context_resolution_path": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpfxlo4fdq\\stage3-copy\\.ai\\codegraph\\context-resolution.json",
+    "next_action_path": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpfxlo4fdq\\stage3-copy\\.ai\\codegraph\\next-action.json"
+  },
+  "brief": {
+    "selected_seed": "fn:src/app.py:login",
+    "why_this_seed": "seed selected from current context",
+    "seed_confidence": null,
+    "recent_task_influenced": false,
+    "changed_files_summary": [
+      "src/app.py"
+    ],
+    "direct_impact_summary": {
+      "callers": 0,
+      "callees": 3,
+      "tests": 2,
+      "rules": 1
+    },
+    "build_trust_summary": {
+      "build_mode": null,
+      "graph_trust": null,
+      "trust_level": null,
+      "reason_codes": [],
+      "verification_status": null,
+      "graph_freshness": null,
+      "dependency_fingerprint_status": null
+    },
+    "graph_trust": null,
+    "report_completeness": {
+      "level": "high",
+      "reason": "function_or_routine_seed_with_resolved_context"
+    },
+    "test_signal": {
+      "status": "passed",
+      "tests_run": 2,
+      "test_count_status": "parsed",
+      "tests_passed": true,
+      "coverage_available": true,
+      "affected_tests_found": true,
+      "coverage_relevance": "direct-impact-covered-by-available-coverage",
+      "full_suite": true
+    },
+    "top_risks": [
+      "This seed has direct downstream links or governing rules, so side-effect changes need extra care."
+    ],
+    "next_tests": [
+      "Run direct test seed `test:tests/test_app.py:LoginFlowTest.test_login_creates_session`.",
+      "Run direct test seed `test:tests/test_app.py:LoginFlowTest.test_login_rejects_bad_credentials`."
+    ],
+    "key_evidence_paths": [
+      "src/app.py",
+      "tests/test_app.py",
+      "docs/rules/auth-session.md"
+    ],
+    "next_step": "Read the brief report, then edit the code if the selected seed looks right.",
+    "user_summary": "I identified `fn:src/app.py:login` as the main impact seed for src/app.py. It directly links to test:tests/test_app.py:LoginFlowTest.test_login_creates_session, test:tests/test_app.py:LoginFlowTest.test_login_rejects_bad_credentials, rule:auth-session-invariant; next I would Run direct test seed `test:tests/test_app.py:LoginFlowTest.test_login_creates_session`."
+  }
+}
+test_after_edit_records_lightweight_process_diffs (test_stage3_workflow.Stage3WorkflowTest.test_after_edit_records_lightweight_process_diffs) ... ok
+{
+  "workspace_root": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpzcgltb_s\\skill-only-copy",
+  "created": [
+    ".code-impact-guardian\\config.json",
+    ".code-impact-guardian\\schema.sql"
+  ],
+  "config_path": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpzcgltb_s\\skill-only-copy\\.code-impact-guardian\\config.json",
+  "schema_path": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpzcgltb_s\\skill-only-copy\\.code-impact-guardian\\schema.sql",
+  "codegraph_dir": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpzcgltb_s\\skill-only-copy\\.ai\\codegraph",
+  "project_profile": "auto",
+  "project_root": ".",
+  "primary_adapter": "auto",
+  "supplemental_adapters": [],
+  "agents_md_path": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpzcgltb_s\\skill-only-copy\\AGENTS.md",
+  "gitignore_path": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpzcgltb_s\\skill-only-copy\\.gitignore",
+  "quickstart_path": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpzcgltb_s\\skill-only-copy\\QUICKSTART.md",
+  "troubleshooting_path": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpzcgltb_s\\skill-only-copy\\TROUBLESHOOTING.md",
+  "consumer_guide_path": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpzcgltb_s\\skill-only-copy\\CONSUMER_GUIDE.md"
+}
+{
+  "workspace_root": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpzcgltb_s\\skill-only-copy",
+  "created": [],
+  "config_path": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpzcgltb_s\\skill-only-copy\\.code-impact-guardian\\config.json",
+  "schema_path": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpzcgltb_s\\skill-only-copy\\.code-impact-guardian\\schema.sql",
+  "codegraph_dir": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpzcgltb_s\\skill-only-copy\\.ai\\codegraph",
+  "project_profile": "auto",
+  "project_root": ".",
+  "primary_adapter": "auto",
+  "supplemental_adapters": [],
+  "agents_md_path": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpzcgltb_s\\skill-only-copy\\AGENTS.md",
+  "gitignore_path": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpzcgltb_s\\skill-only-copy\\.gitignore",
+  "quickstart_path": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpzcgltb_s\\skill-only-copy\\QUICKSTART.md",
+  "troubleshooting_path": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpzcgltb_s\\skill-only-copy\\TROUBLESHOOTING.md",
+  "consumer_guide_path": "C:\\Users\\6\\AppData\\Local\\Temp\\tmpzcgltb_s\\skill-only-copy\\CONSUMER_GUIDE.md"
+}
+test_init_and_doctor_work_for_skill_only_copy (test_stage3_workflow.Stage3WorkflowTest.test_init_and_doctor_work_for_skill_only_copy) ... ok
+test_node_cli_profile_runs_tsjs_flow_with_real_coverage (test_stage4_workflow.Stage4WorkflowTest.test_node_cli_profile_runs_tsjs_flow_with_real_coverage) ... ok
+test_react_vite_profile_parses_jsx_family_and_keeps_full_flow (test_stage4_workflow.Stage4WorkflowTest.test_react_vite_profile_parses_jsx_family_and_keeps_full_flow) ... ok
+test_sql_postgres_minimal_runs_as_supplemental_adapter (test_stage5_workflow.Stage5WorkflowTest.test_sql_postgres_minimal_runs_as_supplemental_adapter) ... ok
+test_tsjs_sql_compound_merges_primary_and_supplemental_graph (test_stage5_workflow.Stage5WorkflowTest.test_tsjs_sql_compound_merges_primary_and_supplemental_graph) ... ok
+OVERALL PASS
+PASS config .code-impact-guardian\config.json
+PASS schema .code-impact-guardian\schema.sql
+PASS project_root C:\Users\6\AppData\Local\Temp\tmpe8nxhy4n\python-skill-only
+PASS detected_adapter python
+PASS profile python-basic (configured, confidence=1.00)
+PASS git repository not initialized yet; evidence will use UNCOMMITTED markers until first commit
+PASS python runtime available
+PASS coverage.py command available
+PASS doc_source local_markdown found 1 local markdown document(s)
+OVERALL PASS
+PASS config .code-impact-guardian\config.json
+PASS schema .code-impact-guardian\schema.sql
+PASS project_root C:\Users\6\AppData\Local\Temp\tmpe8nxhy4n\tsjs-skill-only
+PASS detected_adapter tsjs
+PASS profile node-cli (configured, confidence=1.00)
+PASS git repository not initialized yet; evidence will use UNCOMMITTED markers until first commit
+PASS node runtime available
+PASS package.json found
+PASS package manager suggestion: npm
+PASS doc_source local_markdown found 1 local markdown document(s)
+test_export_skill_and_skill_only_python_tsjs_repos_work (test_stage6_workflow.Stage6WorkflowTest.test_export_skill_and_skill_only_python_tsjs_repos_work) ... ok
+test_structured_error_logging_status_and_recovery_artifacts (test_stage6_workflow.Stage6WorkflowTest.test_structured_error_logging_status_and_recovery_artifacts) ... ok
+test_single_folder_setup_analyze_finish_for_python_tsjs_sql_and_generic (test_stage7_workflow.Stage7WorkflowTest.test_single_folder_setup_analyze_finish_for_python_tsjs_sql_and_generic) ... ok
+test_status_handoff_and_structured_recovery_are_more_actionable (test_stage7_workflow.Stage7WorkflowTest.test_status_handoff_and_structured_recovery_are_more_actionable) ... ok
+test_daily_driver_analyze_finish_prefers_brief_and_smarter_seed_selection (test_stage8_workflow.Stage8WorkflowTest.test_daily_driver_analyze_finish_prefers_brief_and_smarter_seed_selection) ... ok
+test_incremental_reuse_and_fallback_daily_flow (test_stage8_workflow.Stage8WorkflowTest.test_incremental_reuse_and_fallback_daily_flow) ... ok
+test_react_tsx_and_tsjs_sql_flows_gain_daily_driver_metadata (test_stage8_workflow.Stage8WorkflowTest.test_react_tsx_and_tsjs_sql_flows_gain_daily_driver_metadata) ... ok
+test_benchmark_repos_cover_tsjs_react_sql_and_generated_noise (test_stage9_workflow.Stage9WorkflowTest.test_benchmark_repos_cover_tsjs_react_sql_and_generated_noise) ... ok
+test_context_inference_and_finish_reduce_manual_inputs (test_stage9_workflow.Stage9WorkflowTest.test_context_inference_and_finish_reduce_manual_inputs) ... ok
+test_patch_file_ambiguity_surfaces_candidates_and_recovery_files (test_stage9_workflow.Stage9WorkflowTest.test_patch_file_ambiguity_surfaces_candidates_and_recovery_files) ... ok
+
+----------------------------------------------------------------------
+Ran 38 tests in 131.496s
+
+OK

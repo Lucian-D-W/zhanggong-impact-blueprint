@@ -24,7 +24,7 @@ from adapters import (
 )
 from doc_sources import collect_rule_documents_from_sources
 from incremental_refresh import load_manifest, refresh_plan, save_manifest
-from runtime_support import CIGUserError
+from runtime_support import CIGUserError, shell_quote_path
 from trust_policy import apply_shadow_verification_result, build_decision
 
 
@@ -228,7 +228,7 @@ def make_evidence(
 
 
 @contextlib.contextmanager
-def build_lock(lock_path: pathlib.Path):
+def build_lock(lock_path: pathlib.Path, workspace_root: pathlib.Path):
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     fd: int | None = None
     try:
@@ -240,8 +240,8 @@ def build_lock(lock_path: pathlib.Path):
             retryable=True,
             suggested_next_step="Check the current build status and only remove the lock after confirming no active build process is running.",
             recovery_commands=[
-                "python .agents/skills/code-impact-guardian/cig.py status --workspace-root .",
-                "rm .ai/codegraph/build.lock",
+                f"python .agents/skills/code-impact-guardian/cig.py status --workspace-root {shell_quote_path(workspace_root)}",
+                f"rm {shell_quote_path(lock_path)}",
             ],
         ) from exc
     try:
@@ -1323,7 +1323,7 @@ def _build_graph_unlocked(*, workspace_root: pathlib.Path, config_path: pathlib.
 
 def build_graph(*, workspace_root: pathlib.Path, config_path: pathlib.Path, changed_files: list[str] | None = None, force_full: bool = False) -> dict:
     lock_path = workspace_root / ".ai" / "codegraph" / "build.lock"
-    with build_lock(lock_path):
+    with build_lock(lock_path, workspace_root):
         return _build_graph_unlocked(
             workspace_root=workspace_root,
             config_path=config_path,

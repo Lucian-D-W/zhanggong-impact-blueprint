@@ -21,8 +21,9 @@ from adapters import SQL_POSTGRES_ADAPTER, configured_supplemental_adapters, det
 from consumer_install import ensure_agents_md as ensure_consumer_agents_md, ensure_consumer_docs, ensure_gitignore as ensure_consumer_gitignore, export_single_folder  # noqa: E402
 from doc_sources import doc_source_doctor_status  # noqa: E402
 from profiles import AUTO_PROFILE, PROFILE_PRESETS, apply_profile_preset, detect_project_profile, package_json_data, profile_coverage_adapter, profile_test_command  # noqa: E402
-from recent_task import auto_task_id, latest_seed_candidates, read_last_task, seed_candidates_for_changed_files, utc_now as recent_task_utc_now, write_last_task  # noqa: E402
+from recent_task import auto_task_id, latest_seed_candidates, read_last_task, utc_now as recent_task_utc_now, write_last_task  # noqa: E402
 from runtime_support import CIGUserError, ensure_runtime_dirs, error_payload_from_exception, event_payload, latest_success_timestamp, normalize_output_paths, read_json, read_jsonl, recent_command_status, relative_path_string, runtime_paths, write_error, write_event, write_handoff  # noqa: E402
+from seed_ranker import rank_seed_candidates  # noqa: E402
 
 
 DEFAULT_CONFIG = {
@@ -861,9 +862,10 @@ def status_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
     events = read_jsonl(paths["events"])
     last_error = read_json(paths["last_error"])
     last_task = read_last_task(workspace_root)
-    last_success = latest_success_timestamp(events)
     last_error_timestamp = (last_error or {}).get("timestamp")
-    has_unhandled_error = bool(last_error_timestamp and (not last_success or last_error_timestamp > last_success))
+    last_success_index = max((index for index, item in enumerate(events) if item.get("status") == "success"), default=-1)
+    last_error_index = max((index for index, item in enumerate(events) if item.get("status") == "failed"), default=-1)
+    has_unhandled_error = bool(last_error_timestamp and last_error_index >= last_success_index)
     recent_success = next((item for item in reversed(events) if item.get("status") == "success"), None)
     recent_failure = next((item for item in reversed(events) if item.get("status") == "failed"), None)
     latest_report_path = None
@@ -903,6 +905,7 @@ def status_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
         next_step = "Run `cig.py setup --project-root .` to initialize the repo-local workflow files."
 
     return {
+        "mode": "brief",
         "config_path": str(config_path),
         "config_exists": config_exists,
         "current": {
@@ -928,6 +931,9 @@ def status_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
         "available_seed_count": available_seed_count or 0,
         "has_unhandled_error": has_unhandled_error,
         "handoff_path": str(paths["handoff_latest"]) if paths["handoff_latest"].exists() else None,
+        "seed": (last_task or {}).get("seed"),
+        "fallback_used": bool((last_task or {}).get("fallback_used")),
+        "build_mode": (last_task or {}).get("build_mode"),
         "next_step": next_step,
     }
 
@@ -947,28 +953,68 @@ def resolve_seed_selection(
     config_path: pathlib.Path,
     explicit_seed: str | None,
     changed_files: list[str],
+    changed_lines: list[str],
     allow_fallback: bool,
 ) -> tuple[str, dict]:
     if explicit_seed:
-        return explicit_seed, {"mode": "explicit", "candidates": [explicit_seed]}
+        return explicit_seed, {
+            "mode": "explicit",
+            "confidence": 1.0,
+            "reason": "explicit seed provided",
+            "top_candidates": [{"node_id": explicit_seed, "confidence": 1.0, "reason": "explicit seed provided"}],
+            "fallback_used": False,
+        }
 
-    candidates = seed_candidates_for_changed_files(workspace_root, config_path, changed_files)
-    if not candidates:
-        candidates = latest_seed_candidates(workspace_root, config_path)
-    if not candidates:
+    ranked = rank_seed_candidates(
+        workspace_root=workspace_root,
+        config_path=config_path,
+        changed_files=changed_files,
+        changed_lines=changed_lines,
+    )
+    top_candidates = ranked.get("top_candidates", [])
+    if ranked.get("selected_seed"):
+        selected = ranked["selected_seed"]
+        selected_candidate = next((item for item in top_candidates if item["node_id"] == selected), None)
+        fallback_used = bool(selected_candidate and selected_candidate.get("kind") == "file")
+        mode = "auto-ranked-file" if fallback_used else "auto-ranked"
+        if len(top_candidates) == 1 and not changed_lines and not fallback_used:
+            mode = "auto-single"
+        return selected, {
+            "mode": mode,
+            "confidence": ranked.get("confidence", 0.0),
+            "reason": ranked.get("reason", "highest ranked candidate"),
+            "top_candidates": top_candidates,
+            "fallback_used": fallback_used,
+        }
+
+    candidates = latest_seed_candidates(workspace_root, config_path)
+    if not top_candidates and not candidates:
         raise CIGUserError(
             "SEED_NOT_FOUND",
             "No seed candidates were found for the current graph.",
             retryable=True,
             suggested_next_step="Run `cig.py build` first, then rerun `cig.py seeds` or `cig.py analyze --changed-file <path>`.",
         )
-    if len(candidates) == 1:
-        return candidates[0]["node_id"], {"mode": "auto-single", "candidates": [candidate_brief(candidates[0])]}
+    if not top_candidates and len(candidates) == 1:
+        return candidates[0]["node_id"], {
+            "mode": "auto-single",
+            "confidence": 0.78,
+            "reason": "single candidate available in current graph",
+            "top_candidates": [candidate_brief(candidates[0])],
+            "fallback_used": candidates[0].get("kind") == "file",
+        }
     if allow_fallback:
-        file_candidates = [item for item in candidates if item.get("kind") == "file"]
+        file_candidates = [item for item in (top_candidates or candidates[:3]) if item.get("kind") == "file"]
         if len(file_candidates) == 1:
-            return file_candidates[0]["node_id"], {"mode": "auto-fallback-file", "candidates": [candidate_brief(file_candidates[0])]}
-    shortlist = [candidate_brief(item) for item in candidates[:5]]
+            selected = file_candidates[0]
+            return selected["node_id"], {
+                "mode": "auto-fallback-file",
+                "confidence": selected.get("confidence", 0.65),
+                "reason": selected.get("reason", "generic fallback file candidate"),
+                "top_candidates": top_candidates or [candidate_brief(selected)],
+                "fallback_used": True,
+            }
+    shortlist = top_candidates or [candidate_brief(item) for item in candidates[:3]]
     suggestions = ", ".join(item["node_id"] for item in shortlist)
     raise CIGUserError(
         "SEED_SELECTION_REQUIRED",
@@ -989,6 +1035,9 @@ def persist_last_task(
     context: dict,
     report_path: str | None = None,
     status: str = "success",
+    seed_selection: dict | None = None,
+    build_mode: str | None = None,
+    fallback_used: bool = False,
 ) -> str:
     path = write_last_task(
         workspace_root,
@@ -1005,6 +1054,9 @@ def persist_last_task(
             "supplemental_adapters": context.get("supplemental_adapters", []),
             "report_path": report_path,
             "status": status,
+            "seed_selection": seed_selection or {},
+            "build_mode": build_mode,
+            "fallback_used": fallback_used,
         },
     )
     return str(path)
@@ -1017,16 +1069,23 @@ def run_analyze_command(
     task_id: str | None,
     seed: str | None,
     changed_files: list[str],
+    changed_lines: list[str],
     max_depth: int | None,
     allow_fallback: bool,
+    report_mode: str,
 ) -> dict:
-    build_payload = build_graph.build_graph(workspace_root=workspace_root, config_path=config_path)
+    build_payload = build_graph.build_graph(
+        workspace_root=workspace_root,
+        config_path=config_path,
+        changed_files=changed_files,
+    )
     detect = detect_payload(workspace_root, config_path)
     selected_seed, seed_selection = resolve_seed_selection(
         workspace_root=workspace_root,
         config_path=config_path,
         explicit_seed=seed,
         changed_files=changed_files,
+        changed_lines=changed_lines,
         allow_fallback=allow_fallback,
     )
     resolved_task_id = task_id or auto_task_id(seed=selected_seed, changed_files=changed_files, prefix="analyze")
@@ -1036,6 +1095,8 @@ def run_analyze_command(
         task_id=resolved_task_id,
         seed=selected_seed,
         max_depth=max_depth,
+        mode=report_mode,
+        changed_files=changed_files,
     )
     context = command_context(workspace_root, config_path)
     last_task_path_str = persist_last_task(
@@ -1047,12 +1108,17 @@ def run_analyze_command(
         config_path=config_path,
         context=context,
         report_path=report_payload.get("report_path"),
+        seed_selection=seed_selection,
+        build_mode=build_payload.get("build_mode"),
+        fallback_used=seed_selection.get("fallback_used", False),
     )
     return {
         "task_id": resolved_task_id,
         "seed": selected_seed,
         "changed_files": changed_files,
+        "changed_lines": changed_lines,
         "seed_selection": seed_selection,
+        "fallback_used": seed_selection.get("fallback_used", False),
         "detect": detect,
         "build": build_payload,
         "report": report_payload,
@@ -1101,6 +1167,7 @@ def finalize_after_edit(
     seed: str,
     changed_files: list[str],
     command_name: str,
+    report_mode: str,
 ) -> dict:
     payload = after_edit_update.after_edit_update(
         workspace_root=workspace_root,
@@ -1108,6 +1175,7 @@ def finalize_after_edit(
         task_id=task_id,
         seed=seed,
         changed_files=changed_files,
+        report_mode=report_mode,
     )
     context = command_context(workspace_root, config_path)
     if payload["tests"]["status"] == "failed":
@@ -1132,6 +1200,9 @@ def finalize_after_edit(
             context=context,
             report_path=payload["report"]["report_path"],
             status="failed",
+            seed_selection=(read_last_task(workspace_root) or {}).get("seed_selection"),
+            build_mode=payload.get("graph", {}).get("build_mode"),
+            fallback_used=bool((read_last_task(workspace_root) or {}).get("fallback_used")),
         )
         raise CIGUserError(
             "TEST_COMMAND_FAILED",
@@ -1169,6 +1240,9 @@ def finalize_after_edit(
         context=context,
         report_path=payload["report"]["report_path"],
         status="success",
+        seed_selection=(read_last_task(workspace_root) or {}).get("seed_selection"),
+        build_mode=payload.get("graph", {}).get("build_mode"),
+        fallback_used=bool((read_last_task(workspace_root) or {}).get("fallback_used")),
     )
     payload["task_id"] = task_id
     payload["seed"] = seed
@@ -1259,6 +1333,14 @@ def success_next_step(command_name: str) -> str:
     return mapping.get(command_name, "Continue with the next workflow step.")
 
 
+def requested_report_mode(args, default: str = "brief") -> str:
+    if getattr(args, "full", False):
+        return "full"
+    if getattr(args, "brief", False):
+        return "brief"
+    return default
+
+
 def output_paths_for_command(command_name: str, workspace_root: pathlib.Path, payload: dict | pathlib.Path | None, config_path: pathlib.Path | None) -> dict:
     if command_name == "init":
         return {
@@ -1287,21 +1369,28 @@ def output_paths_for_command(command_name: str, workspace_root: pathlib.Path, pa
             "build_log_path": str(build_graph.graph_paths(workspace_root, build_graph.load_config(config_path))["build_log_path"]) if config_path and config_path.exists() else None,
         }
     if command_name == "report" and isinstance(payload, dict):
-        return {"report_path": payload.get("report_path"), "mermaid_path": payload.get("mermaid_path")}
+        return {
+            "report_path": payload.get("report_path"),
+            "json_report_path": payload.get("json_report_path"),
+            "mermaid_path": payload.get("mermaid_path"),
+        }
     if command_name == "analyze" and isinstance(payload, dict):
         return {
             "report_path": payload.get("report", {}).get("report_path"),
+            "json_report_path": payload.get("report", {}).get("json_report_path"),
             "last_task_path": payload.get("last_task_path"),
         }
     if command_name == "after-edit" and isinstance(payload, dict):
         return {
             "report_path": payload.get("report", {}).get("report_path"),
+            "json_report_path": payload.get("report", {}).get("json_report_path"),
             "test_results_path": str((workspace_root / ".ai" / "codegraph" / "test-results.json")),
             "handoff_path": str(runtime_paths(workspace_root)["handoff_latest"]),
         }
     if command_name == "finish" and isinstance(payload, dict):
         return {
             "report_path": payload.get("report", {}).get("report_path"),
+            "json_report_path": payload.get("report", {}).get("json_report_path"),
             "test_results_path": str((workspace_root / ".ai" / "codegraph" / "test-results.json")),
             "handoff_path": str(runtime_paths(workspace_root)["handoff_latest"]),
             "last_task_path": payload.get("last_task_path"),
@@ -1336,6 +1425,8 @@ def main() -> int:
     setup_parser.add_argument("--profile", default=None)
     setup_parser.add_argument("--project-root", default=None)
     setup_parser.add_argument("--with", dest="with_adapters", action="append", default=[])
+    setup_parser.add_argument("--brief", action="store_true", help="Prefer compact output")
+    setup_parser.add_argument("--full", action="store_true", help="Prefer fuller output")
 
     doctor_parser = subparsers.add_parser("doctor", help="Run a lightweight workspace health check")
     doctor_parser.add_argument("--workspace-root", default=".")
@@ -1350,6 +1441,8 @@ def main() -> int:
     build_parser = subparsers.add_parser("build", help="Build or refresh the graph")
     build_parser.add_argument("--workspace-root", default=".")
     build_parser.add_argument("--config", default=".code-impact-guardian/config.json")
+    build_parser.add_argument("--changed-file", action="append", default=[])
+    build_parser.add_argument("--full-rebuild", action="store_true")
 
     seeds_parser = subparsers.add_parser("seeds", help="List current seeds")
     seeds_parser.add_argument("--workspace-root", default=".")
@@ -1361,8 +1454,11 @@ def main() -> int:
     report_parser.add_argument("--task-id", default=None)
     report_parser.add_argument("--seed", default=None)
     report_parser.add_argument("--changed-file", action="append", default=[])
+    report_parser.add_argument("--changed-line", action="append", default=[])
     report_parser.add_argument("--allow-fallback", action="store_true")
     report_parser.add_argument("--max-depth", type=int, default=None)
+    report_parser.add_argument("--brief", action="store_true")
+    report_parser.add_argument("--full", action="store_true")
 
     analyze_parser = subparsers.add_parser("analyze", help="High-level build + report command with automatic context")
     analyze_parser.add_argument("--workspace-root", default=".")
@@ -1370,8 +1466,11 @@ def main() -> int:
     analyze_parser.add_argument("--task-id", default=None)
     analyze_parser.add_argument("--seed", default=None)
     analyze_parser.add_argument("--changed-file", action="append", default=[])
+    analyze_parser.add_argument("--changed-line", action="append", default=[])
     analyze_parser.add_argument("--max-depth", type=int, default=None)
     analyze_parser.add_argument("--allow-fallback", action="store_true")
+    analyze_parser.add_argument("--brief", action="store_true")
+    analyze_parser.add_argument("--full", action="store_true")
 
     after_parser = subparsers.add_parser("after-edit", help="Refresh graph, report, evidence, and tests after an edit")
     after_parser.add_argument("--workspace-root", default=".")
@@ -1388,6 +1487,8 @@ def main() -> int:
     finish_parser.add_argument("--seed", default=None)
     finish_parser.add_argument("--changed-file", action="append", default=[])
     finish_parser.add_argument("--allow-fallback", action="store_true")
+    finish_parser.add_argument("--brief", action="store_true")
+    finish_parser.add_argument("--full", action="store_true")
 
     demo_parser = subparsers.add_parser("demo", help="Run a fixture end-to-end demo")
     demo_parser.add_argument("--fixture", choices=["python_minimal", "tsjs_minimal", "generic_minimal", "tsjs_node_cli", "tsx_react_vite", "sql_pg_minimal", "tsjs_pg_compound"], default="python_minimal")
@@ -1401,6 +1502,8 @@ def main() -> int:
     status_parser = subparsers.add_parser("status", help="Show current config, recent runs, and handoff state")
     status_parser.add_argument("--workspace-root", default=".")
     status_parser.add_argument("--config", default=".code-impact-guardian/config.json")
+    status_parser.add_argument("--brief", action="store_true")
+    status_parser.add_argument("--full", action="store_true")
 
     args = parser.parse_args()
     workspace_root = pathlib.Path(getattr(args, "workspace_root", ".")).resolve()
@@ -1582,17 +1685,27 @@ def main() -> int:
             payload["fallback_allowed"] = bool(getattr(args, "allow_fallback", False))
             payload["fallback_used"] = bool(payload["detected_adapter"] == "generic" and getattr(args, "allow_fallback", False))
         elif args.command == "build":
-            payload = build_graph.build_graph(workspace_root=workspace_root, config_path=config_path)
+            payload = build_graph.build_graph(
+                workspace_root=workspace_root,
+                config_path=config_path,
+                changed_files=args.changed_file,
+                force_full=bool(args.full_rebuild),
+            )
         elif args.command == "seeds":
             payload = list_seeds.list_seeds(workspace_root=workspace_root, config_path=config_path)
         elif args.command == "report":
             if args.changed_file:
-                build_graph.build_graph(workspace_root=workspace_root, config_path=config_path)
+                build_graph.build_graph(
+                    workspace_root=workspace_root,
+                    config_path=config_path,
+                    changed_files=args.changed_file,
+                )
             selected_seed, seed_selection = resolve_seed_selection(
                 workspace_root=workspace_root,
                 config_path=config_path,
                 explicit_seed=args.seed,
                 changed_files=args.changed_file,
+                changed_lines=args.changed_line,
                 allow_fallback=args.allow_fallback,
             )
             resolved_task_id = args.task_id or auto_task_id(seed=selected_seed, changed_files=args.changed_file, prefix="report")
@@ -1602,6 +1715,8 @@ def main() -> int:
                 task_id=resolved_task_id,
                 seed=selected_seed,
                 max_depth=args.max_depth,
+                mode=requested_report_mode(args, "brief"),
+                changed_files=args.changed_file,
             )
             persist_last_task(
                 workspace_root,
@@ -1612,6 +1727,9 @@ def main() -> int:
                 config_path=config_path,
                 context=context,
                 report_path=payload.get("report_path"),
+                seed_selection=seed_selection,
+                build_mode=None,
+                fallback_used=seed_selection.get("fallback_used", False),
             )
             payload["task_id"] = resolved_task_id
             payload["seed"] = selected_seed
@@ -1625,8 +1743,10 @@ def main() -> int:
                 task_id=args.task_id,
                 seed=args.seed,
                 changed_files=args.changed_file,
+                changed_lines=args.changed_line,
                 max_depth=args.max_depth,
                 allow_fallback=args.allow_fallback,
+                report_mode=requested_report_mode(args, "brief"),
             )
             task_id = payload["task_id"]
             seed = payload["seed"]
@@ -1646,6 +1766,7 @@ def main() -> int:
                 seed=resolved_seed,
                 changed_files=resolved_changed_files,
                 command_name="after-edit",
+                report_mode="brief",
             )
             task_id = resolved_task_id
             seed = resolved_seed
@@ -1665,6 +1786,7 @@ def main() -> int:
                 seed=resolved_seed,
                 changed_files=resolved_changed_files,
                 command_name="finish",
+                report_mode=requested_report_mode(args, "brief"),
             )
             task_id = resolved_task_id
             seed = resolved_seed

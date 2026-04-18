@@ -21,6 +21,7 @@ from adapters import (
     rule_node_id,
 )
 from doc_sources import collect_rule_documents_from_sources
+from incremental_refresh import load_manifest, refresh_plan, save_manifest
 
 
 @dataclass
@@ -731,6 +732,7 @@ def augment_sql_hint_links(
     nodes: dict[str, Node],
     edges: dict[tuple[str, str, str], Edge],
     evidence_rows: dict[str, Evidence],
+    target_node_ids: set[str] | None = None,
 ) -> None:
     sql_index: dict[str, list[str]] = {}
     for node in nodes.values():
@@ -745,6 +747,8 @@ def augment_sql_hint_links(
 
     for node in nodes.values():
         if node.kind != "function":
+            continue
+        if target_node_ids and node.node_id not in target_node_ids:
             continue
         attrs = attrs_dict(node.attrs_json)
         if "sql_kind" in attrs:
@@ -784,7 +788,121 @@ def augment_sql_hint_links(
         node.attrs_json = json.dumps(attrs, ensure_ascii=False)
 
 
-def build_graph(*, workspace_root: pathlib.Path, config_path: pathlib.Path) -> dict:
+def fetch_existing_nodes(conn: sqlite3.Connection) -> dict[str, Node]:
+    rows = conn.execute(
+        "SELECT node_id, kind, name, path, symbol, start_line, end_line, attrs_json FROM nodes"
+    ).fetchall()
+    return {
+        node_id: Node(
+            node_id=node_id,
+            kind=kind,
+            name=name,
+            path=path,
+            symbol=symbol,
+            start_line=start_line,
+            end_line=end_line,
+            attrs_json=attrs_json or "{}",
+        )
+        for node_id, kind, name, path, symbol, start_line, end_line, attrs_json in rows
+    }
+
+
+def node_ids_for_paths(conn: sqlite3.Connection, file_paths: list[str]) -> list[str]:
+    if not file_paths:
+        return []
+    placeholders = ",".join("?" for _ in file_paths)
+    rows = conn.execute(
+        f"SELECT node_id FROM nodes WHERE path IN ({placeholders})",
+        file_paths,
+    ).fetchall()
+    return [row[0] for row in rows]
+
+
+def delete_paths_from_graph(conn: sqlite3.Connection, file_paths: list[str]) -> None:
+    if not file_paths:
+        return
+    node_ids = node_ids_for_paths(conn, file_paths)
+    if node_ids:
+        placeholders = ",".join("?" for _ in node_ids)
+        conn.execute(f"DELETE FROM edges WHERE src_id IN ({placeholders}) OR dst_id IN ({placeholders})", node_ids * 2)
+        conn.execute(f"DELETE FROM nodes WHERE node_id IN ({placeholders})", node_ids)
+    path_placeholders = ",".join("?" for _ in file_paths)
+    conn.execute(f"DELETE FROM evidence WHERE file_path IN ({path_placeholders})", file_paths)
+    conn.execute(f"DELETE FROM rule_documents WHERE markdown_path IN ({path_placeholders})", file_paths)
+
+
+def function_and_test_ids_by_path(conn: sqlite3.Connection, file_path: str) -> set[str]:
+    rows = conn.execute(
+        "SELECT node_id FROM nodes WHERE path = ? AND kind IN ('function', 'test')",
+        (file_path,),
+    ).fetchall()
+    return {row[0] for row in rows}
+
+
+def has_external_incoming_edges(conn: sqlite3.Connection, file_paths: list[str]) -> bool:
+    if not file_paths:
+        return False
+    placeholders = ",".join("?" for _ in file_paths)
+    row = conn.execute(
+        f"""
+        SELECT COUNT(*)
+        FROM edges e
+        JOIN nodes src ON src.node_id = e.src_id
+        JOIN nodes dst ON dst.node_id = e.dst_id
+        WHERE dst.path IN ({placeholders})
+          AND src.path NOT IN ({placeholders})
+          AND e.edge_type IN ('CALLS', 'COVERS', 'GOVERNS', 'IMPORTS')
+        """,
+        file_paths + file_paths,
+    ).fetchone()
+    return bool(row and row[0])
+
+
+def summary_from_db(
+    *,
+    conn: sqlite3.Connection,
+    workspace_root: pathlib.Path,
+    project_root: pathlib.Path,
+    git: dict,
+    config: dict,
+    adapter_name: str,
+    profile_name: str,
+    supplemental_adapters: list[str],
+    build_mode: str,
+    changed_files: list[str],
+    stale_reason: str,
+    warnings: list[str] | None = None,
+) -> dict:
+    node_count = conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
+    edge_count = conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
+    evidence_count = conn.execute("SELECT COUNT(*) FROM evidence").fetchone()[0]
+    available_function_seeds = [row[0] for row in conn.execute("SELECT node_id FROM nodes WHERE kind = 'function' ORDER BY node_id").fetchall()]
+    available_file_seeds = [row[0] for row in conn.execute("SELECT node_id FROM nodes WHERE kind = 'file' ORDER BY node_id").fetchall()]
+    return {
+        "timestamp": utc_now(),
+        "workspace_root": str(workspace_root),
+        "project_root": str(project_root),
+        "git_sha": git["git_sha"],
+        "node_count": node_count,
+        "edge_count": edge_count,
+        "evidence_count": evidence_count,
+        "configured_language_adapter": config.get("language_adapter", "auto"),
+        "configured_primary_adapter": config.get("primary_adapter", config.get("language_adapter", "auto")),
+        "detected_adapter": adapter_name,
+        "primary_adapter": adapter_name,
+        "detected_profile": profile_name,
+        "supplemental_adapters_configured": configured_supplemental_adapters(config),
+        "supplemental_adapters_detected": supplemental_adapters,
+        "available_function_seeds": available_function_seeds,
+        "available_file_seeds": available_file_seeds,
+        "build_mode": build_mode,
+        "changed_files": changed_files,
+        "stale_reason": stale_reason,
+        "warnings": warnings or [],
+    }
+
+
+def build_graph(*, workspace_root: pathlib.Path, config_path: pathlib.Path, changed_files: list[str] | None = None, force_full: bool = False) -> dict:
     config = load_config(config_path)
     paths = graph_paths(workspace_root, config)
     paths["report_dir"].mkdir(parents=True, exist_ok=True)
@@ -795,14 +913,129 @@ def build_graph(*, workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
     adapter_name = detect_language_adapter(project_root, config)
     supplemental_adapters = detect_supplemental_adapters(project_root, config)
     profile_name = detect_project_profile_name(project_root, config, adapter_name)
+    warnings: list[str] = []
+    plan = refresh_plan(
+        workspace_root=workspace_root,
+        project_root=project_root,
+        config=config,
+        changed_files=changed_files,
+    )
+    if force_full:
+        plan["build_mode"] = "full"
+        plan["reason"] = "forced full rebuild"
+    changed_files = [item.replace("\\", "/") for item in plan.get("changed_files", [])]
+    adapter_order = [adapter_name, *supplemental_adapters]
+
+    if plan["build_mode"] == "reused" and paths["db_path"].exists():
+        with sqlite3.connect(paths["db_path"]) as conn:
+            summary = summary_from_db(
+                conn=conn,
+                workspace_root=workspace_root,
+                project_root=project_root,
+                git=git,
+                config=config,
+                adapter_name=adapter_name,
+                profile_name=profile_name,
+                supplemental_adapters=supplemental_adapters,
+                build_mode="reused",
+                changed_files=[],
+                stale_reason=plan["reason"],
+                warnings=warnings,
+            )
+        save_manifest(workspace_root, {"timestamp": utc_now(), "files": plan["files"], "summary": summary})
+        with paths["build_log_path"].open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(summary, ensure_ascii=False) + "\n")
+        return summary
+
+    if plan["build_mode"] == "incremental" and paths["db_path"].exists():
+        try:
+            partial_nodes: dict[str, Node] = {}
+            partial_edges: dict[tuple[str, str, str], Edge] = {}
+            partial_evidence: dict[str, Evidence] = {}
+            with sqlite3.connect(paths["db_path"]) as conn:
+                if has_external_incoming_edges(conn, changed_files):
+                    raise RuntimeError("external direct edges target the changed files")
+                existing_nodes = fetch_existing_nodes(conn)
+                before_ids_by_path = {file_path: function_and_test_ids_by_path(conn, file_path) for file_path in changed_files}
+
+            for active_adapter in adapter_order:
+                adapter_graph = collect_adapter_graph(project_root, config, active_adapter, include_files=changed_files)
+                nodes, edges, evidence_rows = adapter_graph_to_rows(
+                    workspace_root=workspace_root,
+                    git=git,
+                    adapter_name=active_adapter,
+                    profile_name=profile_name,
+                    adapter_graph=adapter_graph,
+                )
+                for node in nodes:
+                    partial_nodes[node.node_id] = node
+                for edge in edges:
+                    partial_edges[(edge.src_id, edge.edge_type, edge.dst_id)] = edge
+                for evidence in evidence_rows:
+                    partial_evidence[evidence.evidence_id] = evidence
+
+            for file_path in changed_files:
+                before_ids = before_ids_by_path.get(file_path, set())
+                after_ids = {
+                    node.node_id
+                    for node in partial_nodes.values()
+                    if node.path == file_path and node.kind in {"function", "test"}
+                }
+                if before_ids and before_ids != after_ids:
+                    raise RuntimeError(f"symbol set changed for {file_path}")
+
+            combined_nodes = {node_id: node for node_id, node in existing_nodes.items() if node.path not in set(changed_files)}
+            combined_nodes.update(partial_nodes)
+            augment_sql_hint_links(
+                workspace_root=workspace_root,
+                git=git,
+                nodes=combined_nodes,
+                edges=partial_edges,
+                evidence_rows=partial_evidence,
+                target_node_ids=set(partial_nodes),
+            )
+            partial_nodes = {node_id: node for node_id, node in combined_nodes.items() if node.path in set(changed_files)}
+
+            with sqlite3.connect(paths["db_path"]) as conn:
+                delete_paths_from_graph(conn, changed_files)
+                upsert_nodes(conn, list(partial_nodes.values()))
+                upsert_evidence(conn, list(partial_evidence.values()))
+                upsert_edges(conn, list(partial_edges.values()))
+                conn.commit()
+                summary = summary_from_db(
+                    conn=conn,
+                    workspace_root=workspace_root,
+                    project_root=project_root,
+                    git=git,
+                    config=config,
+                    adapter_name=adapter_name,
+                    profile_name=profile_name,
+                    supplemental_adapters=supplemental_adapters,
+                    build_mode="incremental",
+                    changed_files=changed_files,
+                    stale_reason=plan["reason"],
+                    warnings=warnings,
+                )
+            save_manifest(workspace_root, {"timestamp": utc_now(), "files": plan["files"], "summary": summary})
+            with paths["build_log_path"].open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(summary, ensure_ascii=False) + "\n")
+            return summary
+        except Exception as exc:
+            warnings.append(f"incremental_refresh_fallback: {exc}")
 
     all_nodes: dict[str, Node] = {}
     all_edges: dict[tuple[str, str, str], Edge] = {}
     all_evidence: dict[str, Evidence] = {}
+    rule_docs: list[tuple[str, str, str, str]] = []
 
-    adapter_order = [adapter_name, *supplemental_adapters]
     for active_adapter in adapter_order:
-        adapter_graph = collect_adapter_graph(project_root, config, active_adapter)
+        try:
+            adapter_graph = collect_adapter_graph(project_root, config, active_adapter)
+        except Exception as exc:
+            if active_adapter != adapter_name:
+                warnings.append(f"supplemental {active_adapter} failed and was skipped: {exc}")
+                continue
+            raise
         nodes, edges, evidence_rows = adapter_graph_to_rows(
             workspace_root=workspace_root,
             git=git,
@@ -847,25 +1080,22 @@ def build_graph(*, workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
         upsert_edges(conn, list(all_edges.values()))
         upsert_rule_documents(conn, rule_docs)
         conn.commit()
+        summary = summary_from_db(
+            conn=conn,
+            workspace_root=workspace_root,
+            project_root=project_root,
+            git=git,
+            config=config,
+            adapter_name=adapter_name,
+            profile_name=profile_name,
+            supplemental_adapters=supplemental_adapters,
+            build_mode="full",
+            changed_files=changed_files,
+            stale_reason=plan["reason"],
+            warnings=warnings,
+        )
 
-    summary = {
-        "timestamp": utc_now(),
-        "workspace_root": str(workspace_root),
-        "project_root": str(project_root),
-        "git_sha": git["git_sha"],
-        "node_count": len(all_nodes),
-        "edge_count": len(all_edges),
-        "evidence_count": len(all_evidence),
-        "configured_language_adapter": config.get("language_adapter", "auto"),
-        "configured_primary_adapter": config.get("primary_adapter", config.get("language_adapter", "auto")),
-        "detected_adapter": adapter_name,
-        "primary_adapter": adapter_name,
-        "detected_profile": profile_name,
-        "supplemental_adapters_configured": configured_supplemental_adapters(config),
-        "supplemental_adapters_detected": supplemental_adapters,
-        "available_function_seeds": sorted(node_id for node_id, node in all_nodes.items() if node.kind == "function"),
-        "available_file_seeds": sorted(node_id for node_id, node in all_nodes.items() if node.kind == "file"),
-    }
+    save_manifest(workspace_root, {"timestamp": utc_now(), "files": plan["files"], "summary": summary})
     with paths["build_log_path"].open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(summary, ensure_ascii=False) + "\n")
     return summary

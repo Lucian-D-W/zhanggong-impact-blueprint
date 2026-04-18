@@ -26,9 +26,9 @@ This file defines the recovery protocol for agents and humans.
 ## Report failed
 
 1. Confirm the seed exists in `cig.py seeds`
-2. If the seed is too broad or stale, rebuild and pick a narrower seed
-3. If needed, start from a file seed before returning to a function seed
-4. If multiple candidates were found, use one of the suggested seeds from the structured error
+2. If the seed is too broad or stale, rerun `analyze` with `--changed-line <path:line>`
+3. If needed, start from a file seed before returning to a function/routine seed
+4. If multiple candidates were found, use one of the top suggested seeds from the structured error
 
 ## After-edit test failed
 
@@ -50,11 +50,13 @@ This file defines the recovery protocol for agents and humans.
 1. If the primary adapter still works, continue with the primary graph and record the supplemental failure
 2. If the supplemental adapter is required for the task, fix its paths/config first
 3. For `sql_postgres`, high-confidence query hints may remain hints until SQL parsing is restored
+4. Supplemental adapter failures should degrade to warnings whenever the primary graph is still usable
 
 ## Error code guide
 
 - `CONFIG_MISSING`: run `init`
 - `INVALID_PROFILE`: choose a supported profile and run `init` again
 - `SUPPLEMENTAL_ADAPTER_MISSING`: add the expected files or disable the supplemental adapter
+- `SEED_SELECTION_REQUIRED`: rerun `analyze` or `report` with `--changed-line` or an explicit `--seed`
 - `TEST_COMMAND_FAILED`: inspect `test-results.json` and the command output log, then retry after fixing the command or failing code
 - `UNEXPECTED_ERROR`: retry with `--debug` and inspect the latest error log

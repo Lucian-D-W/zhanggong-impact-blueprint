@@ -112,5 +112,5 @@ def adapter_coverage_adapter(config: dict, adapter_name: str, project_root: path
     return coverage_adapter
 
 
-def collect_adapter_graph(project_root: pathlib.Path, config: dict, adapter_name: str) -> AdapterGraph:
-    return parse_with_backend(adapter_name, project_root, config)
+def collect_adapter_graph(project_root: pathlib.Path, config: dict, adapter_name: str, include_files: list[str] | None = None) -> AdapterGraph:
+    return parse_with_backend(adapter_name, project_root, config, include_files)

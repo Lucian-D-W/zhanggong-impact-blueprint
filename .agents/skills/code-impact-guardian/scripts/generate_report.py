@@ -146,13 +146,233 @@ def file_report_sections(conn: sqlite3.Connection, seed: str, max_depth: int) ->
     }
 
 
-def generate_report(*, workspace_root: pathlib.Path, config_path: pathlib.Path, task_id: str, seed: str, max_depth: int | None = None) -> dict:
+def reference_hints_payload(seed_detail: dict | None) -> dict:
+    attrs = (seed_detail or {}).get("attrs", {})
+    return attrs.get("reference_hints", {}) or {}
+
+
+def relationship_payload(seed_detail: dict | None, sections: dict) -> dict:
+    attrs = (seed_detail or {}).get("attrs", {})
+    confirmed_edges = [
+        {"src": src_id, "edge_type": edge_type, "dst": dst_id}
+        for src_id, edge_type, dst_id in (
+            sections["owning_files"]
+            + sections["direct_upstream"]
+            + sections["direct_downstream"]
+            + sections["direct_tests"]
+            + sections["direct_rules"]
+            + sections["direct_imports"]
+        )
+    ]
+    high_confidence_hints = [
+        {"type": "sql_query_hint", "value": value}
+        for value in attrs.get("unresolved_sql_hints", [])
+    ]
+    metadata_only = []
+    for view_hint in attrs.get("sql_view_hints", []):
+        metadata_only.append({"type": "sql_view_hint", **view_hint})
+    for name, values in reference_hints_payload(seed_detail).items():
+        if values:
+            metadata_only.append({"type": f"reference_{name}", "values": values})
+    return {
+        "confirmed_edges": confirmed_edges,
+        "high_confidence_hints": high_confidence_hints,
+        "metadata_only": metadata_only,
+    }
+
+
+def top_risks_payload(sections: dict, risk_api: str, risk_state: str, risk_coverage: str) -> list[str]:
+    risks: list[str] = []
+    if risk_api == "high":
+        risks.append("This seed has direct upstream dependents, so signature or behavior changes can break callers.")
+    if risk_state == "high":
+        risks.append("This seed has direct downstream links or governing rules, so side-effect changes need extra care.")
+    if risk_coverage != "covered-by-direct-tests":
+        risks.append("Direct test coverage is missing or unavailable, so manual verification matters more.")
+    if not risks:
+        risks.append("Direct impact looks contained, but verify behavior with the nearest targeted test.")
+    return risks[:3]
+
+
+def next_tests_payload(sections: dict, seed: str) -> list[str]:
+    direct_tests = [src_id for src_id, _, _ in sections["direct_tests"]]
+    if direct_tests:
+        return [f"Run direct test seed `{item}`." for item in direct_tests]
+    return [f"Run the smallest test that exercises `{seed}` after the edit."]
+
+
+def key_evidence_paths_payload(seed_detail: dict | None, evidence_lines: list[str], changed_files: list[str]) -> list[str]:
+    paths: list[str] = []
+    if seed_detail and seed_detail.get("path"):
+        paths.append(seed_detail["path"])
+    paths.extend(changed_files)
+    for line in evidence_lines:
+        if " from `" in line:
+            candidate = line.split(" from `", 1)[1].split("`", 1)[0]
+            paths.append(candidate)
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for item in paths:
+        if item and item not in seen:
+            seen.add(item)
+            ordered.append(item)
+    return ordered[:6]
+
+
+def write_markdown_report(
+    *,
+    report_path: pathlib.Path,
+    mode: str,
+    task_id: str,
+    git_sha: str,
+    seed: str,
+    sections: dict,
+    detected_adapter: str,
+    detected_profile: str,
+    seed_detail: dict | None,
+    changed_files: list[str],
+    risk_api: str,
+    risk_state: str,
+    risk_coverage: str,
+    top_risks: list[str],
+    next_tests: list[str],
+    evidence_lines: list[str],
+    key_evidence_paths: list[str],
+    mermaid: str,
+) -> None:
+    attrs = (seed_detail or {}).get("attrs", {})
+    reference_hints = reference_hints_payload(seed_detail)
+    lines = [
+        "# Impact Report",
+        "",
+        "## Task",
+        f"- task_id: {task_id}",
+        f"- generated_at: {utc_now()}",
+        f"- git_sha: {git_sha}",
+        f"- seed: {seed}",
+        f"- seed_kind: {sections['seed_kind']}",
+        f"- detected_adapter: {detected_adapter}",
+        f"- detected_profile: {detected_profile}",
+        f"- report_mode: {mode}",
+        f"- changed_files: {', '.join(changed_files) if changed_files else 'none'}",
+        "",
+        "## Definition metadata",
+    ]
+    if seed_detail:
+        lines.append(f"- node_path: `{seed_detail['path']}`")
+        lines.append(f"- node_symbol: `{seed_detail['symbol'] or seed_detail['name']}`")
+        for key, value in sorted(attrs.items()):
+            if key == "reference_hints":
+                continue
+            if mode == "brief" and key not in {"definition_kind", "qualified_name", "sql_kind", "language", "resolved_sql_targets", "unresolved_sql_hints"}:
+                continue
+            if isinstance(value, list):
+                rendered = ", ".join(str(item) for item in value) if value else "none"
+            else:
+                rendered = str(value)
+            lines.append(f"- {key}: {rendered}")
+    else:
+        lines.append("- unavailable")
+
+    lines.extend(
+        [
+            "",
+            "## Reference hints",
+            f"- imports: {', '.join(reference_hints.get('imports', [])) or 'none'}",
+            f"- exports: {', '.join(reference_hints.get('exports', [])) or 'none'}",
+            f"- references: {', '.join(reference_hints.get('references', [])) or 'none'}",
+            f"- resolved_call_targets: {', '.join(reference_hints.get('resolved_call_targets', [])) or 'none'}",
+        ]
+    )
+
+    lines.extend(["", "## Direct Impact"])
+    if sections["seed_kind"] == "function":
+        lines.append("- owning file:")
+        lines.extend([f"  - `{src_id}`" for src_id, _, _ in sections["owning_files"]] or ["  - none"])
+    else:
+        lines.append("- seed file:")
+        lines.append(f"  - `{seed}`")
+    lines.append("- direct callers/importers:")
+    lines.extend([f"  - `{src_id}` --{edge_type}--> `{dst_id}`" for src_id, edge_type, dst_id in sections["direct_upstream"]] or ["  - none"])
+    lines.append("- direct callees/imports:")
+    lines.extend([f"  - `{src_id}` --{edge_type}--> `{dst_id}`" for src_id, edge_type, dst_id in sections["direct_downstream"]] or ["  - none"])
+    lines.append("- direct tests:")
+    lines.extend([f"  - `{src_id}`" for src_id, _, _ in sections["direct_tests"]] or ["  - none"])
+    lines.append("- direct rules:")
+    lines.extend([f"  - `{src_id}`" for src_id, _, _ in sections["direct_rules"]] or ["  - none"])
+    lines.append("- direct file imports:")
+    lines.extend([f"  - `{src_id}` --IMPORTS--> `{dst_id}`" for src_id, _, dst_id in sections["direct_imports"]] or ["  - none"])
+
+    if mode != "brief":
+        lines.extend(
+            [
+                "",
+                "## Transitive Impact",
+                f"- max_depth: {attrs.get('max_depth', 'configured')}",
+                "- downstream paths:",
+            ]
+        )
+        lines.extend([f"  - `{path}`" for path in sections["downstream_paths"]] or ["  - none"])
+        lines.append("- upstream paths:")
+        lines.extend([f"  - `{path}`" for path in sections["upstream_paths"]] or ["  - none"])
+        lines.append("- import paths:")
+        lines.extend([f"  - `{path}`" for path in sections["import_paths"]] or ["  - none"])
+        lines.append("- reverse import paths:")
+        lines.extend([f"  - `{path}`" for path in sections["reverse_import_paths"]] or ["  - none"])
+
+    lines.extend(
+        [
+            "",
+            "## Top risks",
+            *[f"- {item}" for item in top_risks],
+            "",
+            "## Next tests",
+            *[f"- {item}" for item in next_tests],
+            "",
+            "## Key evidence paths",
+            *[f"- `{item}`" for item in key_evidence_paths],
+            "",
+            "## Risks",
+            f"- api_compatibility: {risk_api}",
+            f"- state_or_side_effects: {risk_state}",
+            f"- coverage_status: {risk_coverage}",
+            "",
+            "## Evidence",
+        ]
+    )
+    lines.extend(evidence_lines or ["- no direct evidence rows found"])
+    lines.extend(
+        [
+            "",
+            "## Mermaid",
+            "```mermaid",
+            mermaid.rstrip(),
+            "```",
+            "",
+            "## Post-change note",
+            "- pending",
+        ]
+    )
+    report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def generate_report(
+    *,
+    workspace_root: pathlib.Path,
+    config_path: pathlib.Path,
+    task_id: str,
+    seed: str,
+    max_depth: int | None = None,
+    mode: str = "default",
+    changed_files: list[str] | None = None,
+) -> dict:
     config = load_config(config_path)
     paths = graph_paths(workspace_root, config)
     report_dir = paths["report_dir"]
     report_dir.mkdir(parents=True, exist_ok=True)
     git = get_git_context(workspace_root)
     max_depth = max_depth or config["impact"]["max_depth"]
+    changed_files = [item.replace("\\", "/") for item in (changed_files or [])]
     detected_adapter = resolved_language_adapter(workspace_root, config_path)
     project_root = project_root_for(workspace_root, config)
     detected_profile = detect_project_profile_name(project_root, config, detected_adapter)
@@ -185,118 +405,76 @@ def generate_report(*, workspace_root: pathlib.Path, config_path: pathlib.Path, 
         mermaid_edges = sections["owning_files"] + mermaid_edges
     mermaid = mermaid_from_edges(mermaid_edges, seed)
     report_path = report_dir / f"impact-{task_id}.md"
+    json_report_path = report_dir / f"impact-{task_id}.json"
     mermaid_path = report_dir / f"impact-{task_id}.mmd"
-
-    lines = [
-        "# Impact Report",
-        "",
-        "## Task",
-        f"- task_id: {task_id}",
-        f"- generated_at: {utc_now()}",
-        f"- git_sha: {git['git_sha']}",
-        f"- seed: {seed}",
-        f"- seed_kind: {sections['seed_kind']}",
-        f"- detected_adapter: {detected_adapter}",
-        f"- detected_profile: {detected_profile}",
-        "",
-        "## Definition metadata",
-    ]
+    seed_detail = dict(seed_detail or {})
     if seed_detail:
-        lines.append(f"- node_path: `{seed_detail['path']}`")
-        lines.append(f"- node_symbol: `{seed_detail['symbol'] or seed_detail['name']}`")
-        for key, value in sorted(seed_detail["attrs"].items()):
-            if key == "reference_hints":
-                continue
-            if isinstance(value, list):
-                lines.append(f"- {key}: {', '.join(str(item) for item in value) if value else 'none'}")
-            else:
-                lines.append(f"- {key}: {value}")
-        reference_hints = seed_detail["attrs"].get("reference_hints", {})
-        lines.extend(
-            [
-                "",
-                "## Reference hints",
-                f"- imports: {', '.join(reference_hints.get('imports', [])) or 'none'}",
-                f"- exports: {', '.join(reference_hints.get('exports', [])) or 'none'}",
-                f"- references: {', '.join(reference_hints.get('references', [])) or 'none'}",
-                f"- resolved_call_targets: {', '.join(reference_hints.get('resolved_call_targets', [])) or 'none'}",
-            ]
-        )
-    else:
-        lines.extend(["- unavailable", "", "## Reference hints", "- unavailable"])
+        seed_detail.setdefault("attrs", {})
+        seed_detail["attrs"]["max_depth"] = max_depth
+    top_risks = top_risks_payload(sections, risk_api, risk_state, risk_coverage)
+    next_tests = next_tests_payload(sections, seed)
+    key_evidence_paths = key_evidence_paths_payload(seed_detail, evidence_lines, changed_files)
+    relationships = relationship_payload(seed_detail, sections)
+    json_payload = {
+        "task_id": task_id,
+        "generated_at": utc_now(),
+        "git_sha": git["git_sha"],
+        "mode": mode,
+        "seed": seed,
+        "seed_kind": sections["seed_kind"],
+        "changed_files": changed_files,
+        "detected_adapter": detected_adapter,
+        "detected_profile": detected_profile,
+        "definition": seed_detail or {"node_id": seed, "kind": sections["seed_kind"]},
+        "reference_hints": reference_hints_payload(seed_detail),
+        "direct": {
+            "owning_files": [src_id for src_id, _, _ in sections["owning_files"]],
+            "upstream": [{"src": src_id, "edge_type": edge_type, "dst": dst_id} for src_id, edge_type, dst_id in sections["direct_upstream"]],
+            "downstream": [{"src": src_id, "edge_type": edge_type, "dst": dst_id} for src_id, edge_type, dst_id in sections["direct_downstream"]],
+            "tests": related_test_names,
+            "rules": related_rule_names,
+            "imports": [{"src": src_id, "edge_type": edge_type, "dst": dst_id} for src_id, edge_type, dst_id in sections["direct_imports"]],
+        },
+        "top_risks": top_risks,
+        "next_tests": next_tests,
+        "key_evidence_paths": key_evidence_paths,
+        "relationships": relationships,
+        "transitive": {
+            "max_depth": max_depth,
+            "downstream_paths": sections["downstream_paths"],
+            "upstream_paths": sections["upstream_paths"],
+            "import_paths": sections["import_paths"],
+            "reverse_import_paths": sections["reverse_import_paths"],
+        },
+        "risk_levels": {
+            "api_compatibility": risk_api,
+            "state_or_side_effects": risk_state,
+            "coverage_status": risk_coverage,
+        },
+        "evidence_lines": evidence_lines,
+    }
 
-    lines.extend(
-        [
-            "",
-        "## Direct Impact",
-        ]
+    write_markdown_report(
+        report_path=report_path,
+        mode=mode,
+        task_id=task_id,
+        git_sha=git["git_sha"],
+        seed=seed,
+        sections=sections,
+        detected_adapter=detected_adapter,
+        detected_profile=detected_profile,
+        seed_detail=seed_detail,
+        changed_files=changed_files,
+        risk_api=risk_api,
+        risk_state=risk_state,
+        risk_coverage=risk_coverage,
+        top_risks=top_risks,
+        next_tests=next_tests,
+        evidence_lines=evidence_lines,
+        key_evidence_paths=key_evidence_paths,
+        mermaid=mermaid,
     )
-    if sections["seed_kind"] == "function":
-        lines.append("- owning file:")
-        lines.extend([f"  - `{src_id}`" for src_id, _, _ in sections["owning_files"]] or ["  - none"])
-    else:
-        lines.append("- seed file:")
-        lines.append(f"  - `{seed}`")
-
-    upstream_label = "direct upstream callers:" if sections["seed_kind"] == "function" else "direct upstream importers:"
-    downstream_label = "direct downstream callees:" if sections["seed_kind"] == "function" else "direct downstream imports:"
-    lines.append(f"- {upstream_label}")
-    lines.extend([f"  - `{src_id}` --{edge_type}--> `{dst_id}`" for src_id, edge_type, dst_id in sections["direct_upstream"]] or ["  - none"])
-    lines.append(f"- {downstream_label}")
-    lines.extend([f"  - `{src_id}` --{edge_type}--> `{dst_id}`" for src_id, edge_type, dst_id in sections["direct_downstream"]] or ["  - none"])
-    lines.append("- direct tests:")
-    lines.extend([f"  - `{src_id}`" for src_id in related_test_names] or ["  - none"])
-    lines.append("- direct rules:")
-    lines.extend([f"  - `{src_id}`" for src_id in related_rule_names] or ["  - none"])
-
-    if sections["seed_kind"] == "function":
-        lines.append("- direct file imports:")
-    else:
-        lines.append("- direct file imports:")
-    lines.extend([f"  - `{src_id}` --IMPORTS--> `{dst_id}`" for src_id, _, dst_id in sections["direct_imports"]] or ["  - none"])
-
-    lines.extend(
-        [
-            "",
-            "## Transitive Impact",
-            f"- max_depth: {max_depth}",
-            "- downstream paths:",
-        ]
-    )
-    lines.extend([f"  - `{path}`" for path in sections["downstream_paths"]] or ["  - none"])
-    lines.append("- upstream paths:")
-    lines.extend([f"  - `{path}`" for path in sections["upstream_paths"]] or ["  - none"])
-    lines.append("- import paths:")
-    lines.extend([f"  - `{path}`" for path in sections["import_paths"]] or ["  - none"])
-    lines.append("- reverse import paths:")
-    lines.extend([f"  - `{path}`" for path in sections["reverse_import_paths"]] or ["  - none"])
-
-    lines.extend(
-        [
-            "",
-            "## Risks",
-            f"- api_compatibility: {risk_api}",
-            f"- state_or_side_effects: {risk_state}",
-            f"- coverage_status: {risk_coverage}",
-            "",
-            "## Evidence",
-        ]
-    )
-    lines.extend(evidence_lines or ["- no direct evidence rows found"])
-    lines.extend(
-        [
-            "",
-            "## Mermaid",
-            "```mermaid",
-            mermaid.rstrip(),
-            "```",
-            "",
-            "## Post-change note",
-            "- pending",
-        ]
-    )
-
-    report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    json_report_path.write_text(json.dumps(json_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     mermaid_path.write_text(mermaid, encoding="utf-8")
 
     with sqlite3.connect(paths["db_path"]) as conn:
@@ -311,7 +489,7 @@ def generate_report(*, workspace_root: pathlib.Path, config_path: pathlib.Path, 
                 seed,
                 git["git_sha"],
                 str(report_path.relative_to(workspace_root)),
-                json.dumps({"max_depth": max_depth, "seed_kind": sections["seed_kind"]}, ensure_ascii=False),
+                json.dumps({"max_depth": max_depth, "seed_kind": sections["seed_kind"], "mode": mode, "json_report_path": str(json_report_path.relative_to(workspace_root))}, ensure_ascii=False),
             ),
         )
         conn.commit()
@@ -326,6 +504,7 @@ def generate_report(*, workspace_root: pathlib.Path, config_path: pathlib.Path, 
         status="completed",
         attrs={
             "seed_kind": sections["seed_kind"],
+            "mode": mode,
             "direct_counts": {
                 "upstream": len(sections["direct_upstream"]),
                 "downstream": len(sections["direct_downstream"]),
@@ -340,9 +519,12 @@ def generate_report(*, workspace_root: pathlib.Path, config_path: pathlib.Path, 
         "seed": seed,
         "git_sha": git["git_sha"],
         "report_path": str(report_path),
+        "json_report_path": str(json_report_path),
         "mermaid_path": str(mermaid_path),
         "task_run_id": task_run_id,
         "detected_adapter": detected_adapter,
+        "detected_profile": detected_profile,
+        "mode": mode,
     }
 
 
@@ -353,12 +535,22 @@ def main() -> int:
     parser.add_argument("--task-id", required=True, help="Task identifier")
     parser.add_argument("--seed", required=True, help="Seed node id")
     parser.add_argument("--max-depth", type=int, default=None, help="Override transitive depth")
+    parser.add_argument("--mode", choices=["brief", "default", "full"], default="default", help="Report detail mode")
+    parser.add_argument("--changed-file", action="append", default=[], help="Changed file relative to project root")
     args = parser.parse_args()
     workspace_root = pathlib.Path(args.workspace_root).resolve()
     config_path = pathlib.Path(args.config)
     if not config_path.is_absolute():
         config_path = (workspace_root / config_path).resolve()
-    summary = generate_report(workspace_root=workspace_root, config_path=config_path, task_id=args.task_id, seed=args.seed, max_depth=args.max_depth)
+    summary = generate_report(
+        workspace_root=workspace_root,
+        config_path=config_path,
+        task_id=args.task_id,
+        seed=args.seed,
+        max_depth=args.max_depth,
+        mode=args.mode,
+        changed_files=args.changed_file,
+    )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
 

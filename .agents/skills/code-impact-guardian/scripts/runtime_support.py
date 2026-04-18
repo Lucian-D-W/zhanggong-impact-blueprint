@@ -128,6 +128,9 @@ def write_handoff(
 ) -> pathlib.Path:
     paths = ensure_runtime_dirs(workspace_root)
     events = read_jsonl(paths["events"])
+    last_task_path = paths["codegraph_dir"] / "last-task.json"
+    last_task = read_json(last_task_path) or {}
+    last_run = read_json(paths["last_run"]) or {}
     recent_success = next((item for item in reversed(events) if item.get("status") == "success"), None)
     recent_failure = next((item for item in reversed(events) if item.get("status") == "failed"), None)
     critical_paths = {
@@ -135,8 +138,13 @@ def write_handoff(
         "test_results": test_results_path or "none",
         "logs": str(paths["logs_dir"]),
         "last_error": str(paths["last_error"]) if paths["last_error"].exists() else "none",
-        "last_task": str(paths["codegraph_dir"] / "last-task.json") if (paths["codegraph_dir"] / "last-task.json").exists() else "none",
+        "last_task": str(last_task_path) if last_task_path.exists() else "none",
     }
+    top_candidates = (last_task.get("seed_selection") or {}).get("top_candidates", [])
+    candidate_summary = ", ".join(item.get("node_id", "") for item in top_candidates[:3]) or "none"
+    fallback_used = bool(last_task.get("fallback_used"))
+    build_mode = last_task.get("build_mode") or last_run.get("build_mode") or "unknown"
+    retry_step = recent_failure.get("command") if recent_failure else command
     lines = [
         "# Code Impact Guardian Handoff",
         "",
@@ -145,9 +153,13 @@ def write_handoff(
         f"- Current phase: {command}",
         f"- Current status: {status}",
         f"- Seed: {seed or 'none'}",
+        f"- Candidate seeds: {candidate_summary}",
+        f"- Fallback used: {'yes' if fallback_used else 'no'}",
+        f"- Incremental build mode: {build_mode}",
         f"- Recent successful step: {(recent_success or {}).get('command', 'none')} @ {(recent_success or {}).get('timestamp', 'n/a')}",
         f"- Recent failed step: {(recent_failure or {}).get('command', 'none')} @ {(recent_failure or {}).get('timestamp', 'n/a')}",
         f"- Failure point: {failure_point}",
+        f"- Best retry step: {retry_step}",
         "",
         "## Critical paths",
         f"- Report: {critical_paths['report']}",

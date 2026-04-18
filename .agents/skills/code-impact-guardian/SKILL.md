@@ -21,15 +21,15 @@ The workflow never changes:
 4. edit code
 5. update graph / report / evidence / tests
 
-## Stage7 scope
+## Stage8 scope
 
-Stage7 keeps the template lightweight and focuses on usability:
+Stage8 keeps the same skill shape and focuses on daily-driver use:
 
-- official single-folder install path
-- high-level `setup / analyze / finish` commands
-- automatic task and seed reuse
-- stronger `status` and `handoff` outputs
-- consumer-facing docs generated in the target repo
+- smarter seed ranking from changed files and changed lines
+- brief report/status output by default
+- JSON impact reports for agents
+- conservative incremental refresh when safe
+- better TS/JS + React + SQL day-to-day guidance without new adapter families
 
 TS/JS remains the main app-facing family.
 Python remains the stable regression baseline.
@@ -49,15 +49,22 @@ Use these first:
 
 ```bash
 python .agents/skills/code-impact-guardian/cig.py setup --project-root .
-python .agents/skills/code-impact-guardian/cig.py analyze --changed-file <path>
+python .agents/skills/code-impact-guardian/cig.py analyze --changed-file <path> --changed-line <path:line>
 python .agents/skills/code-impact-guardian/cig.py finish --changed-file <path>
 ```
 
 What they do:
 
 - `setup` initializes config/schema/docs and then runs doctor + detect
-- `analyze` builds the graph if needed, generates a task id when missing, chooses or recommends a seed, and writes the report
+- `analyze` builds or reuses the graph, generates a task id when missing, ranks seed candidates, and writes a brief report plus JSON report
 - `finish` reuses the latest task context when possible and refreshes report/evidence/tests after the edit
+
+Prefer these flags when needed:
+
+- `--changed-line <path:line>` to improve seed selection
+- `--brief` for compact output
+- `--full` when you need more detail
+- `--allow-fallback` when generic file-level continuation is acceptable
 
 Low-level commands remain available:
 
@@ -137,6 +144,7 @@ The recovery policy is:
 - `.ai/codegraph/codegraph.db`
 - `.ai/codegraph/logs/`
 - `.ai/codegraph/reports/impact-<task-id>.md`
+- `.ai/codegraph/reports/impact-<task-id>.json`
 - `.ai/codegraph/test-results.json`
 - `.ai/codegraph/last-task.json`
 - `.ai/codegraph/handoff/latest.md`

@@ -35,14 +35,17 @@ def matches_any(relative_path: str, patterns: list[str]) -> bool:
     return any(pure.match(pattern) for pattern in patterns)
 
 
-def iter_matching_files(project_root: pathlib.Path, patterns: list[str]) -> list[pathlib.Path]:
+def iter_matching_files(project_root: pathlib.Path, patterns: list[str], include_files: list[str] | None = None) -> list[pathlib.Path]:
     if not patterns:
         return []
+    include_set = {item.replace("\\", "/") for item in (include_files or [])}
     results: dict[str, pathlib.Path] = {}
     for path in project_root.rglob("*"):
         if not path.is_file():
             continue
         relative = path.relative_to(project_root).as_posix()
+        if include_set and relative not in include_set:
+            continue
         if matches_any(relative, patterns):
             results[relative] = path
     return [results[key] for key in sorted(results)]
@@ -107,7 +110,7 @@ def extract_python_called_targets(
     return targets
 
 
-def parse_python_backend(project_root: pathlib.Path, config: dict) -> AdapterGraph:
+def parse_python_backend(project_root: pathlib.Path, config: dict, include_files: list[str] | None = None) -> AdapterGraph:
     adapter_graph = AdapterGraph()
     python_config = config["python"]
     patterns = python_config["source_globs"] + python_config["test_globs"]
@@ -116,7 +119,7 @@ def parse_python_backend(project_root: pathlib.Path, config: dict) -> AdapterGra
     function_contexts: list[dict] = []
     test_contexts: list[dict] = []
 
-    for path in iter_matching_files(project_root, patterns):
+    for path in iter_matching_files(project_root, patterns, include_files):
         relative = path.relative_to(project_root).as_posix()
         source_text = path.read_text(encoding="utf-8")
         module = ast.parse(source_text, filename=str(path))
@@ -499,7 +502,7 @@ def tsjs_definition_kind(name: str, file_path: str, exported: bool, class_name: 
     return "function_declaration", False, False
 
 
-def parse_tsjs_backend(project_root: pathlib.Path, config: dict) -> AdapterGraph:
+def parse_tsjs_backend(project_root: pathlib.Path, config: dict, include_files: list[str] | None = None) -> AdapterGraph:
     adapter_graph = AdapterGraph()
     tsjs_config = config["tsjs"]
     patterns = tsjs_config["source_globs"] + tsjs_config["test_globs"]
@@ -508,7 +511,7 @@ def parse_tsjs_backend(project_root: pathlib.Path, config: dict) -> AdapterGraph
     function_contexts: list[dict] = []
     test_contexts: list[dict] = []
 
-    for path in iter_matching_files(project_root, patterns):
+    for path in iter_matching_files(project_root, patterns, include_files):
         relative = path.relative_to(project_root).as_posix()
         text = path.read_text(encoding="utf-8")
         lines = text.splitlines()
@@ -910,11 +913,11 @@ def parse_tsjs_backend(project_root: pathlib.Path, config: dict) -> AdapterGraph
     return adapter_graph
 
 
-def parse_generic_backend(project_root: pathlib.Path, config: dict) -> AdapterGraph:
+def parse_generic_backend(project_root: pathlib.Path, config: dict, include_files: list[str] | None = None) -> AdapterGraph:
     adapter_graph = AdapterGraph()
     generic_config = config["generic"]
     source_globs = generic_config.get("source_globs", ["src/*", "src/**/*"])
-    matched_files = iter_matching_files(project_root, source_globs)
+    matched_files = iter_matching_files(project_root, source_globs, include_files)
     for path in matched_files:
         relative = path.relative_to(project_root).as_posix()
         adapter_graph.files.append(
@@ -933,9 +936,10 @@ def parse_generic_backend(project_root: pathlib.Path, config: dict) -> AdapterGr
 
 
 SQL_ROUTINE_RE = re.compile(
-    r"(?is)create\s+(?:or\s+replace\s+)?(function|procedure)\s+([a-z_][a-z0-9_\.]*)\s*\((.*?)\)\s*(returns\s+trigger|returns\s+[^$;]+)?\s+as\s+\$\$(.*?)\$\$\s+language\s+[a-z_]+\s*;",
+    r"(?is)create\s+(?:or\s+replace\s+)?(function|procedure)\s+([a-z_][a-z0-9_\.]*)\s*\((.*?)\)\s*(returns\s+trigger|returns\s+[^$;]+)?\s+(?:language\s+[a-z_]+\s+)?as\s+\$\$(.*?)\$\$(?:\s+language\s+[a-z_]+)?\s*;",
 )
 SQL_TRIGGER_BINDING_RE = re.compile(r"(?is)create\s+trigger\s+([a-z_][a-z0-9_]*)[\s\S]*?execute\s+function\s+([a-z_][a-z0-9_\.]*)\s*\(")
+SQL_VIEW_RE = re.compile(r"(?is)create\s+(materialized\s+)?view\s+([a-z_][a-z0-9_\.]*)")
 
 
 def sql_basename(name: str) -> str:
@@ -952,7 +956,7 @@ def unique_sql_target(hint: str, sql_targets: dict[str, list[str]]) -> str | Non
     return None
 
 
-def parse_sql_postgres_backend(project_root: pathlib.Path, config: dict) -> AdapterGraph:
+def parse_sql_postgres_backend(project_root: pathlib.Path, config: dict, include_files: list[str] | None = None) -> AdapterGraph:
     adapter_graph = AdapterGraph()
     sql_config = config["sql_postgres"]
     source_globs = sql_config.get("source_globs", [])
@@ -963,7 +967,7 @@ def parse_sql_postgres_backend(project_root: pathlib.Path, config: dict) -> Adap
     routine_contexts: list[dict] = []
     test_contexts: list[dict] = []
 
-    for path in iter_matching_files(project_root, patterns):
+    for path in iter_matching_files(project_root, patterns, include_files):
         relative = path.relative_to(project_root).as_posix()
         text = path.read_text(encoding="utf-8")
         is_test_file = matches_any(relative, test_globs)
@@ -981,6 +985,13 @@ def parse_sql_postgres_backend(project_root: pathlib.Path, config: dict) -> Adap
                     "parser_backend": "sql_postgres_lite",
                     "file_role": "test-file" if is_test_file else "sql-file",
                     "trigger_bindings": trigger_bindings,
+                    "sql_view_hints": [
+                        {
+                            "view_name": match.group(2),
+                            "materialized": bool(match.group(1)),
+                        }
+                        for match in SQL_VIEW_RE.finditer(text)
+                    ],
                 },
             }
         )
@@ -1136,5 +1147,5 @@ BACKENDS = {
 }
 
 
-def parse_with_backend(adapter_name: str, project_root: pathlib.Path, config: dict) -> AdapterGraph:
-    return BACKENDS[adapter_name](project_root, config)
+def parse_with_backend(adapter_name: str, project_root: pathlib.Path, config: dict, include_files: list[str] | None = None) -> AdapterGraph:
+    return BACKENDS[adapter_name](project_root, config, include_files)

@@ -476,7 +476,15 @@ def diff_summary_lines(summary: dict) -> list[str]:
     return lines
 
 
-def after_edit_update(*, workspace_root: pathlib.Path, config_path: pathlib.Path, task_id: str, seed: str, changed_files: list[str]) -> dict:
+def after_edit_update(
+    *,
+    workspace_root: pathlib.Path,
+    config_path: pathlib.Path,
+    task_id: str,
+    seed: str,
+    changed_files: list[str],
+    report_mode: str = "brief",
+) -> dict:
     config = build_graph.load_config(config_path)
     paths = build_graph.graph_paths(workspace_root, config)
 
@@ -486,7 +494,7 @@ def after_edit_update(*, workspace_root: pathlib.Path, config_path: pathlib.Path
             before_snapshot = build_graph.snapshot_for_files(conn, changed_files)
             before_snapshot["relations"][seed] = build_graph.relation_snapshot(conn, seed)
 
-    graph_summary = build_graph.build_graph(workspace_root=workspace_root, config_path=config_path)
+    graph_summary = build_graph.build_graph(workspace_root=workspace_root, config_path=config_path, changed_files=changed_files)
 
     with sqlite3.connect(paths["db_path"]) as conn:
         after_snapshot = build_graph.snapshot_for_files(conn, changed_files)
@@ -502,7 +510,15 @@ def after_edit_update(*, workspace_root: pathlib.Path, config_path: pathlib.Path
         symbol_diffs=symbol_diffs,
     )
 
-    report_summary = generate_report.generate_report(workspace_root=workspace_root, config_path=config_path, task_id=task_id, seed=seed, max_depth=None)
+    report_summary = generate_report.generate_report(
+        workspace_root=workspace_root,
+        config_path=config_path,
+        task_id=task_id,
+        seed=seed,
+        max_depth=None,
+        mode=report_mode,
+        changed_files=changed_files,
+    )
     test_summary = run_tests_with_coverage(workspace_root=workspace_root, config_path=config_path, task_id=task_id)
     run_id = record_test_run(workspace_root=workspace_root, config_path=config_path, task_id=task_id, test_summary=test_summary)
     import_coverage(workspace_root=workspace_root, config_path=config_path, run_id=run_id, test_summary=test_summary)
@@ -562,7 +578,13 @@ def main() -> int:
     config_path = pathlib.Path(args.config)
     if not config_path.is_absolute():
         config_path = (workspace_root / config_path).resolve()
-    summary = after_edit_update(workspace_root=workspace_root, config_path=config_path, task_id=args.task_id, seed=args.seed, changed_files=args.changed_file)
+    summary = after_edit_update(
+        workspace_root=workspace_root,
+        config_path=config_path,
+        task_id=args.task_id,
+        seed=args.seed,
+        changed_files=args.changed_file,
+    )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
 

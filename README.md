@@ -25,16 +25,15 @@ The workflow does not change:
 4. update graph / report / evidence after edit
 5. run relevant tests and record outcome
 
-## Stage7 focus
+## Stage8 focus
 
-Stage7 does not widen the language matrix.
-It makes the template lower-friction and more directly usable:
+Stage8 keeps the same lightweight shape and pushes it toward daily-driver use:
 
-- official single-folder distribution mode
-- higher-level `setup / analyze / finish` commands
-- automatic task and seed reuse
-- stronger status, handoff, and recovery guidance
-- consumer-facing docs generated during setup
+- smarter seed selection from `--changed-file` and `--changed-line`
+- shorter `brief` reports and `brief` status by default
+- machine-readable JSON impact reports for agents
+- conservative incremental refresh when safe, full rebuild when not
+- stronger TS/JS + React + SQL day-to-day value without splitting adapters
 
 ## Current support level
 
@@ -130,15 +129,22 @@ These are the main user-facing commands now:
 
 ```bash
 python .agents/skills/code-impact-guardian/cig.py setup --project-root .
-python .agents/skills/code-impact-guardian/cig.py analyze --changed-file <path>
+python .agents/skills/code-impact-guardian/cig.py analyze --changed-file <path> --changed-line <path:line>
 python .agents/skills/code-impact-guardian/cig.py finish --changed-file <path>
 ```
 
 What they do:
 
 - `setup` = init + write AGENTS.md + write .gitignore + write consumer docs + doctor + detect
-- `analyze` = build + automatic task id + seed resolution + report
+- `analyze` = build/reuse graph + automatic task id + smart seed ranking + brief report
 - `finish` = after-edit + recent task reuse + tests + handoff/status refresh
+
+Useful flags:
+
+- `--changed-line <path:line>` improves seed ranking inside large files
+- `--brief` is the default for `analyze` and `status`
+- `--full` asks for a fuller report/status payload
+- `--allow-fallback` lets uncertain repos fall back to generic file-level mode
 
 ### Low-level commands
 
@@ -191,7 +197,25 @@ and report rather than create a second workflow.
 For SQL hints:
 
 - high confidence + unique target -> direct `CALLS`
-- otherwise -> attrs/report hint only
+- high confidence but not confirmed enough -> report hint
+- otherwise -> metadata only
+
+## Daily-driver output shape
+
+`analyze` now writes both:
+
+- human report: `.ai/codegraph/reports/impact-<task-id>.md`
+- agent report: `.ai/codegraph/reports/impact-<task-id>.json`
+
+Brief mode keeps the console and Markdown shorter by focusing on:
+
+- selected seed
+- changed files
+- direct callers/callees
+- direct tests/rules
+- top risks
+- next tests
+- key evidence paths
 
 ## Structured runtime artifacts
 
@@ -272,4 +296,5 @@ python -m unittest tests.test_stage4_workflow -v
 python -m unittest tests.test_stage5_workflow -v
 python -m unittest tests.test_stage6_workflow -v
 python -m unittest tests.test_stage7_workflow -v
+python -m unittest tests.test_stage8_workflow -v
 ```

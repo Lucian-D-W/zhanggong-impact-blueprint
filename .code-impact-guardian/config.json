@@ -134,5 +134,15 @@
   },
   "impact": {
     "max_depth": 3
+  },
+  "verification_policy": {
+    "default_budget": "B2",
+    "budgets": {
+      "B0": "no-op or docs-only",
+      "B1": "health + analyze only",
+      "B2": "targeted tests",
+      "B3": "configured tests",
+      "B4": "full tests + dependency/schema review"
+    }
   }
 }

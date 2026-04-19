@@ -2,6 +2,7 @@
 import argparse
 import json
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -114,6 +115,16 @@ DEFAULT_CONFIG = {
         "parser_backend": "sql_postgres_lite",
     },
     "impact": {"max_depth": 3},
+    "verification_policy": {
+        "default_budget": "B2",
+        "budgets": {
+            "B0": "no-op or docs-only",
+            "B1": "health + analyze only",
+            "B2": "targeted tests",
+            "B3": "configured tests",
+            "B4": "full tests + dependency/schema review",
+        },
+    },
 }
 
 
@@ -126,7 +137,12 @@ CREATE TABLE IF NOT EXISTS repo_meta (
 
 CREATE TABLE IF NOT EXISTS nodes (
   node_id TEXT PRIMARY KEY,
-  kind TEXT NOT NULL CHECK(kind IN ('file', 'function', 'test', 'rule')),
+  kind TEXT NOT NULL CHECK(kind IN (
+    'file', 'function', 'test', 'rule',
+    'endpoint', 'route', 'component', 'prop', 'event',
+    'config_key', 'env_var', 'sql_table', 'ipc_channel',
+    'obsidian_command', 'playwright_flow'
+  )),
   name TEXT NOT NULL,
   path TEXT NOT NULL,
   symbol TEXT,
@@ -156,7 +172,12 @@ CREATE TABLE IF NOT EXISTS evidence (
 CREATE TABLE IF NOT EXISTS edges (
   edge_id INTEGER PRIMARY KEY AUTOINCREMENT,
   src_id TEXT NOT NULL REFERENCES nodes(node_id) ON DELETE CASCADE,
-  edge_type TEXT NOT NULL CHECK(edge_type IN ('DEFINES', 'CALLS', 'IMPORTS', 'COVERS', 'GOVERNS')),
+  edge_type TEXT NOT NULL CHECK(edge_type IN (
+    'DEFINES', 'CALLS', 'IMPORTS', 'COVERS', 'GOVERNS',
+    'READS_CONFIG', 'READS_ENV', 'EMITS_EVENT', 'HANDLES_EVENT',
+    'QUERIES_TABLE', 'MUTATES_TABLE', 'ROUTES_TO', 'RENDERS_COMPONENT',
+    'USES_PROP', 'REGISTER_COMMAND', 'IPC_SENDS', 'IPC_HANDLES'
+  )),
   dst_id TEXT NOT NULL REFERENCES nodes(node_id) ON DELETE CASCADE,
   is_direct INTEGER NOT NULL DEFAULT 1 CHECK(is_direct IN (0, 1)),
   evidence_id TEXT REFERENCES evidence(evidence_id) ON DELETE SET NULL,
@@ -265,7 +286,7 @@ CREATE INDEX IF NOT EXISTS idx_file_diffs_round ON file_diffs(edit_round_id);
 CREATE INDEX IF NOT EXISTS idx_symbol_diffs_round ON symbol_diffs(edit_round_id);
 
 INSERT INTO repo_meta(meta_key, meta_value) VALUES
-  ('schema_version', '2'),
+  ('schema_version', '3'),
   ('graph_mode', 'direct-edges-only')
 ON CONFLICT(meta_key) DO UPDATE SET meta_value = excluded.meta_value;
 """
@@ -1133,6 +1154,213 @@ def seed_path(seed_id: str) -> str | None:
     return parts[1]
 
 
+def verification_policy_payload(config: dict) -> dict:
+    policy = config.get("verification_policy") or DEFAULT_CONFIG["verification_policy"]
+    return {"verification_policy": json.loads(json.dumps(policy))}
+
+
+def ensure_verification_policy_file(workspace_root: pathlib.Path, config_path: pathlib.Path) -> pathlib.Path:
+    config = build_graph.load_config(config_path)
+    paths = runtime_paths(workspace_root)
+    write_json(paths["verification_policy"], verification_policy_payload(config))
+    return paths["verification_policy"]
+
+
+def docs_or_comment_only_changed_files(changed_files: list[str]) -> bool:
+    if not changed_files:
+        return False
+    normalized = [item.replace("\\", "/") for item in changed_files]
+    if not all(item.endswith((".md", ".txt", ".rst")) for item in normalized):
+        return False
+    return not any("/rules/" in item or item.startswith("docs/rules/") for item in normalized)
+
+
+def dependency_or_schema_change(changed_files: list[str]) -> bool:
+    risky_suffixes = {"package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb", "tsconfig.json", "pyproject.toml", "requirements.txt", "requirements-dev.txt", "poetry.lock", "pipfile", "pipfile.lock"}
+    normalized = [item.replace("\\", "/").lower() for item in changed_files]
+    for item in normalized:
+        name = pathlib.PurePosixPath(item).name
+        if name in risky_suffixes:
+            return True
+        if any(part in {"migrations", "migration", "schema", "schemas"} for part in pathlib.PurePosixPath(item).parts):
+            return True
+        if item.endswith((".sql", ".env", ".env.local")):
+            return True
+    return False
+
+
+def previous_targeted_miss_exists(workspace_root: pathlib.Path, changed_files: list[str]) -> bool:
+    if not changed_files:
+        return False
+    changed_file_set = set(changed_files)
+    for row in read_jsonl(runtime_paths(workspace_root)["calibration"]):
+        if not set(row.get("changed_files", [])) & changed_file_set:
+            continue
+        selection_quality = row.get("selection_quality") or {}
+        if selection_quality.get("shadow_run") and not selection_quality.get("safe", True):
+            return True
+    return False
+
+
+def recommended_scope_for_budget(budget: str) -> str:
+    return {
+        "B0": "targeted",
+        "B1": "targeted",
+        "B2": "targeted",
+        "B3": "configured",
+        "B4": "full",
+    }.get(budget, "configured")
+
+
+def decide_verification_budget(
+    *,
+    workspace_root: pathlib.Path,
+    changed_files: list[str],
+    changed_symbols: list[str],
+    dependency_fingerprint_status: str,
+    graph_trust: str,
+    parser_confidence: float | None,
+    parser_warning: str | None,
+    direct_tests_count: int,
+    affected_node_count: int,
+    exported_symbol_touched: bool,
+    risk_sensitive_change: bool,
+    report_completeness: dict | None,
+    must_read_first: list[str],
+) -> dict:
+    del changed_symbols
+    reason_codes: list[str] = []
+    budget = "B2"
+    if docs_or_comment_only_changed_files(changed_files):
+        budget = "B0"
+        reason_codes.append("docs_only")
+    elif not changed_files:
+        budget = "B1"
+        reason_codes.append("analyze_only")
+    if dependency_fingerprint_status == "changed":
+        budget = "B4"
+        reason_codes.append("dependency_changed")
+    elif dependency_fingerprint_status == "unknown" and budget not in {"B4"}:
+        budget = "B3"
+        reason_codes.append("dependency_unknown")
+    if risk_sensitive_change and budget != "B4":
+        budget = "B4"
+        reason_codes.append("schema_or_config_change")
+    if graph_trust == "low" and budget in {"B0", "B1", "B2"}:
+        budget = "B3"
+        reason_codes.append("graph_trust_low")
+    if parser_warning and budget in {"B0", "B1", "B2"}:
+        budget = "B3"
+        reason_codes.append("parser_warning")
+    if parser_confidence is not None and parser_confidence < 0.75 and budget in {"B0", "B1", "B2"}:
+        budget = "B3"
+        reason_codes.append("parser_confidence_low")
+    if previous_targeted_miss_exists(workspace_root, changed_files) and budget in {"B0", "B1", "B2"}:
+        budget = "B3"
+        reason_codes.append("targeted_miss_history")
+    if not direct_tests_count and budget in {"B0", "B1", "B2"}:
+        budget = "B3"
+        reason_codes.append("no_direct_tests")
+    if exported_symbol_touched and budget in {"B0", "B1", "B2"}:
+        budget = "B3"
+        reason_codes.append("public_api_touched")
+    if affected_node_count >= 6 and budget != "B4":
+        budget = "B4"
+        reason_codes.append("large_blast_radius")
+    if direct_tests_count and len(changed_files) == 1 and budget == "B2":
+        reason_codes.append("direct_tests_available")
+    if (report_completeness or {}).get("level") == "low" and budget in {"B0", "B1", "B2"}:
+        budget = "B3"
+        reason_codes.append("context_incomplete")
+    if not reason_codes:
+        reason_codes.append("default_budget_path")
+    return {
+        "budget": budget,
+        "reason_codes": reason_codes,
+        "recommended_test_scope": recommended_scope_for_budget(budget),
+        "must_read_first": must_read_first,
+        "blocking": False,
+    }
+
+
+CIG_MANAGED_BLOCK_START = "<!-- CIG:START -->"
+CIG_MANAGED_BLOCK_END = "<!-- CIG:END -->"
+
+
+def render_integration_block() -> str:
+    return "\n".join(
+        [
+            CIG_MANAGED_BLOCK_START,
+            "## Code Impact Guardian Runtime Contract",
+            "",
+            "Adaptive Verification Orchestrator is active in this repo.",
+            "",
+            "- Start with `python .agents/skills/code-impact-guardian/cig.py health`.",
+            "- Run `python .agents/skills/code-impact-guardian/cig.py analyze` before edits.",
+            "- Read `.ai/codegraph/next-action.json` and follow its verification budget.",
+            "- Use `finish --test-scope targeted` for low-risk edits, and add `--shadow-full` when you want calibration evidence.",
+            "- Prefer this repo-local contract over runtime-private hook/config files.",
+            CIG_MANAGED_BLOCK_END,
+            "",
+        ]
+    )
+
+
+def upsert_cig_managed_block(agents_path: pathlib.Path) -> pathlib.Path:
+    block = render_integration_block()
+    if agents_path.exists():
+        content = agents_path.read_text(encoding="utf-8")
+        pattern = re.compile(
+            rf"{re.escape(CIG_MANAGED_BLOCK_START)}[\s\S]*?{re.escape(CIG_MANAGED_BLOCK_END)}\n?",
+            re.MULTILINE,
+        )
+        if pattern.search(content):
+            updated = pattern.sub(block, content, count=1)
+        else:
+            updated = content.rstrip() + "\n\n" + block
+    else:
+        updated = "# Workspace Rules\n\n" + block
+    agents_path.write_text(updated, encoding="utf-8")
+    return agents_path
+
+
+def runtime_template_content(kind: str) -> str:
+    if kind == "SESSION_START":
+        return "# SESSION_START\n\n1. Run `cig.py health`.\n2. Restore pending changes, handoff, and next-action.\n3. Surface the current recommended commands.\n"
+    if kind == "BEFORE_EDIT":
+        return "# BEFORE_EDIT\n\n1. Read `.ai/codegraph/next-action.json`.\n2. If trust is low or risk is high, run `cig.py analyze` again.\n3. Do not start with a full suite by default.\n"
+    if kind == "AFTER_EDIT":
+        return "# AFTER_EDIT\n\n1. Record changed files in `.ai/codegraph/pending-changes.jsonl`.\n2. Run formatter if needed.\n3. Prefer budget-driven verification before handoff.\n"
+    return "# BEFORE_STOP\n\n1. If pending changes exist, run `cig.py analyze` or `cig.py finish`.\n2. Surface `next-action.json` recommended commands.\n3. Leave a clear handoff when verification is incomplete.\n"
+
+
+def install_integration_pack(*, workspace_root: pathlib.Path, config_path: pathlib.Path) -> dict:
+    ensure_runtime_dirs(workspace_root)
+    ensure_verification_policy_file(workspace_root, config_path)
+    paths = runtime_paths(workspace_root)
+    agents_path = upsert_cig_managed_block(workspace_root / "AGENTS.md")
+    for key, kind in (
+        ("runtime_session_start", "SESSION_START"),
+        ("runtime_before_edit", "BEFORE_EDIT"),
+        ("runtime_after_edit", "AFTER_EDIT"),
+        ("runtime_before_stop", "BEFORE_STOP"),
+    ):
+        paths[key].write_text(runtime_template_content(kind), encoding="utf-8")
+    if not paths["pending_changes"].exists():
+        paths["pending_changes"].write_text("", encoding="utf-8")
+    return {
+        "agents_path": str(agents_path),
+        "runtime_files": {
+            "session_start": str(paths["runtime_session_start"]),
+            "before_edit": str(paths["runtime_before_edit"]),
+            "after_edit": str(paths["runtime_after_edit"]),
+            "before_stop": str(paths["runtime_before_stop"]),
+            "pending_changes": str(paths["pending_changes"]),
+            "verification_policy": str(paths["verification_policy"]),
+        },
+    }
+
+
 def next_action_payload(
     *,
     workspace_root: pathlib.Path,
@@ -1171,6 +1399,9 @@ def next_action_payload(
     direct_summary = report_brief.get("direct_impact_summary", {})
     mapping_status = recommend_payload.get("mapping_status", "unavailable")
     tests_status = (tests_payload or {}).get("status")
+    definition_attrs = definition.get("attrs", {})
+    parser_confidence = definition_attrs.get("parser_confidence")
+    parser_warning = definition_attrs.get("parser_warning")
     suggestion = success_next_step(command_name)
     recommended_action = "edit_code"
     if tests_status == "failed":
@@ -1194,27 +1425,6 @@ def next_action_payload(
         recommended_action = "inspect_report"
         suggestion = "The report is still incomplete, so confirm the seed or narrow the context before editing."
 
-    if dependency_status == "changed":
-        recommended_test_scope = "full"
-    elif dependency_status == "unknown":
-        recommended_test_scope = "configured"
-    elif direct_tests and mapping_status in {"mapped", "partial"}:
-        recommended_test_scope = "targeted"
-    elif direct_tests:
-        recommended_test_scope = "configured"
-    else:
-        recommended_test_scope = "configured"
-
-    risk_level = "low"
-    if dependency_status == "changed":
-        risk_level = "high"
-    elif tests_status == "failed":
-        risk_level = "high"
-    elif dependency_status == "unknown" or report_completeness.get("level") == "low" or graph_trust == "low" or tests_status == "skipped":
-        risk_level = "medium"
-    elif direct_summary.get("callers") or direct_summary.get("rules"):
-        risk_level = "medium"
-
     must_read_first = unique_paths(
         [
             definition.get("path"),
@@ -1222,6 +1432,36 @@ def next_action_payload(
             *[seed_path(item) for item in direct_tests[:3]],
         ]
     )
+    budget_decision = decide_verification_budget(
+        workspace_root=workspace_root,
+        changed_files=changed_files,
+        changed_symbols=[definition.get("symbol")] if definition.get("symbol") else [],
+        dependency_fingerprint_status=dependency_status,
+        graph_trust=graph_trust,
+        parser_confidence=parser_confidence if isinstance(parser_confidence, (int, float)) else None,
+        parser_warning=parser_warning,
+        direct_tests_count=len(direct_tests),
+        affected_node_count=sum(int(direct_summary.get(key, 0) or 0) for key in ("callers", "callees", "tests", "rules")),
+        exported_symbol_touched=bool(definition_attrs.get("exported")),
+        risk_sensitive_change=dependency_or_schema_change(changed_files),
+        report_completeness=report_completeness,
+        must_read_first=must_read_first,
+    )
+    recommended_test_scope = budget_decision["recommended_test_scope"]
+    if recommended_test_scope == "targeted" and not direct_tests:
+        recommended_test_scope = "configured"
+    if recommended_test_scope == "targeted" and mapping_status == "unavailable":
+        recommended_test_scope = "configured"
+
+    risk_level = "low"
+    if budget_decision["budget"] == "B4":
+        risk_level = "high"
+    elif tests_status == "failed":
+        risk_level = "high"
+    elif budget_decision["budget"] == "B3" or dependency_status == "unknown" or report_completeness.get("level") == "low" or graph_trust == "low" or tests_status == "skipped":
+        risk_level = "medium"
+    elif direct_summary.get("callers") or direct_summary.get("rules"):
+        risk_level = "medium"
     can_edit_now = bool(seed)
 
     recommended_commands: list[str] = []
@@ -1244,7 +1484,7 @@ def next_action_payload(
             f"I found {len(direct_tests)} directly related test seed(s), so make the edit and run targeted tests first. "
             "If direct mapping is incomplete, fall back to the configured test command."
         )
-    elif dependency_status == "changed":
+    elif budget_decision["budget"] == "B4":
         user_message = (
             f"This change includes dependency-level risk around {', '.join(changed_files[:2]) or seed}. "
             "Do the smallest safe edit possible, then run at least the configured suite and prefer a full suite before calling it ready."
@@ -1276,6 +1516,8 @@ def next_action_payload(
         "recent_task_influenced": bool((seed_selection or {}).get("recent_task_influenced")),
         "recommended_action": recommended_action,
         "recommended_tests": next_tests[:3],
+        "verification_budget": budget_decision["budget"],
+        "budget_reason_codes": budget_decision["reason_codes"],
         "recommended_test_scope": recommended_test_scope,
         "recommended_test_commands": list(recommend_payload.get("recommended_tests") or []),
         "recommended_commands": recommended_commands,
@@ -1578,6 +1820,7 @@ def run_analyze_command(
             seed_candidates={"task_id": resolved_task_id, "candidates": file_candidates},
             next_action=next_action,
         )
+        machine_outputs["verification_policy_path"] = str(ensure_verification_policy_file(workspace_root, config_path))
         last_task_path_str = persist_last_task(
             workspace_root,
             command_name="analyze",
@@ -1700,6 +1943,7 @@ def run_analyze_command(
         seed_candidates={"task_id": resolved_task_id, "candidates": seed_selection.get("top_candidates", [])[:3]},
         next_action=next_action,
     )
+    machine_outputs["verification_policy_path"] = str(ensure_verification_policy_file(workspace_root, config_path))
     last_task_path_str = persist_last_task(
         workspace_root,
         command_name="analyze",
@@ -1803,6 +2047,7 @@ def finalize_after_edit(
     report_mode: str,
     context_resolution: dict | None = None,
     test_scope: str = "configured",
+    shadow_full: bool = False,
 ) -> dict:
     payload = after_edit_update.after_edit_update(
         workspace_root=workspace_root,
@@ -1812,6 +2057,8 @@ def finalize_after_edit(
         changed_files=changed_files,
         report_mode=report_mode,
         test_scope=test_scope,
+        shadow_full=shadow_full,
+        source=command_name,
     )
     context = command_context(workspace_root, config_path)
     next_action = next_action_payload(
@@ -1831,6 +2078,14 @@ def finalize_after_edit(
         context_resolution=context_resolution,
         next_action=next_action,
     )
+    machine_outputs["verification_policy_path"] = str(ensure_verification_policy_file(workspace_root, config_path))
+    after_edit_update.backfill_test_history_budget(
+        workspace_root=workspace_root,
+        task_id=task_id,
+        budget=next_action.get("verification_budget"),
+    )
+    payload.setdefault("tests", {})["verification_budget"] = next_action.get("verification_budget")
+    payload.setdefault("tests", {})["budget_reason_codes"] = next_action.get("budget_reason_codes", [])
     if payload["tests"]["status"] == "failed":
         handoff_path = write_handoff(
             workspace_root,
@@ -2179,6 +2434,10 @@ def main() -> int:
     recommend_tests_parser.add_argument("--config", default=".code-impact-guardian/config.json")
     recommend_tests_parser.add_argument("--task-id", required=True)
 
+    integration_parser = subparsers.add_parser("install-integration-pack", help="Install repo-local runtime integration docs and AGENTS managed block")
+    integration_parser.add_argument("--workspace-root", default=".")
+    integration_parser.add_argument("--config", default=".code-impact-guardian/config.json")
+
     after_parser = subparsers.add_parser("after-edit", help="Refresh graph, report, evidence, and tests after an edit")
     after_parser.add_argument("--workspace-root", default=".")
     after_parser.add_argument("--config", default=".code-impact-guardian/config.json")
@@ -2187,6 +2446,7 @@ def main() -> int:
     after_parser.add_argument("--changed-file", action="append", default=[])
     after_parser.add_argument("--allow-fallback", action="store_true")
     after_parser.add_argument("--test-scope", choices=["targeted", "configured", "full"], default="configured")
+    after_parser.add_argument("--shadow-full", action="store_true")
 
     finish_parser = subparsers.add_parser("finish", help="High-level after-edit command that reuses recent analyze context")
     finish_parser.add_argument("--workspace-root", default=".")
@@ -2199,6 +2459,7 @@ def main() -> int:
     finish_parser.add_argument("--brief", action="store_true")
     finish_parser.add_argument("--full", action="store_true")
     finish_parser.add_argument("--test-scope", choices=["targeted", "configured", "full"], default="configured")
+    finish_parser.add_argument("--shadow-full", action="store_true")
 
     demo_parser = subparsers.add_parser("demo", help="Run a fixture end-to-end demo")
     demo_parser.add_argument("--fixture", choices=["python_minimal", "tsjs_minimal", "generic_minimal", "tsjs_node_cli", "tsx_react_vite", "sql_pg_minimal", "tsjs_pg_compound"], default="python_minimal")
@@ -2356,7 +2617,7 @@ def main() -> int:
             print(json.dumps(payload, ensure_ascii=False, indent=2))
             return 0
 
-        if args.command in {"report", "analyze", "recommend-tests", "after-edit", "finish"}:
+        if args.command in {"report", "analyze", "recommend-tests", "after-edit", "finish", "install-integration-pack"}:
             auto_setup_if_missing(workspace_root, config_path)
         if args.command not in {"status", "health"}:
             ensure_config_exists(config_path)
@@ -2482,6 +2743,11 @@ def main() -> int:
                 task_id=args.task_id,
             )
             task_id = args.task_id
+        elif args.command == "install-integration-pack":
+            payload = install_integration_pack(
+                workspace_root=workspace_root,
+                config_path=config_path,
+            )
         elif args.command == "after-edit":
             resolved_task_id, resolved_seed, resolved_changed_files, _, context_resolution = resolve_finish_context(
                 workspace_root=workspace_root,
@@ -2501,6 +2767,7 @@ def main() -> int:
                 report_mode="brief",
                 context_resolution=context_resolution,
                 test_scope=args.test_scope,
+                shadow_full=args.shadow_full,
             )
             task_id = resolved_task_id
             seed = resolved_seed
@@ -2525,6 +2792,7 @@ def main() -> int:
                 report_mode=requested_report_mode(args, "brief"),
                 context_resolution=context_resolution,
                 test_scope=args.test_scope,
+                shadow_full=args.shadow_full,
             )
             task_id = resolved_task_id
             seed = resolved_seed

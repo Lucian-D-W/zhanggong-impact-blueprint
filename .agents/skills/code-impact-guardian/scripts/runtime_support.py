@@ -35,9 +35,11 @@ def runtime_paths(workspace_root: pathlib.Path) -> dict[str, pathlib.Path]:
     codegraph_dir = workspace_root / ".ai" / "codegraph"
     logs_dir = codegraph_dir / "logs"
     handoff_dir = codegraph_dir / "handoff"
+    runtime_dir = codegraph_dir / "runtime"
     return {
         "codegraph_dir": codegraph_dir,
         "logs_dir": logs_dir,
+        "runtime_dir": runtime_dir,
         "events": logs_dir / "events.jsonl",
         "errors": logs_dir / "errors.jsonl",
         "last_run": logs_dir / "last-run.json",
@@ -46,6 +48,14 @@ def runtime_paths(workspace_root: pathlib.Path) -> dict[str, pathlib.Path]:
         "build_decision": codegraph_dir / "build-decision.json",
         "seed_candidates": codegraph_dir / "seed-candidates.json",
         "next_action": codegraph_dir / "next-action.json",
+        "verification_policy": codegraph_dir / "verification-policy.json",
+        "test_history": codegraph_dir / "test-history.jsonl",
+        "calibration": codegraph_dir / "calibration.jsonl",
+        "pending_changes": codegraph_dir / "pending-changes.jsonl",
+        "runtime_session_start": runtime_dir / "SESSION_START.md",
+        "runtime_before_edit": runtime_dir / "BEFORE_EDIT.md",
+        "runtime_after_edit": runtime_dir / "AFTER_EDIT.md",
+        "runtime_before_stop": runtime_dir / "BEFORE_STOP.md",
         "handoff_dir": handoff_dir,
         "handoff_latest": handoff_dir / "latest.md",
     }
@@ -55,6 +65,7 @@ def ensure_runtime_dirs(workspace_root: pathlib.Path) -> dict[str, pathlib.Path]
     paths = runtime_paths(workspace_root)
     paths["logs_dir"].mkdir(parents=True, exist_ok=True)
     paths["handoff_dir"].mkdir(parents=True, exist_ok=True)
+    paths["runtime_dir"].mkdir(parents=True, exist_ok=True)
     return paths
 
 

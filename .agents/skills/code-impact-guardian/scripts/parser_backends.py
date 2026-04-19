@@ -17,6 +17,8 @@ class AdapterGraph:
     imports: list[dict] = field(default_factory=list)
     calls: list[dict] = field(default_factory=list)
     covers: list[dict] = field(default_factory=list)
+    extra_nodes: list[dict] = field(default_factory=list)
+    extra_edges: list[dict] = field(default_factory=list)
 
 
 def file_node_id(relative_path: str) -> str:
@@ -70,7 +72,7 @@ def glob_static_prefix(pattern: str) -> str:
 
 
 def matches_any(relative_path: str, patterns: list[str]) -> bool:
-    normalized = relative_path.replace("\\", "/").strip()
+    normalized = normalize_repo_relative_path(relative_path)
     pure = pathlib.PurePosixPath(normalized)
     for pattern in patterns:
         if not pattern:
@@ -184,6 +186,98 @@ def extract_sql_query_hints(text: str) -> list[str]:
     return sorted(hints)
 
 
+CONTRACT_ENV_RE = re.compile(r"\bprocess\.env\.([A-Z0-9_]+)\b")
+CONTRACT_CONFIG_GET_RE = re.compile(r"""\bconfig\.get\(\s*['"]([^'"]+)['"]\s*\)""")
+CONTRACT_SETTINGS_RE = re.compile(r"\bsettings\.([A-Za-z0-9_\.]+)\b")
+CONTRACT_FETCH_RE = re.compile(r"""\bfetch\(\s*['"]([^'"]+)['"]\s*[\),]""")
+CONTRACT_IPC_SEND_RE = re.compile(r"""\bipcRenderer\.send\(\s*['"]([^'"]+)['"]""")
+CONTRACT_IPC_HANDLE_RE = re.compile(r"""\bipcMain\.(?:handle|on)\(\s*['"]([^'"]+)['"]""")
+CONTRACT_OBSIDIAN_COMMAND_RE = re.compile(r"""addCommand\(\s*\{[\s\S]{0,200}?id\s*:\s*['"]([^'"]+)['"]""")
+CONTRACT_PLAYWRIGHT_RE = re.compile(r"""\b(?:test|it)\(\s*['"]([^'"]+)['"]""")
+SQL_SELECT_TABLE_RE = re.compile(r"(?is)\bselect\b[\s\S]{0,120}?\bfrom\s+([a-z_][a-z0-9_\.]*)")
+SQL_DELETE_TABLE_RE = re.compile(r"(?is)\bdelete\s+from\s+([a-z_][a-z0-9_\.]*)")
+SQL_INSERT_TABLE_RE = re.compile(r"(?is)\binsert\s+into\s+([a-z_][a-z0-9_\.]*)")
+SQL_UPDATE_TABLE_RE = re.compile(r"(?is)\bupdate\s+([a-z_][a-z0-9_\.]*)")
+
+
+def contract_node_id(kind: str, value: str) -> str:
+    return f"{kind}:{value}"
+
+
+def append_contract_artifacts(
+    adapter_graph: AdapterGraph,
+    *,
+    relative_path: str,
+    source_text: str,
+    language: str,
+) -> None:
+    file_id = file_node_id(relative_path)
+    seen_nodes: set[tuple[str, str]] = set()
+    seen_edges: set[tuple[str, str, str]] = set()
+
+    def add_contract(kind: str, value: str, edge_type: str, *, extractor: str, confidence: float = 0.8) -> None:
+        if not value:
+            return
+        node_key = (kind, value)
+        node_id = contract_node_id(kind, value)
+        if node_key not in seen_nodes:
+            seen_nodes.add(node_key)
+            adapter_graph.extra_nodes.append(
+                {
+                    "node_id": node_id,
+                    "kind": kind,
+                    "name": value,
+                    "path": relative_path,
+                    "symbol": value,
+                    "start_line": 1,
+                    "end_line": 1,
+                    "attrs": {
+                        "language": language,
+                        "contract_value": value,
+                        "definition_kind": "runtime_contract",
+                    },
+                }
+            )
+        edge_key = (file_id, edge_type, node_id)
+        if edge_key in seen_edges:
+            return
+        seen_edges.add(edge_key)
+        adapter_graph.extra_edges.append(
+            {
+                "src_id": file_id,
+                "dst_id": node_id,
+                "edge_type": edge_type,
+                "relative_path": relative_path,
+                "start_line": 1,
+                "end_line": 1,
+                "extractor": extractor,
+                "confidence": confidence,
+            }
+        )
+
+    for env_name in sorted(set(CONTRACT_ENV_RE.findall(source_text))):
+        add_contract("env_var", env_name, "READS_ENV", extractor="contract_env_scan")
+    for config_key in sorted(set(CONTRACT_CONFIG_GET_RE.findall(source_text)) | set(CONTRACT_SETTINGS_RE.findall(source_text))):
+        add_contract("config_key", config_key, "READS_CONFIG", extractor="contract_config_scan")
+    for endpoint in sorted(set(CONTRACT_FETCH_RE.findall(source_text))):
+        add_contract("endpoint", endpoint, "ROUTES_TO", extractor="contract_endpoint_scan")
+    for channel in sorted(set(CONTRACT_IPC_SEND_RE.findall(source_text))):
+        add_contract("ipc_channel", channel, "IPC_SENDS", extractor="contract_ipc_send_scan")
+    for channel in sorted(set(CONTRACT_IPC_HANDLE_RE.findall(source_text))):
+        add_contract("ipc_channel", channel, "IPC_HANDLES", extractor="contract_ipc_handle_scan")
+    for command_id in sorted(set(CONTRACT_OBSIDIAN_COMMAND_RE.findall(source_text))):
+        add_contract("obsidian_command", command_id, "REGISTER_COMMAND", extractor="contract_obsidian_command_scan")
+    for flow_name in sorted(set(CONTRACT_PLAYWRIGHT_RE.findall(source_text))):
+        add_contract("playwright_flow", flow_name, "ROUTES_TO", extractor="contract_playwright_flow_scan", confidence=0.7)
+
+    query_tables = sorted(set(SQL_SELECT_TABLE_RE.findall(source_text)) | set(SQL_DELETE_TABLE_RE.findall(source_text)))
+    mutation_tables = sorted(set(SQL_INSERT_TABLE_RE.findall(source_text)) | set(SQL_UPDATE_TABLE_RE.findall(source_text)))
+    for table_name in query_tables:
+        add_contract("sql_table", table_name.split(".")[-1], "QUERIES_TABLE", extractor="contract_sql_query_scan")
+    for table_name in mutation_tables:
+        add_contract("sql_table", table_name.split(".")[-1], "MUTATES_TABLE", extractor="contract_sql_mutation_scan")
+
+
 def resolve_python_module(module_name: str, project_root: pathlib.Path) -> str | None:
     module_path = project_root / pathlib.Path(*module_name.split("."))
     file_candidate = module_path.with_suffix(".py")
@@ -293,6 +387,12 @@ def parse_python_backend(project_root: pathlib.Path, config: dict, include_files
                 "parser_backend": "python_ast",
             },
         }
+        append_contract_artifacts(
+            adapter_graph,
+            relative_path=relative,
+            source_text=source_text,
+            language="python",
+        )
         import_file_targets: list[tuple[str, int]] = []
         imported_function_map: dict[str, str] = {}
         imported_module_map: dict[str, str] = {}
@@ -1271,6 +1371,12 @@ def parse_tsjs_backend(project_root: pathlib.Path, config: dict, include_files: 
                 "attrs": file_attrs,
             }
         )
+        append_contract_artifacts(
+            adapter_graph,
+            relative_path=relative,
+            source_text=text,
+            language="tsjs",
+        )
 
         imported_function_map: dict[str, str] = {}
         imported_module_map: dict[str, str] = {}
@@ -1700,6 +1806,12 @@ def parse_generic_backend(project_root: pathlib.Path, config: dict, include_file
                 },
             }
         )
+        append_contract_artifacts(
+            adapter_graph,
+            relative_path=relative,
+            source_text=path.read_text(encoding="utf-8"),
+            language="generic",
+        )
     return adapter_graph
 
 
@@ -1763,6 +1875,12 @@ def parse_sql_postgres_backend(project_root: pathlib.Path, config: dict, include
                     ],
                 },
             }
+        )
+        append_contract_artifacts(
+            adapter_graph,
+            relative_path=relative,
+            source_text=text,
+            language="sql_postgres",
         )
 
         if is_test_file:

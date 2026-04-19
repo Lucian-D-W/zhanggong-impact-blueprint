@@ -120,8 +120,42 @@ def get_git_context(workspace_root: pathlib.Path) -> dict:
 
 
 def ensure_schema(db_path: pathlib.Path, schema_path: pathlib.Path) -> None:
+    desired_schema_version = "3"
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(db_path) as conn:
+        needs_reset = False
+        with contextlib.suppress(sqlite3.DatabaseError, sqlite3.OperationalError):
+            row = conn.execute(
+                "SELECT meta_value FROM repo_meta WHERE meta_key = 'schema_version'"
+            ).fetchone()
+            needs_reset = not row or row[0] != desired_schema_version
+        if needs_reset:
+            conn.execute("PRAGMA foreign_keys = OFF")
+            objects = conn.execute(
+                """
+                SELECT type, name
+                FROM sqlite_master
+                WHERE name NOT LIKE 'sqlite_%'
+                  AND type IN ('table', 'view', 'index', 'trigger')
+                ORDER BY CASE type
+                    WHEN 'trigger' THEN 0
+                    WHEN 'view' THEN 1
+                    WHEN 'index' THEN 2
+                    ELSE 3
+                END
+                """
+            ).fetchall()
+            for object_type, name in objects:
+                quoted_name = f'"{name.replace(chr(34), chr(34) * 2)}"'
+                if object_type == "view":
+                    conn.execute(f"DROP VIEW IF EXISTS {quoted_name}")
+                elif object_type == "index":
+                    conn.execute(f"DROP INDEX IF EXISTS {quoted_name}")
+                elif object_type == "trigger":
+                    conn.execute(f"DROP TRIGGER IF EXISTS {quoted_name}")
+                else:
+                    conn.execute(f"DROP TABLE IF EXISTS {quoted_name}")
+            conn.commit()
         conn.executescript(schema_path.read_text(encoding="utf-8"))
         conn.commit()
 
@@ -748,6 +782,24 @@ def adapter_graph_to_rows(
         evidence_rows.append(evidence)
         edges.append(Edge(file_node_id(test_record["path"]), "DEFINES", test_record["node_id"], evidence.evidence_id))
 
+    for extra_node in adapter_graph.extra_nodes:
+        attrs = {
+            "adapter": adapter_name,
+            "profile": profile_name,
+            "contract": True,
+        }
+        attrs.update(extra_node.get("attrs", {}))
+        nodes[extra_node["node_id"]] = Node(
+            node_id=extra_node["node_id"],
+            kind=extra_node["kind"],
+            name=extra_node["name"],
+            path=extra_node.get("path", ""),
+            symbol=extra_node.get("symbol"),
+            start_line=extra_node.get("start_line"),
+            end_line=extra_node.get("end_line"),
+            attrs_json=json.dumps(attrs, ensure_ascii=False),
+        )
+
     for import_record in adapter_graph.imports:
         target_path = import_record["dst_id"].split("file:", 1)[1]
         if import_record["dst_id"] not in nodes:
@@ -786,6 +838,30 @@ def adapter_graph_to_rows(
             )
             evidence_rows.append(evidence)
             edges.append(Edge(record["src_id"], edge_type, record["dst_id"], evidence.evidence_id))
+
+    for record in adapter_graph.extra_edges:
+        if record["src_id"] not in known_nodes or record["dst_id"] not in known_nodes:
+            continue
+        evidence = make_evidence(
+            workspace_root=workspace_root,
+            git=git,
+            extractor=record["extractor"],
+            relative_path=record["relative_path"],
+            start_line=record["start_line"],
+            end_line=record["end_line"],
+            attrs={"edge_type": record["edge_type"], "source": record["src_id"], "target": record["dst_id"]},
+            confidence=record.get("confidence", 0.8),
+        )
+        evidence_rows.append(evidence)
+        edges.append(
+            Edge(
+                record["src_id"],
+                record["edge_type"],
+                record["dst_id"],
+                evidence.evidence_id,
+                confidence=record.get("confidence", 0.8),
+            )
+        )
 
     return list(nodes.values()), edges, evidence_rows
 

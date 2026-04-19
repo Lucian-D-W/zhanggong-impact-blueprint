@@ -197,6 +197,11 @@ class Stage13WorkflowTest(unittest.TestCase):
                 ["dist/bundle.py", "src/main.py"],
             )
 
+    def test_matches_any_normalizes_dot_prefixed_relative_path(self):
+        for relative_path in ("./src/main.py", ".\\src\\main.py"):
+            with self.subTest(relative_path=relative_path):
+                self.assertTrue(parser_backends.matches_any(relative_path, ["src/*.py"]))
+
     def test_recommend_tests_maps_python_unittest_seed(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             repo_root = pathlib.Path(tmp) / "recommend-python"

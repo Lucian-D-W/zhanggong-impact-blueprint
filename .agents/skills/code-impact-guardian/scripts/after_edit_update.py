@@ -16,6 +16,7 @@ import build_graph
 import generate_report
 from adapters import adapter_coverage_adapter, adapter_test_command, detect_language_adapter
 from parser_backends import v8_relative_path
+from runtime_support import append_jsonl, read_jsonl, runtime_paths
 
 
 def utc_now() -> str:
@@ -116,6 +117,10 @@ def python_unittest_target_from_seed(seed: str) -> str | None:
     return f"{module_name}.{test_name}"
 
 
+def python_unittest_command_from_target(target: str) -> list[str]:
+    return ["python", "-m", "unittest", target]
+
+
 def map_test_seed_to_command(seed: str) -> tuple[list[str] | None, str, str]:
     parts = seed.split(":", 2)
     if len(parts) != 3 or parts[0] != "test":
@@ -127,6 +132,53 @@ def map_test_seed_to_command(seed: str) -> tuple[list[str] | None, str, str]:
     if relative_path.endswith((".js", ".cjs", ".mjs", ".ts", ".tsx", ".jsx")):
         return ["node", "--test", relative_path], "medium", "direct COVERS edge"
     return None, "low", "no direct test command mapping available"
+
+
+def map_history_test_target_to_command(target: str, adapter_name: str) -> list[str] | None:
+    if not target:
+        return None
+    if adapter_name == "python" and "." in target:
+        return python_unittest_command_from_target(target)
+    if adapter_name == "tsjs" and target.endswith((".js", ".cjs", ".mjs", ".ts", ".tsx", ".jsx")):
+        return ["node", "--test", target.replace("\\", "/")]
+    return None
+
+
+def parse_failed_tests(output: str, adapter_name: str) -> list[str]:
+    failed: list[str] = []
+    if adapter_name == "python":
+        for pattern in (
+            r"(?m)^(?:FAIL|ERROR):\s+\S+\s+\(([^)]+)\)\s*$",
+            r"(?m)^\s*unittest\.loader\._FailedTest\.([^\s]+)\s*$",
+        ):
+            failed.extend(match.group(1) for match in re.finditer(pattern, output))
+    elif adapter_name == "tsjs":
+        failed.extend(match.group(1).strip() for match in re.finditer(r"(?m)^\s*not ok\b.*?-\s*(.+?)\s*$", output))
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in failed:
+        if item in seen:
+            continue
+        seen.add(item)
+        deduped.append(item)
+    return deduped
+
+
+def load_history_rows(workspace_root: pathlib.Path) -> list[dict]:
+    return read_jsonl(runtime_paths(workspace_root)["test_history"])
+
+
+def relevant_history_rows(history_rows: list[dict], changed_files: list[str], changed_symbols: list[str]) -> list[dict]:
+    changed_file_set = set(changed_files)
+    changed_symbol_set = set(changed_symbols)
+    relevant: list[dict] = []
+    for row in history_rows:
+        if changed_file_set & set(row.get("changed_files", [])):
+            relevant.append(row)
+            continue
+        if changed_symbol_set & set(row.get("changed_symbols", [])):
+            relevant.append(row)
+    return relevant
 
 
 def combine_recommended_commands(recommended_tests: list[dict]) -> list[list[str]]:
@@ -170,20 +222,69 @@ def recommend_tests_for_task(*, workspace_root: pathlib.Path, config_path: pathl
         task_id=task_id,
     )
     direct_test_seeds = list(((report_payload.get("direct") or {}).get("tests")) or [])
-    recommended_tests: list[dict] = []
+    changed_files = list(report_payload.get("changed_files") or [])
+    changed_symbols = []
+    definition = report_payload.get("definition") or {}
+    if definition.get("symbol"):
+        changed_symbols.append(definition["symbol"])
+    recommended_by_command: dict[tuple[str, ...], dict] = {}
     mapped_count = 0
     for seed in direct_test_seeds:
         command, confidence, reason = map_test_seed_to_command(seed)
         if command:
             mapped_count += 1
-            recommended_tests.append(
-                {
-                    "seed": seed,
+            key = tuple(command)
+            recommended_by_command[key] = {
+                "seed": seed,
+                "command": command,
+                "confidence": confidence,
+                "reason": reason,
+                "graph_score": 100,
+                "history_score": 0,
+                "risk_score": 0,
+                "final_score": 100,
+                "ranking_explanation": ["graph direct cover"],
+            }
+    history_rows = relevant_history_rows(load_history_rows(workspace_root), changed_files, changed_symbols)
+    for row in history_rows:
+        dependency_boost = 20 if row.get("dependency_fingerprint_status") in {"unknown", "changed"} else 0
+        for failed_target in row.get("failed_tests", []):
+            command = map_history_test_target_to_command(failed_target, adapter_name)
+            if not command:
+                continue
+            key = tuple(command)
+            current = recommended_by_command.get(key)
+            if current is None:
+                current = {
+                    "seed": f"history:{failed_target}",
                     "command": command,
-                    "confidence": confidence,
-                    "reason": reason,
+                    "confidence": "medium",
+                    "reason": "history co-failure",
+                    "graph_score": 0,
+                    "history_score": 0,
+                    "risk_score": 0,
+                    "final_score": 0,
+                    "ranking_explanation": [],
                 }
-            )
+                recommended_by_command[key] = current
+            current["history_score"] += 120
+            current["risk_score"] += dependency_boost
+            if "history co-failure" not in current["ranking_explanation"]:
+                current["ranking_explanation"].append("history co-failure")
+            if dependency_boost and "dependency risk boost" not in current["ranking_explanation"]:
+                current["ranking_explanation"].append("dependency risk boost")
+            if current["reason"] != "direct COVERS edge":
+                current["reason"] = "history co-failure"
+    recommended_tests = sorted(
+        (
+            {
+                **item,
+                "final_score": item["graph_score"] + item["history_score"] + item["risk_score"],
+            }
+            for item in recommended_by_command.values()
+        ),
+        key=lambda item: (-item["final_score"], -item["history_score"], item["command"]),
+    )
     if not direct_test_seeds or mapped_count == 0:
         mapping_status = "unavailable"
     elif mapped_count == len(direct_test_seeds):
@@ -197,6 +298,7 @@ def recommend_tests_for_task(*, workspace_root: pathlib.Path, config_path: pathl
         "fallback_command": fallback_command,
         "detected_adapter": adapter_name,
         "direct_test_seed_count": len(direct_test_seeds),
+        "ranking_explanation": [item["ranking_explanation"] for item in recommended_tests],
     }
 
 
@@ -242,12 +344,13 @@ def base_test_summary(
     }
 
 
-def run_tests_with_coverage(
+def _run_test_scope_once(
     *,
     workspace_root: pathlib.Path,
     config_path: pathlib.Path,
     task_id: str,
     requested_test_scope: str = "configured",
+    artifact_suffix: str = "",
 ) -> dict:
     config = build_graph.load_config(config_path)
     paths = build_graph.graph_paths(workspace_root, config)
@@ -261,9 +364,10 @@ def run_tests_with_coverage(
     )
     requested_test_scope = requested_test_scope or "configured"
 
-    output_path = workspace_root / ".ai" / "codegraph" / f"test-output-{task_id}.log"
-    coverage_data_path = workspace_root / ".ai" / "codegraph" / f"coverage-{task_id}.data"
-    coverage_json_path = workspace_root / ".ai" / "codegraph" / f"coverage-{task_id}.json"
+    suffix = artifact_suffix or ""
+    output_path = workspace_root / ".ai" / "codegraph" / f"test-output-{task_id}{suffix}.log"
+    coverage_data_path = workspace_root / ".ai" / "codegraph" / f"coverage-{task_id}{suffix}.data"
+    coverage_json_path = workspace_root / ".ai" / "codegraph" / f"coverage-{task_id}{suffix}.json"
     recommended_tests = list(recommend_payload.get("recommended_tests") or [])
     targeted_commands = combine_recommended_commands(recommended_tests)
 
@@ -320,6 +424,7 @@ def run_tests_with_coverage(
             "recommended_tests": recommended_tests,
             "mapping_status": recommend_payload.get("mapping_status"),
             "fallback_command": recommend_payload.get("fallback_command", []),
+            "failed_tests": [],
         }
         output_path.write_text(summary["coverage_reason"], encoding="utf-8")
         paths["test_results_path"].write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -370,6 +475,7 @@ def run_tests_with_coverage(
                 "recommended_tests": recommended_tests,
                 "mapping_status": recommend_payload.get("mapping_status"),
                 "fallback_command": recommend_payload.get("fallback_command", []),
+                "failed_tests": parse_failed_tests(result.stdout + "\n" + result.stderr, adapter_name),
             }
             paths["test_results_path"].write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
             return summary
@@ -446,6 +552,7 @@ def run_tests_with_coverage(
             "recommended_tests": recommended_tests,
             "mapping_status": recommend_payload.get("mapping_status"),
             "fallback_command": recommend_payload.get("fallback_command", []),
+            "failed_tests": parse_failed_tests(result.stdout + "\n" + result.stderr, adapter_name),
         }
         paths["test_results_path"].write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
         return summary
@@ -532,6 +639,7 @@ def run_tests_with_coverage(
             "recommended_tests": recommended_tests,
             "mapping_status": recommend_payload.get("mapping_status"),
             "fallback_command": recommend_payload.get("fallback_command", []),
+            "failed_tests": parse_failed_tests(result.stdout + "\n" + result.stderr, adapter_name),
         }
         paths["test_results_path"].write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
         return summary
@@ -580,9 +688,75 @@ def run_tests_with_coverage(
         "recommended_tests": recommended_tests,
         "mapping_status": recommend_payload.get("mapping_status"),
         "fallback_command": recommend_payload.get("fallback_command", []),
+        "failed_tests": parse_failed_tests("\n".join(outputs), adapter_name),
     }
     paths["test_results_path"].write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     return summary
+
+
+def run_tests_with_coverage(
+    *,
+    workspace_root: pathlib.Path,
+    config_path: pathlib.Path,
+    task_id: str,
+    requested_test_scope: str = "configured",
+    shadow_full: bool = False,
+) -> dict:
+    primary = _run_test_scope_once(
+        workspace_root=workspace_root,
+        config_path=config_path,
+        task_id=task_id,
+        requested_test_scope=requested_test_scope,
+    )
+    if not shadow_full:
+        return primary
+
+    primary_scope = primary.get("effective_test_scope") or requested_test_scope
+    if requested_test_scope == "targeted":
+        shadow_scope = "configured"
+        comparison = "targeted-vs-configured"
+    elif primary_scope == "configured":
+        shadow_scope = "full"
+        comparison = "configured-vs-full"
+    else:
+        shadow_scope = "full"
+        comparison = f"{primary_scope}-vs-full"
+
+    shadow = _run_test_scope_once(
+        workspace_root=workspace_root,
+        config_path=config_path,
+        task_id=task_id,
+        requested_test_scope=shadow_scope,
+        artifact_suffix="-shadow",
+    )
+    primary_failed = set(primary.get("failed_tests", []))
+    shadow_failed = set(shadow.get("failed_tests", []))
+    missed_failures = sorted(shadow_failed - primary_failed)
+    shadow_failure_count = max(len(shadow_failed), 1)
+    selection_quality = {
+        "shadow_run": True,
+        "comparison": comparison,
+        "targeted_passed": bool(primary.get("tests_passed")),
+        "shadow_passed": bool(shadow.get("tests_passed")),
+        "missed_failures": missed_failures,
+        "safe": not missed_failures,
+        "precision": round((len(shadow_failed) - len(missed_failures)) / shadow_failure_count, 2),
+        "miss_rate": round(len(missed_failures) / shadow_failure_count, 2),
+    }
+    primary["selection_quality"] = selection_quality
+    primary["shadow_summary"] = {
+        "requested_test_scope": shadow_scope,
+        "effective_test_scope": shadow.get("effective_test_scope"),
+        "status": shadow.get("status"),
+        "tests_passed": shadow.get("tests_passed"),
+        "failed_tests": shadow.get("failed_tests", []),
+        "output_path": shadow.get("output_path"),
+    }
+
+    config = build_graph.load_config(config_path)
+    paths = build_graph.graph_paths(workspace_root, config)
+    paths["test_results_path"].write_text(json.dumps(primary, ensure_ascii=False, indent=2), encoding="utf-8")
+    return primary
 
 
 def record_test_run(*, workspace_root: pathlib.Path, config_path: pathlib.Path, task_id: str, test_summary: dict) -> str:
@@ -844,6 +1018,120 @@ def diff_summary_lines(summary: dict) -> list[str]:
     return lines
 
 
+def changed_symbols_from_summary(summary: dict) -> list[str]:
+    symbols: list[str] = []
+    for item in summary.get("function_diffs", {}).get("added", []):
+        if item.get("symbol"):
+            symbols.append(item["symbol"])
+    for item in summary.get("function_diffs", {}).get("modified", []):
+        if item.get("symbol"):
+            symbols.append(item["symbol"])
+    for item in summary.get("function_diffs", {}).get("renamed", []):
+        if item.get("after_symbol"):
+            symbols.append(item["after_symbol"])
+    return symbols
+
+
+def record_pending_changes(
+    *,
+    workspace_root: pathlib.Path,
+    changed_files: list[str],
+    task_id: str,
+    source: str,
+    status: str,
+) -> None:
+    paths = runtime_paths(workspace_root)
+    for changed_file in changed_files:
+        append_jsonl(
+            paths["pending_changes"],
+            {
+                "path": changed_file,
+                "timestamp": utc_now(),
+                "source": source,
+                "task_id": task_id,
+                "status": status,
+            },
+        )
+
+
+def record_test_history(
+    *,
+    workspace_root: pathlib.Path,
+    task_id: str,
+    changed_files: list[str],
+    changed_symbols: list[str],
+    test_summary: dict,
+    dependency_fingerprint_status: str,
+    parser_trust: str,
+    graph_trust: str,
+    budget: str | None,
+) -> None:
+    paths = runtime_paths(workspace_root)
+    append_jsonl(
+        paths["test_history"],
+        {
+            "task_id": task_id,
+            "changed_files": changed_files,
+            "changed_symbols": changed_symbols,
+            "recommended_tests": [item.get("seed") for item in test_summary.get("recommended_tests", [])],
+            "executed_commands": test_summary.get("commands", []),
+            "failed_tests": test_summary.get("failed_tests", []),
+            "test_scope": test_summary.get("effective_test_scope"),
+            "dependency_fingerprint_status": dependency_fingerprint_status,
+            "parser_trust": parser_trust,
+            "graph_trust": graph_trust,
+            "budget": budget,
+            "timestamp": utc_now(),
+        },
+    )
+
+
+def backfill_test_history_budget(*, workspace_root: pathlib.Path, task_id: str, budget: str | None) -> None:
+    if not budget:
+        return
+    paths = runtime_paths(workspace_root)
+    history_path = paths["test_history"]
+    if not history_path.exists():
+        return
+    rows = [json.loads(line) for line in history_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    updated = False
+    for row in reversed(rows):
+        if row.get("task_id") != task_id:
+            continue
+        if row.get("budget") == budget:
+            return
+        row["budget"] = budget
+        updated = True
+        break
+    if not updated:
+        return
+    history_path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+
+
+def record_calibration(
+    *,
+    workspace_root: pathlib.Path,
+    task_id: str,
+    changed_files: list[str],
+    selection_quality: dict,
+) -> None:
+    if not selection_quality:
+        return
+    paths = runtime_paths(workspace_root)
+    append_jsonl(
+        paths["calibration"],
+        {
+            "task_id": task_id,
+            "changed_files": changed_files,
+            "selection_quality": selection_quality,
+            "timestamp": utc_now(),
+        },
+    )
+
+
 def after_edit_update(
     *,
     workspace_root: pathlib.Path,
@@ -853,6 +1141,9 @@ def after_edit_update(
     changed_files: list[str],
     report_mode: str = "brief",
     test_scope: str = "configured",
+    shadow_full: bool = False,
+    verification_budget: str | None = None,
+    source: str = "after-edit",
 ) -> dict:
     config = build_graph.load_config(config_path)
     paths = build_graph.graph_paths(workspace_root, config)
@@ -884,6 +1175,7 @@ def after_edit_update(
         config_path=config_path,
         task_id=task_id,
         requested_test_scope=test_scope,
+        shadow_full=shadow_full,
     )
     report_summary = generate_report.generate_report(
         workspace_root=workspace_root,
@@ -903,6 +1195,31 @@ def after_edit_update(
     paths["test_results_path"].write_text(json.dumps(test_summary, ensure_ascii=False, indent=2), encoding="utf-8")
     run_id = record_test_run(workspace_root=workspace_root, config_path=config_path, task_id=task_id, test_summary=test_summary)
     import_coverage(workspace_root=workspace_root, config_path=config_path, run_id=run_id, test_summary=test_summary)
+    record_pending_changes(
+        workspace_root=workspace_root,
+        changed_files=changed_files,
+        task_id=task_id,
+        source=source,
+        status="pending",
+    )
+    report_trust = report_summary.get("trust", {})
+    record_test_history(
+        workspace_root=workspace_root,
+        task_id=task_id,
+        changed_files=changed_files,
+        changed_symbols=changed_symbols_from_summary(round_summary),
+        test_summary=test_summary,
+        dependency_fingerprint_status=(graph_summary.get("build_decision") or {}).get("dependency_fingerprint_status", "unknown"),
+        parser_trust=report_trust.get("parser", "unknown"),
+        graph_trust=report_trust.get("graph", (graph_summary.get("build_decision") or {}).get("graph_trust", "unknown")),
+        budget=verification_budget,
+    )
+    record_calibration(
+        workspace_root=workspace_root,
+        task_id=task_id,
+        changed_files=changed_files,
+        selection_quality=test_summary.get("selection_quality", {}),
+    )
 
     task_run_id = build_graph.record_task_run(
         db_path=paths["db_path"],

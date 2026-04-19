@@ -135,6 +135,64 @@
   "impact": {
     "max_depth": 3
   },
+  "flow_policy": {
+    "bypass_globs": [
+      "docs/archive/**",
+      "docs/demo/**",
+      "**/*.drawio",
+      "**/*.excalidraw",
+      "**/*.png",
+      "**/*.jpg",
+      "**/*.jpeg",
+      "**/*.svg"
+    ],
+    "lightweight_globs": [
+      "README.md",
+      "AGENTS.md",
+      ".agents/skills/code-impact-guardian/SKILL.md",
+      ".ai/codegraph/runtime/*.md",
+      ".ai/codegraph/runtime/**/*.md"
+    ],
+    "guarded_globs": [
+      "src/**",
+      "scripts/**",
+      "tests/**",
+      ".agents/skills/code-impact-guardian/**/*.py",
+      ".code-impact-guardian/config.json",
+      ".code-impact-guardian/schema.sql",
+      "docs/rules/**"
+    ],
+    "risk_sensitive_globs": [
+      "package.json",
+      "package-lock.json",
+      "pnpm-lock.yaml",
+      "yarn.lock",
+      "bun.lock",
+      "bun.lockb",
+      "requirements.txt",
+      "requirements-dev.txt",
+      "pyproject.toml",
+      "poetry.lock",
+      "tsconfig.json",
+      "vite.config.*",
+      "next.config.*",
+      ".env",
+      ".env.*",
+      "migrations/**",
+      "schema/**",
+      "**/*.sql"
+    ],
+    "markdown_guard_patterns": [
+      "test_command",
+      "verification budget",
+      "finish --test-scope",
+      "python .agents/skills/code-impact-guardian/cig.py",
+      "governs:",
+      "docs/rules",
+      "CONTEXT_MISSING",
+      "graph_trust"
+    ]
+  },
   "verification_policy": {
     "default_budget": "B2",
     "budgets": {

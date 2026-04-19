@@ -1,43 +1,58 @@
 # Code Impact Guardian
 
-Code Impact Guardian is a lightweight, repo-local skill template for safer code
-changes.
+Code Impact Guardian is a lightweight, repo-local skill template for safer
+agent-driven code changes.
 
-It stays intentionally small:
+It is designed to answer one practical question before an edit lands:
+
+`If I change this, what else do I risk breaking?`
+
+The template stays intentionally small:
 
 - one repo-local skill folder
 - one SQLite graph
-- one fixed direct-edge workflow
+- one direct-edge workflow
 - one unified CLI
-- one export path for consumers
+- one export path for consumer repos
 
-It is not a plugin.
-It is not a platform product.
-It is meant to be copied into another repository and used quickly.
+It is not a hosted platform. It is meant to be copied into another repository
+and used by agents as part of the normal edit loop.
+
+## Current focus
+
+The repository has moved beyond the earlier Stage 10 daily-driver work. The
+current shape includes the Stage 13 "Real-Use Intelligence Layer" and the
+Stage 14 "Adaptive Verification Orchestrator" additions:
+
+- verification budgets (`B0` through `B4`)
+- `targeted`, `configured`, and `full` test scopes
+- `recommend-tests` for executable affected-test commands
+- `--shadow-full` calibration for targeted verification
+- local test-history ranking
+- runtime integration pack files under `.ai/codegraph/runtime/`
+- multidimensional trust instead of a single trust flag
+- early runtime-contract graph support for env/config/ipc/sql-style edges
+
+The repo is still a development source for the template, so some review-bundle
+documents remain at the root for compatibility even though the product workflow
+has advanced.
 
 ## Fixed workflow
 
-The workflow does not change:
+The core workflow remains stable:
 
-1. build / refresh graph
-2. generate impact report
-3. allow code edits
-4. update graph / report / evidence after edit
-5. run relevant tests and record outcome
+1. run `health` when repo readiness is unclear
+2. run `analyze`
+3. read the brief report and `.ai/codegraph/next-action.json`
+4. edit only after the impact context is clear
+5. run `finish` with the budget-driven scope
+6. use `--shadow-full` when targeted verification needs calibration
 
-## Stage10 focus
+For agents, the canonical operational instructions live in:
 
-Stage10 keeps the same lightweight shape and pushes it toward a more
-trustworthy, lower-friction daily workflow:
-
-- skill structure normalized for easier agent triggering and export
-- automatic setup when the repo has not been initialized yet
-- better Python OOP and TS/JS brace-edge parsing
-- clearer separation between seed selection, graph trust, report completeness,
-  and test signal
-- stronger protections against stale-graph trust and empty-report misuse
-- consumer export vs debug bundle export, so normal sharing does not leak `.ai`
-  artifacts
+- `.agents/skills/code-impact-guardian/SKILL.md`
+- `AGENTS.md`
+- `.ai/codegraph/*` runtime state files
 
 ## Current support level
 
@@ -46,7 +61,7 @@ trustworthy, lower-friction daily workflow:
 - stable regression baseline
 - `file`, `function`, `test`, `rule`
 - direct `DEFINES`, `CALLS`, `IMPORTS`, `COVERS`, `GOVERNS`
-- real `coverage.py` path
+- real `coverage.py` support with honest fallback when coverage is unavailable
 
 ### TS/JS family
 
@@ -57,28 +72,27 @@ trustworthy, lower-friction daily workflow:
 - custom hooks
 - minimal class methods
 - import / export / re-export / require / module.exports
-- node:test / jest / vitest style detection
-- real raw V8 coverage path
-- stronger brief/test recommendations for React and CLI-style repos
+- `node:test`, Jest, and Vitest style detection
+- conservative file-level test recommendations when method-level mapping is not available
 
 ### SQL/PostgreSQL supplemental
 
-- real supplemental adapter
-- SQL files become `file` nodes
-- PostgreSQL routines become `function` nodes
-- SQL subtype stored in attrs via `sql_kind`
+- lightweight SQL supplemental adapter
+- SQL files as `file` nodes
+- PostgreSQL routines as `function` nodes
 - high-confidence SQL `CALLS`
 - high-confidence SQL test `COVERS`
-- app-to-SQL query hints only become edges when confidence is high enough
-- test outcome is real even when SQL coverage is unavailable
-- `sql_dialect`/`sql_mode` stays lightweight and metadata-driven
-- views/materialized views remain metadata or hint only, never new node types
+- honest no-coverage behavior when runtime coverage is not available
 
-### Generic fallback
+### Runtime-contract graph
 
-- file-level only
-- still supports build / report / after-edit / test outcome
-- never pretends to have function-level precision
+The graph still centers on `file`, `function`, `test`, and `rule`, but the
+repo now also has lightweight support for identifying higher-level contracts
+such as env vars, config keys, endpoints, routes, ipc channels, SQL table
+references, and Playwright-style flow hints.
+
+These contract nodes are intentionally lightweight and should not be treated as
+fully exhaustive parser truth.
 
 ## Development repo vs consumer install
 
@@ -88,15 +102,16 @@ It contains:
 
 - examples
 - tests
-- stage history
-- fixtures used to validate the template
+- benchmark fixtures
+- review-bundle documents
+- archived process/history documents
 
-The consumer-facing install path is now:
+The consumer-facing install path is still:
 
 1. copy only `.agents/skills/code-impact-guardian/` into the target repo
 2. run `python .agents/skills/code-impact-guardian/cig.py setup --project-root .`
 
-That single-folder install will generate:
+That single-folder install generates:
 
 - `AGENTS.md`
 - `.gitignore`
@@ -105,6 +120,27 @@ That single-folder install will generate:
 - `QUICKSTART.md`
 - `TROUBLESHOOTING.md`
 - `CONSUMER_GUIDE.md`
+
+## Documentation map
+
+The repo now separates current operating docs from archived process docs.
+
+Current docs:
+
+- `README.md`
+- `AGENTS.md`
+- `docs/README.md`
+- `benchmark/README.md`
+- `docs/demo/without-vs-with-skill.md`
+
+Compatibility review docs:
+
+- `STAGE13_REVIEW_GUIDE.md`
+- `STAGE13_CHANGELOG.md`
+
+Archived process/history docs:
+
+- `docs/archive/README.md`
 
 ## Exporting the skill
 
@@ -132,7 +168,7 @@ handoff notes, and last-error snapshots.
 python .agents/skills/code-impact-guardian/cig.py export-skill --mode single-folder --out path/to/exported-skill
 ```
 
-This produces only the folder that should be copied into:
+This produces only:
 
 ```text
 .agents/skills/code-impact-guardian/
@@ -146,38 +182,48 @@ These are the main user-facing commands now:
 
 ```bash
 python .agents/skills/code-impact-guardian/cig.py setup --project-root .
+python .agents/skills/code-impact-guardian/cig.py health
 python .agents/skills/code-impact-guardian/cig.py analyze
-python .agents/skills/code-impact-guardian/cig.py finish
+python .agents/skills/code-impact-guardian/cig.py recommend-tests --workspace-root . --task-id <task-id>
+python .agents/skills/code-impact-guardian/cig.py install-integration-pack
+python .agents/skills/code-impact-guardian/cig.py finish --test-scope targeted
+python .agents/skills/code-impact-guardian/cig.py finish --test-scope targeted --shadow-full
 ```
 
 What they do:
 
-- `setup` = init + write AGENTS.md + write .gitignore + write consumer docs + doctor + detect
-- `analyze` = context inference + build/reuse graph + automatic task id + smart seed ranking + brief report
-- `finish` = after-edit + recent task reuse + tests + handoff/status refresh
+- `setup` = initialize config, schema, consumer docs, and repo defaults
+- `health` = report readiness, trust freshness, and recovery hints
+- `analyze` = infer context, refresh or reuse the graph, and write next-action guidance
+- `recommend-tests` = turn direct test seeds into executable commands
+- `install-integration-pack` = write runtime-neutral repo guidance and session contract files
+- `finish` = refresh evidence, run the chosen verification scope, and update handoff/status state
 
 Useful flags:
 
-- `--changed-line <path:line>` improves seed ranking inside large files
-- `--patch-file <path>` lets `analyze` or `finish` infer context from a diff file
-- `--brief` is the default for `analyze` and `status`
-- `--full` asks for a fuller report/status payload
-- `--allow-fallback` lets uncertain repos fall back to generic file-level mode
+- `--changed-file <path>`
+- `--changed-line <path:line>`
+- `--patch-file <path>`
+- `--allow-fallback`
+- `--full`
+- `--shadow-full`
+- `--test-scope targeted|configured|full`
 
-### Low-level commands
+### Budget-driven verification
 
-Advanced users can still use:
+Verification is no longer a simple "light vs full" choice.
 
-```bash
-python .agents/skills/code-impact-guardian/cig.py init
-python .agents/skills/code-impact-guardian/cig.py doctor
-python .agents/skills/code-impact-guardian/cig.py detect
-python .agents/skills/code-impact-guardian/cig.py build
-python .agents/skills/code-impact-guardian/cig.py seeds
-python .agents/skills/code-impact-guardian/cig.py report --seed <seed>
-python .agents/skills/code-impact-guardian/cig.py after-edit --seed <seed> --changed-file <path>
-python .agents/skills/code-impact-guardian/cig.py status
-```
+- `B0` = no-op or docs-only
+- `B1` = health + analyze only
+- `B2` = targeted tests
+- `B3` = configured tests
+- `B4` = full tests plus dependency/schema review
+
+The verification budget is written to:
+
+- `.ai/codegraph/verification-policy.json`
+- `.ai/codegraph/next-action.json`
+- finish/test results payloads
 
 ## Profiles
 
@@ -194,50 +240,8 @@ Setup-ready profiles:
 - `obsidian-plugin`
 - `tauri-frontend`
 
-These profiles only change config defaults, doctor expectations, and suggested
-commands.
-They do not create new graph systems or new adapter families.
-
-## Supplemental adapters
-
-Stage5+ uses:
-
-```json
-{
-  "primary_adapter": "auto",
-  "supplemental_adapters": ["sql_postgres"]
-}
-```
-
-Use supplemental adapters when another language should enrich the same graph
-and report rather than create a second workflow.
-
-For SQL hints:
-
-- high confidence + unique target -> direct `CALLS`
-- high confidence but not confirmed enough -> report hint
-- otherwise -> metadata only
-
-## Daily-driver output shape
-
-`analyze` now writes both:
-
-- human report: `.ai/codegraph/reports/impact-<task-id>.md`
-- agent report: `.ai/codegraph/reports/impact-<task-id>.json`
-
-Brief mode is now a stable contract for both people and agents:
-
-- selected seed
-- why this seed
-- changed files summary
-- direct impact summary
-- build trust summary
-- top risks
-- next tests
-- next step
-
-`brief` is intentionally not a long report. It is the default daily-use
-protocol for `analyze` and `status`.
+Profiles only change config defaults, doctor expectations, and suggested
+commands. They do not create separate graph systems.
 
 ## Structured runtime artifacts
 
@@ -251,29 +255,43 @@ Key files:
 
 - graph DB: `.ai/codegraph/codegraph.db`
 - reports: `.ai/codegraph/reports/`
-- structured logs: `.ai/codegraph/logs/`
-- recent task: `.ai/codegraph/last-task.json`
-- handoff card: `.ai/codegraph/handoff/latest.md`
-- context inference: `.ai/codegraph/context-resolution.json`
-- build trust decision: `.ai/codegraph/build-decision.json`
-- top seed candidates: `.ai/codegraph/seed-candidates.json`
-- next action for the next agent/human: `.ai/codegraph/next-action.json`
+- logs: `.ai/codegraph/logs/`
+- handoff: `.ai/codegraph/handoff/latest.md`
+- context resolution: `.ai/codegraph/context-resolution.json`
+- next action: `.ai/codegraph/next-action.json`
+- verification policy: `.ai/codegraph/verification-policy.json`
+- test history: `.ai/codegraph/test-history.jsonl`
+- calibration history: `.ai/codegraph/calibration.jsonl`
+- pending changes: `.ai/codegraph/pending-changes.jsonl`
 
-Structured logs include:
+When the integration pack is installed, runtime-neutral session docs also live
+under:
 
-- `events.jsonl`
-- `errors.jsonl`
-- `last-run.json`
-- `last-error.json`
+```text
+.ai/codegraph/runtime/
+```
 
-Normal failures stay concise.
-Tracebacks only print when `--debug` is used.
+## Trust and safety
+
+`tests passed` is useful evidence, but it is not proof that a change is safe.
+
+The runtime now separates:
+
+- seed confidence
+- graph trust
+- parser trust
+- dependency status
+- test signal
+- coverage signal
+- context completeness
+- overall trust
+
+That split is intentional. The skill should help an agent avoid overclaiming,
+not manufacture confidence.
 
 ## Recovery and handoff
 
-Recovery is part of the skill, not just the code.
-
-Read in this order:
+Read in this order when something goes wrong:
 
 1. `.ai/codegraph/logs/last-error.json`
 2. `.ai/codegraph/handoff/latest.md`
@@ -285,101 +303,26 @@ Use:
 python .agents/skills/code-impact-guardian/cig.py status
 ```
 
-to see:
-
-- current config/profile/primary/supplemental
-- latest build/report/after-edit/analyze/finish status
-- latest error
-- latest report/test paths
-- available seed count
-- recent task context
-- build trust decision
-- inferred context
-- next action suggestion
-- recommended next step
-
-## Context inference and trust
-
-`analyze` now tries hard to avoid manual flags. It uses this priority:
-
-1. explicit `--seed`, `--changed-file`, `--changed-line`
-2. `--patch-file`
-3. stdin patch
-4. git working tree diff
-5. git staged diff
-6. recent handoff / `last-task.json`
-
-You only need to pass `--seed` when the top candidates remain genuinely
-ambiguous.
-
-If there is no usable git diff, no patch input, no explicit changed file, and
-no recent task context, `analyze` now returns a readable `CONTEXT_MISSING`
-error instead of creating an empty-looking report. In that case you should pass
-`--changed-file`, pass `--patch-file`, initialize git, or explicitly allow a
-file-level fallback.
-
-Incremental vs full rebuild is now guided by a trust policy. The brief report,
-status output, `build-decision.json`, and handoff all explain:
-
-- whether the run was incremental or full
-- why that choice was made
-- whether shadow verification ran
-- whether a fallback full rebuild became necessary
-
-High graph trust now requires all of these:
-
-- fresh graph state
-- unchanged config/profile/rules/doc-source fingerprint
-- unchanged dependency fingerprint
-- no high-risk cross-adapter or noisy generated-file change set
-
-If the graph is merely reused and the previous build is older than the
-configured TTL, the run is not high trust.
-
-## Tests are not safety
-
-`tests passed` is a useful signal, but it is not proof that the change is
-safe.
-
-The daily workflow now separates:
-
-- `seed_confidence`: why this seed was selected
-- `graph_trust`: whether the graph is fresh and trustworthy enough
-- `test_signal`: what tests actually ran and how relevant they were
-- `report_completeness`: whether the report has enough context to support
-  editing safely
-
-When no directly affected tests are identified, the tool will say so
-explicitly, even if the suite is green.
-
-## What scripts guarantee vs what the agent decides
-
-### Script-guaranteed
-
-- direct-edge-only persistence
-- unified graph/report/after-edit flow
-- structured runtime logs and last-error snapshots
-- recent task persistence
-- deterministic single-folder and full-package exports
-
-### Agent-guided
-
-- whether a warning is acceptable for the current task
-- whether generic fallback is acceptable when detection is uncertain
-- how to narrow scope when multiple seeds are plausible
-- how to proceed after a test failure while preserving evidence
+to inspect the latest build/report/finish state, trust decision, inferred
+context, and recommended next step.
 
 ## Verification
 
+Focused validation:
+
 ```bash
-python -m unittest tests.test_stage1_workflow -v
-python -m unittest tests.test_stage2_workflow -v
-python -m unittest tests.test_stage3_workflow -v
-python -m unittest tests.test_stage4_workflow -v
-python -m unittest tests.test_stage5_workflow -v
-python -m unittest tests.test_stage6_workflow -v
-python -m unittest tests.test_stage7_workflow -v
-python -m unittest tests.test_stage8_workflow -v
-python -m unittest tests.test_stage9_workflow -v
-python -m unittest tests.test_stage10_workflow -v
+python -m unittest tests.test_stage11_workflow tests.test_stage13_workflow -v
+python -m unittest tests.test_stage14_workflow -v
+```
+
+Broader regression:
+
+```bash
+python -m unittest tests.test_stage9_workflow tests.test_stage10_workflow tests.test_stage11_workflow tests.test_stage13_workflow tests.test_stage14_workflow -v
+```
+
+Full current workflow matrix:
+
+```bash
+python -m unittest discover -s tests -p test_*.py -v
 ```

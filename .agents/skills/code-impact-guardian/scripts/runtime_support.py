@@ -52,6 +52,8 @@ def runtime_paths(workspace_root: pathlib.Path) -> dict[str, pathlib.Path]:
         "test_history": codegraph_dir / "test-history.jsonl",
         "calibration": codegraph_dir / "calibration.jsonl",
         "pending_changes": codegraph_dir / "pending-changes.jsonl",
+        "repair_attempts": codegraph_dir / "repair-attempts.jsonl",
+        "loop_breaker_report": codegraph_dir / "loop-breaker-report.json",
         "runtime_session_start": runtime_dir / "SESSION_START.md",
         "runtime_before_edit": runtime_dir / "BEFORE_EDIT.md",
         "runtime_after_edit": runtime_dir / "AFTER_EDIT.md",

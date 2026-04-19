@@ -16,8 +16,10 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 import after_edit_update  # noqa: E402
 import build_graph  # noqa: E402
+import change_classifier  # noqa: E402
 import generate_report  # noqa: E402
 import list_seeds  # noqa: E402
+import repair_escalation  # noqa: E402
 from adapters import SQL_POSTGRES_ADAPTER, configured_supplemental_adapters, detect_language_adapter, detect_project_profile_name, detect_supplemental_adapters  # noqa: E402
 from consumer_install import ensure_agents_md as ensure_consumer_agents_md, ensure_consumer_docs, ensure_gitignore as ensure_consumer_gitignore, export_single_folder  # noqa: E402
 from doc_sources import doc_source_doctor_status  # noqa: E402
@@ -115,6 +117,7 @@ DEFAULT_CONFIG = {
         "parser_backend": "sql_postgres_lite",
     },
     "impact": {"max_depth": 3},
+    "flow_policy": change_classifier.default_flow_policy(),
     "verification_policy": {
         "default_budget": "B2",
         "budgets": {
@@ -1204,12 +1207,19 @@ def previous_targeted_miss_exists(workspace_root: pathlib.Path, changed_files: l
 
 def recommended_scope_for_budget(budget: str) -> str:
     return {
-        "B0": "targeted",
-        "B1": "targeted",
+        "B0": "none",
+        "B1": "none",
         "B2": "targeted",
         "B3": "configured",
         "B4": "full",
     }.get(budget, "configured")
+
+
+BUDGET_PRIORITY = {"B0": 0, "B1": 1, "B2": 2, "B3": 3, "B4": 4}
+
+
+def max_budget(current: str, floor: str) -> str:
+    return current if BUDGET_PRIORITY.get(current, 0) >= BUDGET_PRIORITY.get(floor, 0) else floor
 
 
 def decide_verification_budget(
@@ -1227,16 +1237,43 @@ def decide_verification_budget(
     risk_sensitive_change: bool,
     report_completeness: dict | None,
     must_read_first: list[str],
+    change_summary: dict | None = None,
+    escalation_level: str = "L0",
 ) -> dict:
     del changed_symbols
+    change_summary = change_summary or {}
+    effective_class = change_summary.get("effective_class") or change_summary.get("change_class") or "guarded"
     reason_codes: list[str] = []
     budget = "B2"
-    if docs_or_comment_only_changed_files(changed_files):
+    if effective_class == "bypass":
         budget = "B0"
-        reason_codes.append("docs_only")
-    elif not changed_files:
+        reason_codes.append("non_runtime_bypass")
+        return {
+            "budget": budget,
+            "reason_codes": reason_codes,
+            "recommended_test_scope": recommended_scope_for_budget(budget),
+            "must_read_first": must_read_first,
+            "blocking": False,
+        }
+    if effective_class == "lightweight":
+        budget = "B1"
+        reason_codes.append("lightweight_change")
+        return {
+            "budget": budget,
+            "reason_codes": reason_codes,
+            "recommended_test_scope": recommended_scope_for_budget(budget),
+            "must_read_first": must_read_first,
+            "blocking": False,
+        }
+    if not changed_files:
         budget = "B1"
         reason_codes.append("analyze_only")
+    elif effective_class == "risk_sensitive":
+        budget = "B4"
+        reason_codes.append("risk_sensitive_change")
+    else:
+        budget = "B2"
+        reason_codes.append("guarded_change")
     if dependency_fingerprint_status == "changed":
         budget = "B4"
         reason_codes.append("dependency_changed")
@@ -1258,7 +1295,7 @@ def decide_verification_budget(
     if previous_targeted_miss_exists(workspace_root, changed_files) and budget in {"B0", "B1", "B2"}:
         budget = "B3"
         reason_codes.append("targeted_miss_history")
-    if not direct_tests_count and budget in {"B0", "B1", "B2"}:
+    if effective_class in {"guarded", "risk_sensitive"} and not direct_tests_count and budget in {"B0", "B1", "B2"}:
         budget = "B3"
         reason_codes.append("no_direct_tests")
     if exported_symbol_touched and budget in {"B0", "B1", "B2"}:
@@ -1272,12 +1309,19 @@ def decide_verification_budget(
     if (report_completeness or {}).get("level") == "low" and budget in {"B0", "B1", "B2"}:
         budget = "B3"
         reason_codes.append("context_incomplete")
+    elevated_budget = repair_escalation.budget_floor_for_level(escalation_level, budget)
+    if elevated_budget != budget:
+        budget = elevated_budget
+        reason_codes.append(f"repair_loop_{escalation_level.lower()}")
     if not reason_codes:
         reason_codes.append("default_budget_path")
     return {
         "budget": budget,
         "reason_codes": reason_codes,
-        "recommended_test_scope": recommended_scope_for_budget(budget),
+        "recommended_test_scope": repair_escalation.recommended_test_scope_for_level(
+            escalation_level,
+            recommended_scope_for_budget(budget),
+        ),
         "must_read_first": must_read_first,
         "blocking": False,
     }
@@ -1373,13 +1417,26 @@ def next_action_payload(
     seed_selection: dict | None,
     tests_payload: dict | None,
     fallback_used: bool,
+    changed_files_override: list[str] | None = None,
+    escalation_level: str = "auto",
 ) -> dict:
+    config = build_graph.load_config(config_path)
     build_decision = (build_payload or {}).get("build_decision", {})
     report_brief = (report_payload or {}).get("brief") or {}
     report_json = read_report_json_payload(report_payload)
     direct_payload = (report_payload or {}).get("direct") or (report_json.get("direct") or {})
     definition = (report_payload or {}).get("definition") or (report_json.get("definition") or {})
-    changed_files = list((report_payload or {}).get("changed_files") or report_json.get("changed_files") or [])
+    changed_files = list(changed_files_override or (report_payload or {}).get("changed_files") or report_json.get("changed_files") or [])
+    change_summary = change_classifier.classify_change(workspace_root, config, changed_files)
+    if not changed_files and seed:
+        change_summary = {
+            **change_summary,
+            "change_class": "guarded",
+            "effective_class": "guarded",
+            "flow_level": "full_guardian",
+        }
+    effective_class = change_summary.get("effective_class") or change_summary.get("change_class") or "guarded"
+    flow_level = change_summary.get("flow_level") or "full_guardian"
     next_tests = report_brief.get("next_tests", [])
     test_signal = report_brief.get("test_signal", {})
     report_completeness = report_brief.get("report_completeness", {})
@@ -1404,6 +1461,22 @@ def next_action_payload(
     parser_warning = definition_attrs.get("parser_warning")
     suggestion = success_next_step(command_name)
     recommended_action = "edit_code"
+    loop_state = {
+        "active_loop": False,
+        "repeat_count": 0,
+        "failure_signature": None,
+        "last_failed_tests": [],
+        "chain_reveal_level": "L0",
+        "recommended_escalation": "L0",
+    }
+    if effective_class in {"guarded", "risk_sensitive"}:
+        loop_state = repair_escalation.active_loop_payload(workspace_root, changed_files)
+    if escalation_level != "auto":
+        resolved_escalation_level = escalation_level
+    elif effective_class in {"guarded", "risk_sensitive"}:
+        resolved_escalation_level = repair_escalation.level_for_auto_mode(loop_state.get("repeat_count", 0))
+    else:
+        resolved_escalation_level = "L0"
     if tests_status == "failed":
         recommended_action = "inspect_failed_tests"
         suggestion = "Inspect test-results.json and the failing test output, then rerun the most relevant tests before trusting the edit."
@@ -1429,9 +1502,40 @@ def next_action_payload(
         [
             definition.get("path"),
             *changed_files,
-            *[seed_path(item) for item in direct_tests[:3]],
         ]
     )
+    expanded_chain = {
+        "changed_files": changed_files,
+        "changed_symbols": [definition.get("symbol")] if definition.get("symbol") else [],
+        "call_chain": [],
+        "import_chain": [],
+        "test_chain": [],
+        "rule_chain": [],
+        "contract_chain": [],
+        "must_read_first": must_read_first,
+        "summary": {
+            "calls": 0,
+            "imports": 0,
+            "tests": len(direct_tests),
+            "rules": len(direct_payload.get("rules") or []),
+            "contracts": 0,
+        },
+    }
+    if effective_class in {"guarded", "risk_sensitive"}:
+        expanded_chain = repair_escalation.expanded_chain(
+            workspace_root=workspace_root,
+            report_json=report_json,
+            changed_files=changed_files,
+            level=resolved_escalation_level,
+        )
+        must_read_first = unique_paths(
+            [
+                definition.get("path"),
+                *changed_files,
+                *expanded_chain.get("must_read_first", []),
+                *[seed_path(item) for item in direct_tests[:3]],
+            ]
+        )
     budget_decision = decide_verification_budget(
         workspace_root=workspace_root,
         changed_files=changed_files,
@@ -1446,15 +1550,23 @@ def next_action_payload(
         risk_sensitive_change=dependency_or_schema_change(changed_files),
         report_completeness=report_completeness,
         must_read_first=must_read_first,
+        change_summary=change_summary,
+        escalation_level=resolved_escalation_level,
     )
     recommended_test_scope = budget_decision["recommended_test_scope"]
-    if recommended_test_scope == "targeted" and not direct_tests:
+    if effective_class in {"guarded", "risk_sensitive"} and recommended_test_scope == "targeted" and not direct_tests:
         recommended_test_scope = "configured"
-    if recommended_test_scope == "targeted" and mapping_status == "unavailable":
+    if effective_class in {"guarded", "risk_sensitive"} and recommended_test_scope == "targeted" and mapping_status == "unavailable":
         recommended_test_scope = "configured"
+    recommended_test_scope = repair_escalation.recommended_test_scope_for_level(
+        resolved_escalation_level,
+        recommended_test_scope,
+    )
 
     risk_level = "low"
-    if budget_decision["budget"] == "B4":
+    if effective_class in {"bypass", "lightweight"}:
+        risk_level = "low"
+    elif budget_decision["budget"] == "B4":
         risk_level = "high"
     elif tests_status == "failed":
         risk_level = "high"
@@ -1462,10 +1574,12 @@ def next_action_payload(
         risk_level = "medium"
     elif direct_summary.get("callers") or direct_summary.get("rules"):
         risk_level = "medium"
-    can_edit_now = bool(seed)
+    can_edit_now = bool(seed) or flow_level in {"skip", "health_only", "analyze_only"}
 
     recommended_commands: list[str] = []
-    if command_name == "analyze":
+    if flow_level in {"skip", "health_only", "analyze_only"}:
+        recommended_commands = []
+    elif command_name == "analyze":
         recommended_commands.append(
             f"python .agents/skills/code-impact-guardian/cig.py finish --workspace-root . --test-scope {recommended_test_scope}"
         )
@@ -1473,12 +1587,27 @@ def next_action_payload(
             recommended_commands.append(
                 "python .agents/skills/code-impact-guardian/cig.py finish --workspace-root . --test-scope configured"
             )
-        elif recommended_test_scope == "configured" and dependency_status == "changed":
+        elif recommended_test_scope == "configured" and (dependency_status == "changed" or resolved_escalation_level == "L3"):
             recommended_commands.append(
                 "python .agents/skills/code-impact-guardian/cig.py finish --workspace-root . --test-scope full"
             )
 
-    if direct_tests and recommended_test_scope == "targeted":
+    if effective_class == "bypass":
+        user_message = (
+            "This is a non-runtime documentation change. It does not affect the runtime graph, "
+            "so you can edit it directly and you do not need the full guardian flow or tests afterward."
+        )
+    elif effective_class == "lightweight":
+        user_message = (
+            "This is a lightweight documentation or process-text change. Use the lightweight flow and skip tests "
+            "unless command, rule, config, or schema semantics also changed."
+        )
+    elif resolved_escalation_level == "L3":
+        user_message = (
+            "This is not the first failed attempt for this area. Stop local patching, read the expanded chain first, "
+            "and use full verification before calling the fix ready."
+        )
+    elif direct_tests and recommended_test_scope == "targeted":
         user_message = (
             f"This change mainly touches {', '.join(must_read_first[:2]) or seed}. "
             f"I found {len(direct_tests)} directly related test seed(s), so make the edit and run targeted tests first. "
@@ -1499,17 +1628,37 @@ def next_action_payload(
             f"This change centers on {', '.join(must_read_first[:2]) or seed}. "
             f"Use {recommended_test_scope} verification next and read the linked files before claiming confidence."
         )
+    if loop_state.get("repeat_count", 0) >= 2 and effective_class in {"guarded", "risk_sensitive"}:
+        user_message = "This is not the first failed attempt for this area. " + user_message
 
-    agent_instruction = (
-        "Do not claim the change is safe just because tests pass. "
-        "Treat passing tests as evidence, not proof. "
-        "Read the key files first, run the recommended scope, and if targeted mapping fails fall back to configured tests. "
-        "If dependency state is changed or unknown, do not make a high-confidence safety claim without broader verification."
-    )
+    if effective_class == "bypass":
+        agent_instruction = "Do not run full guardian flow for bypass-class documentation-only edits."
+    elif effective_class == "lightweight":
+        agent_instruction = (
+            "Use the lightweight flow. Do not escalate to the full guardian flow unless command, rule, test, config, "
+            "or schema semantics changed."
+        )
+    else:
+        agent_instruction = (
+            "Do not claim the change is safe just because tests pass. "
+            "Treat passing tests as evidence, not proof. "
+            "Read the key files first, run the recommended scope, and if targeted mapping fails fall back to configured tests. "
+            "If dependency state is changed or unknown, do not make a high-confidence safety claim without broader verification."
+        )
+        if loop_state.get("repeat_count", 0) >= 3:
+            agent_instruction += " Stop patching the same local area. Read the expanded chain first."
+    trust_payload = dict(trust or build_decision.get("trust") or {})
+    if resolved_escalation_level == "L3":
+        for key, value in list(trust_payload.items()):
+            if value == "high":
+                trust_payload[key] = "medium"
     return {
         "command": command_name,
         "task_id": task_id,
         "selected_seed": seed,
+        "change_class": change_summary.get("change_class"),
+        "flow_level": flow_level,
+        "effective_change_class": effective_class,
         "seed_reason": (seed_selection or {}).get("reason"),
         "candidate_seeds": (seed_selection or {}).get("top_candidates", [])[:3],
         "seed_confidence": (seed_selection or {}).get("seed_confidence", (seed_selection or {}).get("confidence")),
@@ -1524,6 +1673,14 @@ def next_action_payload(
         "risk_level": risk_level,
         "can_edit_now": can_edit_now,
         "must_read_first": must_read_first,
+        "repair_loop": {
+            "active": bool(loop_state.get("active_loop")) and effective_class in {"guarded", "risk_sensitive"},
+            "repeat_count": loop_state.get("repeat_count", 0),
+            "chain_reveal_level": resolved_escalation_level,
+            "failure_signature": loop_state.get("failure_signature"),
+            "recommended_escalation": loop_state.get("recommended_escalation", "L0"),
+        },
+        "expanded_chain_summary": expanded_chain.get("summary", {}),
         "build_trust": {
             "build_mode": build_decision.get("execution_mode") or build_decision.get("build_mode"),
             "graph_trust": build_decision.get("graph_trust", build_decision.get("trust_level")),
@@ -1532,7 +1689,7 @@ def next_action_payload(
             "graph_freshness": build_decision.get("graph_freshness"),
             "dependency_fingerprint_status": build_decision.get("dependency_fingerprint_status"),
         },
-        "trust": trust or build_decision.get("trust") or {},
+        "trust": trust_payload,
         "report_completeness": report_completeness,
         "test_signal": test_signal,
         "user_message": user_message,
@@ -1635,7 +1792,7 @@ def persist_last_task(
     *,
     command_name: str,
     task_id: str,
-    seed: str,
+    seed: str | None,
     changed_files: list[str],
     config_path: pathlib.Path,
     context: dict,
@@ -1694,6 +1851,108 @@ def context_missing_recovery_commands(workspace_root: pathlib.Path) -> list[str]
     ]
 
 
+def non_runtime_flow_payload(
+    *,
+    workspace_root: pathlib.Path,
+    config_path: pathlib.Path,
+    command_name: str,
+    task_id: str | None,
+    changed_files: list[str],
+    context_resolution: dict | None = None,
+) -> dict:
+    resolved_changed_files = list(changed_files or [])
+    change_summary = change_classifier.classify_change(
+        workspace_root,
+        build_graph.load_config(config_path),
+        resolved_changed_files,
+    )
+    resolved_task_id = task_id or auto_task_id(
+        seed=f"{change_summary.get('effective_class', 'lightweight')}:flow",
+        changed_files=resolved_changed_files,
+        prefix=command_name,
+    )
+    detect = detect_payload(workspace_root, config_path)
+    context = command_context(workspace_root, config_path)
+    context_resolution = context_resolution or {}
+    context_resolution.setdefault("context_status", "non_runtime")
+    context_resolution["effective_changed_files"] = resolved_changed_files
+    context_resolution["changed_files"] = resolved_changed_files
+    context_resolution["context_incomplete"] = False
+    seed_selection = {
+        "mode": "flow-classifier",
+        "reason": "non-runtime flow selected from changed files",
+        "top_candidates": [],
+        "seed_confidence": 1.0,
+        "fallback_used": False,
+        "recent_task_influenced": False,
+    }
+    next_action = next_action_payload(
+        workspace_root=workspace_root,
+        config_path=config_path,
+        command_name=command_name,
+        task_id=resolved_task_id,
+        seed=None,
+        report_payload=None,
+        build_payload=None,
+        seed_selection=seed_selection,
+        tests_payload=None,
+        fallback_used=False,
+        changed_files_override=resolved_changed_files,
+        escalation_level="L0",
+    )
+    machine_outputs = write_machine_outputs(
+        workspace_root,
+        context_resolution=context_resolution,
+        seed_candidates={"task_id": resolved_task_id, "candidates": []},
+        next_action=next_action,
+    )
+    machine_outputs["verification_policy_path"] = str(ensure_verification_policy_file(workspace_root, config_path))
+    last_task_path_str = persist_last_task(
+        workspace_root,
+        command_name=command_name,
+        task_id=resolved_task_id,
+        seed=None,
+        changed_files=resolved_changed_files,
+        config_path=config_path,
+        context=context,
+        report_path=None,
+        status="success",
+        seed_selection=seed_selection,
+        build_mode="non_runtime_flow",
+        fallback_used=False,
+        context_resolution=context_resolution,
+        trust_level="unknown",
+        graph_trust="unknown",
+        build_decision={},
+        report_brief={},
+        user_summary=next_action.get("user_message"),
+        report_completeness={},
+        test_signal={"status": "skipped", "effective_test_scope": "none"},
+    )
+    return {
+        "task_id": resolved_task_id,
+        "seed": None,
+        "changed_files": resolved_changed_files,
+        "seed_selection": seed_selection,
+        "fallback_used": False,
+        "context_resolution": context_resolution,
+        "detect": detect,
+        "build": {"status": "skipped", "reason": "non_runtime_flow"},
+        "report": {},
+        "tests": {
+            "status": "skipped",
+            "requested_test_scope": "none",
+            "effective_test_scope": "none",
+            "test_scope_reason": "non-runtime flow",
+            "tests_passed": False,
+            "failed_tests": [],
+        },
+        "machine_outputs": machine_outputs,
+        "next_action": next_action,
+        "last_task_path": last_task_path_str,
+    }
+
+
 def run_analyze_command(
     *,
     workspace_root: pathlib.Path,
@@ -1705,6 +1964,7 @@ def run_analyze_command(
     max_depth: int | None,
     allow_fallback: bool,
     report_mode: str,
+    escalation_level: str = "auto",
     patch_file: pathlib.Path | None = None,
     stdin_patch: str | None = None,
 ) -> dict:
@@ -1728,6 +1988,16 @@ def run_analyze_command(
     context_resolution["context_incomplete"] = context_resolution.get("context_status") != "resolved"
 
     detect = detect_payload(workspace_root, config_path)
+    flow_summary = change_classifier.classify_change(workspace_root, config, effective_changed_files)
+    if effective_changed_files and not seed and flow_summary.get("effective_class") in {"bypass", "lightweight"}:
+        return non_runtime_flow_payload(
+            workspace_root=workspace_root,
+            config_path=config_path,
+            command_name="analyze",
+            task_id=task_id,
+            changed_files=effective_changed_files,
+            context_resolution=context_resolution,
+        )
 
     if context_resolution.get("context_status") == "missing" and not seed:
         if not allow_fallback:
@@ -1813,6 +2083,7 @@ def run_analyze_command(
             seed_selection=seed_selection,
             tests_payload=None,
             fallback_used=True,
+            escalation_level=escalation_level,
         )
         machine_outputs = write_machine_outputs(
             workspace_root,
@@ -1936,6 +2207,7 @@ def run_analyze_command(
         seed_selection=seed_selection,
         tests_payload=None,
         fallback_used=seed_selection.get("fallback_used", False),
+        escalation_level=escalation_level,
     )
     machine_outputs = write_machine_outputs(
         workspace_root,
@@ -2061,6 +2333,8 @@ def finalize_after_edit(
         source=command_name,
     )
     context = command_context(workspace_root, config_path)
+    config = build_graph.load_config(config_path)
+    flow_summary = change_classifier.classify_change(workspace_root, config, changed_files)
     next_action = next_action_payload(
         workspace_root=workspace_root,
         config_path=config_path,
@@ -2073,6 +2347,45 @@ def finalize_after_edit(
         tests_payload=payload.get("tests"),
         fallback_used=bool((context_resolution or {}).get("fallback_used")),
     )
+    if payload["tests"]["status"] == "failed" and flow_summary.get("effective_class") in {"guarded", "risk_sensitive"}:
+        repair_record = repair_escalation.record_failed_attempt(
+            workspace_root=workspace_root,
+            task_id=task_id,
+            changed_files=changed_files,
+            changed_symbols=after_edit_update.changed_symbols_from_summary(payload.get("round_summary") or {}),
+            test_summary=payload.get("tests") or {},
+            error_code="TEST_COMMAND_FAILED",
+            dependency_fingerprint_status=(payload.get("graph", {}).get("build_decision") or {}).get(
+                "dependency_fingerprint_status",
+                "unknown",
+            ),
+            graph_trust=(payload.get("report", {}).get("trust") or {}).get(
+                "graph",
+                (payload.get("graph", {}).get("build_decision") or {}).get("graph_trust", "unknown"),
+            ),
+            verification_budget=next_action.get("verification_budget", "B2"),
+        )
+        if repair_record["repeat_count"] >= 4:
+            repair_escalation.write_loop_breaker_report(
+                workspace_root=workspace_root,
+                changed_files=changed_files,
+                repeat_count=repair_record["repeat_count"],
+                failure_signature_value=repair_record["failure_signature"],
+                level=repair_record["chain_reveal_level"],
+                report_json=repair_escalation.load_report_json(workspace_root, payload.get("report")),
+            )
+        next_action = next_action_payload(
+            workspace_root=workspace_root,
+            config_path=config_path,
+            command_name=command_name,
+            task_id=task_id,
+            seed=seed,
+            report_payload=payload.get("report"),
+            build_payload=payload.get("graph"),
+            seed_selection=(read_last_task(workspace_root) or {}).get("seed_selection"),
+            tests_payload=payload.get("tests"),
+            fallback_used=bool((context_resolution or {}).get("fallback_used")),
+        )
     machine_outputs = write_machine_outputs(
         workspace_root,
         context_resolution=context_resolution,
@@ -2415,6 +2728,7 @@ def main() -> int:
     report_parser.add_argument("--max-depth", type=int, default=None)
     report_parser.add_argument("--brief", action="store_true")
     report_parser.add_argument("--full", action="store_true")
+    report_parser.add_argument("--escalation-level", choices=["L0", "L1", "L2", "L3", "auto"], default="auto")
 
     analyze_parser = subparsers.add_parser("analyze", help="High-level build + report command with automatic context")
     analyze_parser.add_argument("--workspace-root", default=".")
@@ -2428,11 +2742,26 @@ def main() -> int:
     analyze_parser.add_argument("--allow-fallback", action="store_true")
     analyze_parser.add_argument("--brief", action="store_true")
     analyze_parser.add_argument("--full", action="store_true")
+    analyze_parser.add_argument("--escalation-level", choices=["L0", "L1", "L2", "L3", "auto"], default="auto")
 
     recommend_tests_parser = subparsers.add_parser("recommend-tests", help="Map directly affected test seeds to executable commands")
     recommend_tests_parser.add_argument("--workspace-root", default=".")
     recommend_tests_parser.add_argument("--config", default=".code-impact-guardian/config.json")
     recommend_tests_parser.add_argument("--task-id", required=True)
+
+    classify_parser = subparsers.add_parser("classify-change", help="Classify changed files into flow governance buckets")
+    classify_parser.add_argument("--workspace-root", default=".")
+    classify_parser.add_argument("--config", default=".code-impact-guardian/config.json")
+    classify_parser.add_argument("--changed-file", action="append", default=[])
+
+    loop_status_parser = subparsers.add_parser("loop-status", help="Summarize the current repair loop state")
+    loop_status_parser.add_argument("--workspace-root", default=".")
+    loop_status_parser.add_argument("--config", default=".code-impact-guardian/config.json")
+
+    diagnose_loop_parser = subparsers.add_parser("diagnose-loop", help="Diagnose the active repair loop for specific files")
+    diagnose_loop_parser.add_argument("--workspace-root", default=".")
+    diagnose_loop_parser.add_argument("--config", default=".code-impact-guardian/config.json")
+    diagnose_loop_parser.add_argument("--changed-file", action="append", default=[])
 
     integration_parser = subparsers.add_parser("install-integration-pack", help="Install repo-local runtime integration docs and AGENTS managed block")
     integration_parser.add_argument("--workspace-root", default=".")
@@ -2731,6 +3060,7 @@ def main() -> int:
                 max_depth=args.max_depth,
                 allow_fallback=args.allow_fallback,
                 report_mode=requested_report_mode(args, "brief"),
+                escalation_level=args.escalation_level,
                 patch_file=pathlib.Path(args.patch_file).resolve() if args.patch_file else None,
                 stdin_patch=stdin_patch_if_available(),
             )
@@ -2743,59 +3073,103 @@ def main() -> int:
                 task_id=args.task_id,
             )
             task_id = args.task_id
+        elif args.command == "classify-change":
+            config = build_graph.load_config(config_path)
+            payload = change_classifier.classify_change(workspace_root, config, args.changed_file)
+        elif args.command == "loop-status":
+            payload = repair_escalation.loop_status_payload(workspace_root=workspace_root)
+        elif args.command == "diagnose-loop":
+            payload = repair_escalation.diagnose_loop_payload(
+                workspace_root=workspace_root,
+                changed_files=args.changed_file,
+            )
         elif args.command == "install-integration-pack":
             payload = install_integration_pack(
                 workspace_root=workspace_root,
                 config_path=config_path,
             )
         elif args.command == "after-edit":
-            resolved_task_id, resolved_seed, resolved_changed_files, _, context_resolution = resolve_finish_context(
-                workspace_root=workspace_root,
-                config_path=config_path,
-                task_id=args.task_id,
-                seed=args.seed,
-                changed_files=args.changed_file,
-                allow_fallback=args.allow_fallback,
+            flow_summary = change_classifier.classify_change(
+                workspace_root,
+                build_graph.load_config(config_path),
+                args.changed_file,
             )
-            payload = finalize_after_edit(
-                workspace_root=workspace_root,
-                config_path=config_path,
-                task_id=resolved_task_id,
-                seed=resolved_seed,
-                changed_files=resolved_changed_files,
-                command_name="after-edit",
-                report_mode="brief",
-                context_resolution=context_resolution,
-                test_scope=args.test_scope,
-                shadow_full=args.shadow_full,
-            )
-            task_id = resolved_task_id
-            seed = resolved_seed
+            if args.changed_file and not args.seed and flow_summary.get("effective_class") in {"bypass", "lightweight"}:
+                payload = non_runtime_flow_payload(
+                    workspace_root=workspace_root,
+                    config_path=config_path,
+                    command_name="after-edit",
+                    task_id=args.task_id,
+                    changed_files=args.changed_file,
+                    context_resolution={"context_status": "non_runtime"},
+                )
+                task_id = payload["task_id"]
+                seed = payload["seed"]
+            else:
+                resolved_task_id, resolved_seed, resolved_changed_files, _, context_resolution = resolve_finish_context(
+                    workspace_root=workspace_root,
+                    config_path=config_path,
+                    task_id=args.task_id,
+                    seed=args.seed,
+                    changed_files=args.changed_file,
+                    allow_fallback=args.allow_fallback,
+                )
+                payload = finalize_after_edit(
+                    workspace_root=workspace_root,
+                    config_path=config_path,
+                    task_id=resolved_task_id,
+                    seed=resolved_seed,
+                    changed_files=resolved_changed_files,
+                    command_name="after-edit",
+                    report_mode="brief",
+                    context_resolution=context_resolution,
+                    test_scope=args.test_scope,
+                    shadow_full=args.shadow_full,
+                )
+                task_id = resolved_task_id
+                seed = resolved_seed
         elif args.command == "finish":
-            resolved_task_id, resolved_seed, resolved_changed_files, _, context_resolution = resolve_finish_context(
-                workspace_root=workspace_root,
-                config_path=config_path,
-                task_id=args.task_id,
-                seed=args.seed,
-                changed_files=args.changed_file,
-                allow_fallback=args.allow_fallback,
-                patch_file=pathlib.Path(args.patch_file).resolve() if args.patch_file else None,
-                stdin_patch=stdin_patch_if_available(),
+            flow_summary = change_classifier.classify_change(
+                workspace_root,
+                build_graph.load_config(config_path),
+                args.changed_file,
             )
-            payload = finalize_after_edit(
-                workspace_root=workspace_root,
-                config_path=config_path,
-                task_id=resolved_task_id,
-                seed=resolved_seed,
-                changed_files=resolved_changed_files,
-                command_name="finish",
-                report_mode=requested_report_mode(args, "brief"),
-                context_resolution=context_resolution,
-                test_scope=args.test_scope,
-                shadow_full=args.shadow_full,
-            )
-            task_id = resolved_task_id
-            seed = resolved_seed
+            if args.changed_file and not args.seed and flow_summary.get("effective_class") in {"bypass", "lightweight"}:
+                payload = non_runtime_flow_payload(
+                    workspace_root=workspace_root,
+                    config_path=config_path,
+                    command_name="finish",
+                    task_id=args.task_id,
+                    changed_files=args.changed_file,
+                    context_resolution={"context_status": "non_runtime"},
+                )
+                task_id = payload["task_id"]
+                seed = payload["seed"]
+            else:
+                resolved_task_id, resolved_seed, resolved_changed_files, _, context_resolution = resolve_finish_context(
+                    workspace_root=workspace_root,
+                    config_path=config_path,
+                    task_id=args.task_id,
+                    seed=args.seed,
+                    changed_files=args.changed_file,
+                    allow_fallback=args.allow_fallback,
+                    patch_file=pathlib.Path(args.patch_file).resolve() if args.patch_file else None,
+                    stdin_patch=stdin_patch_if_available(),
+                )
+                payload = finalize_after_edit(
+                    workspace_root=workspace_root,
+                    config_path=config_path,
+                    task_id=resolved_task_id,
+                    seed=resolved_seed,
+                    changed_files=resolved_changed_files,
+                    command_name="finish",
+                    report_mode=requested_report_mode(args, "brief"),
+                    context_resolution=context_resolution,
+                    test_scope=args.test_scope,
+                    shadow_full=args.shadow_full,
+                )
+                task_id = resolved_task_id
+                seed = resolved_seed
         elif args.command == "status":
             payload = status_payload(workspace_root, config_path)
         elif args.command == "health":

@@ -42,7 +42,7 @@ Whenever a task changes code, behavior, configuration, schema, or tests:
   - `AGENTS.md`
   - `STAGE13_REVIEW_GUIDE.md`
   - `STAGE13_CHANGELOG.md`
-  - `review 0419.txt`
+  - `docs/archive/review-2026-04-19.txt`
 - Do not omit `benchmark/` when shipping `tests/test_stage9_workflow.py` or any benchmark-driven review/tests.
 - Preserve repo-relative paths exactly; do not rewrite config paths inside the bundle just to make the zip smaller.
 - Exclude reviewer-irrelevant noise by default:

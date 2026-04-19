@@ -45,6 +45,25 @@ DEFAULT_CONFIG = {
         "build_log_path": ".ai/codegraph/build.log",
         "test_results_path": ".ai/codegraph/test-results.json",
         "freshness_ttl_hours": 24,
+        "exclude_dirs": [
+            ".git",
+            ".ai",
+            "node_modules",
+            "dist",
+            "build",
+            ".next",
+            ".nuxt",
+            ".turbo",
+            ".cache",
+            "coverage",
+            ".venv",
+            "venv",
+            "__pycache__",
+            ".pytest_cache",
+            ".mypy_cache",
+            ".playwright",
+            "test-results",
+        ],
     },
     "rules": {"globs": ["docs/rules/*.md"]},
     "python": {
@@ -315,7 +334,14 @@ def ensure_agents_md(workspace_root: pathlib.Path) -> str:
 
 
 def copy_template(source_root: pathlib.Path, destination_root: pathlib.Path) -> None:
-    ignore = shutil.ignore_patterns(".git", ".ai", "__pycache__", "*.pyc", "dist", "*.zip")
+    base_ignore = shutil.ignore_patterns(".git", ".ai", "__pycache__", "*.pyc", "dist", "*.zip")
+
+    def ignore(current_dir: str, entries: list[str]) -> set[str]:
+        ignored = set(base_ignore(current_dir, entries))
+        if pathlib.Path(current_dir).name == ".code-impact-guardian":
+            ignored.add("config.json")
+        return {entry for entry in entries if entry in ignored}
+
     if destination_root.exists():
         shutil.rmtree(destination_root)
     shutil.copytree(source_root, destination_root, ignore=ignore)
@@ -385,7 +411,8 @@ def init_workspace(
     schema_path = schema_path_for(workspace_root)
     created: list[str] = []
 
-    config_payload = default_config_payload() if not config_path.exists() else load_json(config_path)
+    use_existing_config = config_path.exists() and project_root is None and profile in (None, AUTO_PROFILE) and not with_adapters
+    config_payload = load_json(config_path) if use_existing_config else default_config_payload()
     if project_root:
         config_payload["project_root"] = project_root
     config_payload["primary_adapter"] = config_payload.get("primary_adapter", config_payload.get("language_adapter", "auto"))
@@ -451,6 +478,13 @@ def set_fixture_config(workspace_root: pathlib.Path, fixture: str, persist: bool
     payload["project_root"] = f"examples/{fixture}"
     payload["primary_adapter"] = "auto"
     payload["language_adapter"] = "auto"
+    if fixture == "generic_minimal":
+        payload.setdefault("generic", {})
+        payload["generic"]["test_command"] = [
+            "python",
+            "-c",
+            "import pathlib; data = (pathlib.Path('src') / 'settings.conf').read_text(encoding='utf-8'); assert 'mode=active' in data",
+        ]
     if persist:
         write_json(config_path, payload)
         return config_path
@@ -942,7 +976,7 @@ def status_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
     elif (recent_success or {}).get("command") in {"after-edit", "finish"}:
         next_step = "Review handoff/latest.md, then start the next task with `cig.py analyze --changed-file <path>`."
     elif (recent_success or {}).get("command") in {"report", "analyze"}:
-        next_step = "Edit the code, then run `cig.py finish --changed-file <path>`."
+        next_step = "Edit the code, then run `cig.py finish --changed-file <path> --test-scope targeted`."
     elif (recent_success or {}).get("command") == "build":
         next_step = "Run `cig.py analyze --changed-file <path>` to generate the next report."
     elif config_exists:
@@ -1021,7 +1055,7 @@ def health_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
     ready = not issues and not needs_finish
     if needs_finish:
         issues.append("finish_pending")
-        fix_commands.insert(0, f"python .agents/skills/code-impact-guardian/cig.py finish --workspace-root {shell_quote_path(workspace_root)}")
+        fix_commands.insert(0, f"python .agents/skills/code-impact-guardian/cig.py finish --workspace-root {shell_quote_path(workspace_root)} --test-scope targeted")
     next_command = fix_commands[0] if fix_commands else f"python .agents/skills/code-impact-guardian/cig.py analyze --workspace-root {shell_quote_path(workspace_root)} --changed-file <relative-path>"
 
     return {
@@ -1071,8 +1105,38 @@ def write_machine_outputs(
     return written
 
 
+def read_report_json_payload(report_payload: dict | None) -> dict:
+    json_report_path = (report_payload or {}).get("json_report_path")
+    if not json_report_path:
+        return {}
+    path = pathlib.Path(json_report_path)
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def unique_paths(values: list[str]) -> list[str]:
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered
+
+
+def seed_path(seed_id: str) -> str | None:
+    parts = seed_id.split(":", 2)
+    if len(parts) < 2:
+        return None
+    return parts[1]
+
+
 def next_action_payload(
     *,
+    workspace_root: pathlib.Path,
+    config_path: pathlib.Path,
     command_name: str,
     task_id: str | None,
     seed: str | None,
@@ -1084,12 +1148,32 @@ def next_action_payload(
 ) -> dict:
     build_decision = (build_payload or {}).get("build_decision", {})
     report_brief = (report_payload or {}).get("brief") or {}
+    report_json = read_report_json_payload(report_payload)
+    direct_payload = (report_payload or {}).get("direct") or (report_json.get("direct") or {})
+    definition = (report_payload or {}).get("definition") or (report_json.get("definition") or {})
+    changed_files = list((report_payload or {}).get("changed_files") or report_json.get("changed_files") or [])
     next_tests = report_brief.get("next_tests", [])
     test_signal = report_brief.get("test_signal", {})
     report_completeness = report_brief.get("report_completeness", {})
+    trust = report_brief.get("trust") or (report_payload or {}).get("trust") or build_decision.get("trust") or {}
+    recommend_payload = (
+        after_edit_update.recommend_tests_for_task(
+            workspace_root=workspace_root,
+            config_path=config_path,
+            task_id=task_id,
+        )
+        if task_id
+        else {}
+    )
+    direct_tests = list(direct_payload.get("tests") or [])
+    dependency_status = trust.get("dependency") or build_decision.get("dependency_fingerprint_status", "unknown")
+    graph_trust = trust.get("graph") or build_decision.get("graph_trust", build_decision.get("trust_level", "unknown"))
+    direct_summary = report_brief.get("direct_impact_summary", {})
+    mapping_status = recommend_payload.get("mapping_status", "unavailable")
+    tests_status = (tests_payload or {}).get("status")
     suggestion = success_next_step(command_name)
     recommended_action = "edit_code"
-    if tests_payload and tests_payload.get("status") == "failed":
+    if tests_status == "failed":
         recommended_action = "inspect_failed_tests"
         suggestion = "Inspect test-results.json and the failing test output, then rerun the most relevant tests before trusting the edit."
     elif build_decision.get("verification_status") == "mismatched":
@@ -1100,10 +1184,88 @@ def next_action_payload(
         suggestion = "Review the brief report carefully because generic fallback reduced symbol-level confidence."
     elif tests_payload and not test_signal.get("affected_tests_found"):
         recommended_action = "continue_with_warning"
-        suggestion = "Tests passed, but no directly affected tests were identified. Continue only with a warning mindset."
+        if tests_status == "passed":
+            suggestion = "Tests passed, but no directly affected tests were identified. Continue only with a warning mindset."
+        elif tests_status == "skipped":
+            suggestion = "Tests were skipped, and no directly affected tests were identified. Continue only with a warning mindset."
+        else:
+            suggestion = "No directly affected tests were identified. Continue only with a warning mindset."
     elif report_completeness.get("level") == "low":
         recommended_action = "inspect_report"
         suggestion = "The report is still incomplete, so confirm the seed or narrow the context before editing."
+
+    if dependency_status == "changed":
+        recommended_test_scope = "full"
+    elif dependency_status == "unknown":
+        recommended_test_scope = "configured"
+    elif direct_tests and mapping_status in {"mapped", "partial"}:
+        recommended_test_scope = "targeted"
+    elif direct_tests:
+        recommended_test_scope = "configured"
+    else:
+        recommended_test_scope = "configured"
+
+    risk_level = "low"
+    if dependency_status == "changed":
+        risk_level = "high"
+    elif tests_status == "failed":
+        risk_level = "high"
+    elif dependency_status == "unknown" or report_completeness.get("level") == "low" or graph_trust == "low" or tests_status == "skipped":
+        risk_level = "medium"
+    elif direct_summary.get("callers") or direct_summary.get("rules"):
+        risk_level = "medium"
+
+    must_read_first = unique_paths(
+        [
+            definition.get("path"),
+            *changed_files,
+            *[seed_path(item) for item in direct_tests[:3]],
+        ]
+    )
+    can_edit_now = bool(seed)
+
+    recommended_commands: list[str] = []
+    if command_name == "analyze":
+        recommended_commands.append(
+            f"python .agents/skills/code-impact-guardian/cig.py finish --workspace-root . --test-scope {recommended_test_scope}"
+        )
+        if recommended_test_scope == "targeted":
+            recommended_commands.append(
+                "python .agents/skills/code-impact-guardian/cig.py finish --workspace-root . --test-scope configured"
+            )
+        elif recommended_test_scope == "configured" and dependency_status == "changed":
+            recommended_commands.append(
+                "python .agents/skills/code-impact-guardian/cig.py finish --workspace-root . --test-scope full"
+            )
+
+    if direct_tests and recommended_test_scope == "targeted":
+        user_message = (
+            f"This change mainly touches {', '.join(must_read_first[:2]) or seed}. "
+            f"I found {len(direct_tests)} directly related test seed(s), so make the edit and run targeted tests first. "
+            "If direct mapping is incomplete, fall back to the configured test command."
+        )
+    elif dependency_status == "changed":
+        user_message = (
+            f"This change includes dependency-level risk around {', '.join(changed_files[:2]) or seed}. "
+            "Do the smallest safe edit possible, then run at least the configured suite and prefer a full suite before calling it ready."
+        )
+    elif not direct_tests:
+        user_message = (
+            f"This change is centered on {', '.join(must_read_first[:2]) or seed}, but no direct tests were identified. "
+            "Edit carefully and treat test coverage as unknown until a broader configured or full run completes."
+        )
+    else:
+        user_message = (
+            f"This change centers on {', '.join(must_read_first[:2]) or seed}. "
+            f"Use {recommended_test_scope} verification next and read the linked files before claiming confidence."
+        )
+
+    agent_instruction = (
+        "Do not claim the change is safe just because tests pass. "
+        "Treat passing tests as evidence, not proof. "
+        "Read the key files first, run the recommended scope, and if targeted mapping fails fall back to configured tests. "
+        "If dependency state is changed or unknown, do not make a high-confidence safety claim without broader verification."
+    )
     return {
         "command": command_name,
         "task_id": task_id,
@@ -1114,6 +1276,12 @@ def next_action_payload(
         "recent_task_influenced": bool((seed_selection or {}).get("recent_task_influenced")),
         "recommended_action": recommended_action,
         "recommended_tests": next_tests[:3],
+        "recommended_test_scope": recommended_test_scope,
+        "recommended_test_commands": list(recommend_payload.get("recommended_tests") or []),
+        "recommended_commands": recommended_commands,
+        "risk_level": risk_level,
+        "can_edit_now": can_edit_now,
+        "must_read_first": must_read_first,
         "build_trust": {
             "build_mode": build_decision.get("execution_mode") or build_decision.get("build_mode"),
             "graph_trust": build_decision.get("graph_trust", build_decision.get("trust_level")),
@@ -1122,8 +1290,11 @@ def next_action_payload(
             "graph_freshness": build_decision.get("graph_freshness"),
             "dependency_fingerprint_status": build_decision.get("dependency_fingerprint_status"),
         },
+        "trust": trust or build_decision.get("trust") or {},
         "report_completeness": report_completeness,
         "test_signal": test_signal,
+        "user_message": user_message,
+        "agent_instruction": agent_instruction,
         "user_summary": report_brief.get("user_summary"),
         "brief": report_brief,
         "report_path": (report_payload or {}).get("report_path"),
@@ -1390,6 +1561,8 @@ def run_analyze_command(
         )
         context = command_context(workspace_root, config_path)
         next_action = next_action_payload(
+            workspace_root=workspace_root,
+            config_path=config_path,
             command_name="analyze",
             task_id=resolved_task_id,
             seed=selected_seed,
@@ -1510,6 +1683,8 @@ def run_analyze_command(
     )
     context = command_context(workspace_root, config_path)
     next_action = next_action_payload(
+        workspace_root=workspace_root,
+        config_path=config_path,
         command_name="analyze",
         task_id=resolved_task_id,
         seed=selected_seed,
@@ -1627,6 +1802,7 @@ def finalize_after_edit(
     command_name: str,
     report_mode: str,
     context_resolution: dict | None = None,
+    test_scope: str = "configured",
 ) -> dict:
     payload = after_edit_update.after_edit_update(
         workspace_root=workspace_root,
@@ -1635,9 +1811,12 @@ def finalize_after_edit(
         seed=seed,
         changed_files=changed_files,
         report_mode=report_mode,
+        test_scope=test_scope,
     )
     context = command_context(workspace_root, config_path)
     next_action = next_action_payload(
+        workspace_root=workspace_root,
+        config_path=config_path,
         command_name=command_name,
         task_id=task_id,
         seed=seed,
@@ -1737,6 +1916,7 @@ def finalize_after_edit(
     payload["task_id"] = task_id
     payload["seed"] = seed
     payload["changed_files"] = changed_files
+    payload["requested_test_scope"] = test_scope
     payload["last_task_path"] = last_task_path_str
     payload["context_resolution"] = context_resolution
     payload["next_action"] = next_action
@@ -1831,7 +2011,8 @@ def success_next_step(command_name: str) -> str:
         "seeds": "Pick a seed and run `cig.py report`.",
         "report": "Read the report, edit the code, then run `cig.py after-edit`.",
         "after-edit": "Review the updated report, test results, and handoff note.",
-        "analyze": "Edit the code, then run `cig.py finish`. It will reuse the latest task context when possible.",
+        "analyze": "Edit the code, then run `cig.py finish --test-scope targeted`. It will reuse the latest task context when possible.",
+        "recommend-tests": "Use the mapped commands for targeted verification, or fall back to the configured suite if mapping is unavailable.",
         "finish": "Review handoff/latest.md and start the next task when ready.",
         "demo": "Inspect the generated graph, report, logs, and handoff artifacts.",
         "export-skill": "Copy the exported package into a new repo and run `cig.py setup` there.",
@@ -1891,6 +2072,8 @@ def output_paths_for_command(command_name: str, workspace_root: pathlib.Path, pa
             "seed_candidates_path": payload.get("machine_outputs", {}).get("seed_candidates_path"),
             "next_action_path": payload.get("machine_outputs", {}).get("next_action_path"),
         }
+    if command_name == "recommend-tests" and isinstance(payload, dict):
+        return {}
     if command_name == "after-edit" and isinstance(payload, dict):
         return {
             "report_path": payload.get("report", {}).get("report_path"),
@@ -1991,6 +2174,11 @@ def main() -> int:
     analyze_parser.add_argument("--brief", action="store_true")
     analyze_parser.add_argument("--full", action="store_true")
 
+    recommend_tests_parser = subparsers.add_parser("recommend-tests", help="Map directly affected test seeds to executable commands")
+    recommend_tests_parser.add_argument("--workspace-root", default=".")
+    recommend_tests_parser.add_argument("--config", default=".code-impact-guardian/config.json")
+    recommend_tests_parser.add_argument("--task-id", required=True)
+
     after_parser = subparsers.add_parser("after-edit", help="Refresh graph, report, evidence, and tests after an edit")
     after_parser.add_argument("--workspace-root", default=".")
     after_parser.add_argument("--config", default=".code-impact-guardian/config.json")
@@ -1998,6 +2186,7 @@ def main() -> int:
     after_parser.add_argument("--seed", default=None)
     after_parser.add_argument("--changed-file", action="append", default=[])
     after_parser.add_argument("--allow-fallback", action="store_true")
+    after_parser.add_argument("--test-scope", choices=["targeted", "configured", "full"], default="configured")
 
     finish_parser = subparsers.add_parser("finish", help="High-level after-edit command that reuses recent analyze context")
     finish_parser.add_argument("--workspace-root", default=".")
@@ -2009,6 +2198,7 @@ def main() -> int:
     finish_parser.add_argument("--allow-fallback", action="store_true")
     finish_parser.add_argument("--brief", action="store_true")
     finish_parser.add_argument("--full", action="store_true")
+    finish_parser.add_argument("--test-scope", choices=["targeted", "configured", "full"], default="configured")
 
     demo_parser = subparsers.add_parser("demo", help="Run a fixture end-to-end demo")
     demo_parser.add_argument("--fixture", choices=["python_minimal", "tsjs_minimal", "generic_minimal", "tsjs_node_cli", "tsx_react_vite", "sql_pg_minimal", "tsjs_pg_compound"], default="python_minimal")
@@ -2166,7 +2356,7 @@ def main() -> int:
             print(json.dumps(payload, ensure_ascii=False, indent=2))
             return 0
 
-        if args.command in {"report", "analyze", "after-edit", "finish"}:
+        if args.command in {"report", "analyze", "recommend-tests", "after-edit", "finish"}:
             auto_setup_if_missing(workspace_root, config_path)
         if args.command not in {"status", "health"}:
             ensure_config_exists(config_path)
@@ -2285,6 +2475,13 @@ def main() -> int:
             )
             task_id = payload["task_id"]
             seed = payload["seed"]
+        elif args.command == "recommend-tests":
+            payload = after_edit_update.recommend_tests_for_task(
+                workspace_root=workspace_root,
+                config_path=config_path,
+                task_id=args.task_id,
+            )
+            task_id = args.task_id
         elif args.command == "after-edit":
             resolved_task_id, resolved_seed, resolved_changed_files, _, context_resolution = resolve_finish_context(
                 workspace_root=workspace_root,
@@ -2303,6 +2500,7 @@ def main() -> int:
                 command_name="after-edit",
                 report_mode="brief",
                 context_resolution=context_resolution,
+                test_scope=args.test_scope,
             )
             task_id = resolved_task_id
             seed = resolved_seed
@@ -2326,6 +2524,7 @@ def main() -> int:
                 command_name="finish",
                 report_mode=requested_report_mode(args, "brief"),
                 context_resolution=context_resolution,
+                test_scope=args.test_scope,
             )
             task_id = resolved_task_id
             seed = resolved_seed

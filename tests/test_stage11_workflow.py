@@ -8,6 +8,9 @@ import sys
 import tempfile
 import unittest
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / ".agents" / "skills" / "code-impact-guardian" / "scripts"))
+
+from after_edit_update import parse_test_count
 from tests.test_stage7_workflow import copy_single_skill_folder, run_json, write_generic_repo, write_python_repo
 
 
@@ -68,7 +71,13 @@ def setup_repo(repo_cig: pathlib.Path, repo_root: pathlib.Path, *, profile: str 
     return run_json(command, cwd=repo_root)
 
 
-def build_repo(repo_cig: pathlib.Path, repo_root: pathlib.Path, changed_files: list[str] | None = None) -> dict:
+def build_repo(
+    repo_cig: pathlib.Path,
+    repo_root: pathlib.Path,
+    changed_files: list[str] | None = None,
+    *,
+    full_rebuild: bool = False,
+) -> dict:
     command = [
         sys.executable,
         str(repo_cig),
@@ -80,6 +89,8 @@ def build_repo(repo_cig: pathlib.Path, repo_root: pathlib.Path, changed_files: l
     ]
     for changed_file in changed_files or []:
         command.extend(["--changed-file", changed_file])
+    if full_rebuild:
+        command.append("--full-rebuild")
     return run_json(command, cwd=repo_root)
 
 
@@ -325,6 +336,51 @@ class Stage11WorkflowTest(unittest.TestCase):
             self.assertIn(status, {"unknown", "changed"})
             self.assertNotEqual(payload["build_decision"]["graph_trust"], "high")
 
+    def test_forced_full_rebuild_preserves_dependency_change_downgrade(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            repo_root = pathlib.Path(tmp) / "dep-changed-full"
+            repo_cig = copy_single_skill_folder(self.single_export, repo_root)
+            write_python_repo_with_dependencies(repo_root)
+            setup_repo(repo_cig, repo_root, profile="python-basic")
+
+            build_repo(repo_cig, repo_root)
+            requirements_path = repo_root / "requirements.txt"
+            requirements_path.write_text("requests==2.32.0\n", encoding="utf-8")
+
+            payload = build_repo(
+                repo_cig,
+                repo_root,
+                changed_files=["requirements.txt"],
+                full_rebuild=True,
+            )
+            decision = payload["build_decision"]
+            self.assertEqual(decision["build_mode"], "full")
+            self.assertEqual(decision["dependency_fingerprint_status"], "changed")
+            self.assertIn("DEPENDENCY_FINGERPRINT_CHANGED", decision["reason_codes"])
+            self.assertIn("FORCED_FULL_REBUILD", decision["reason_codes"])
+            self.assertNotEqual(decision["graph_trust"], "high")
+
+    def test_forced_full_rebuild_preserves_dependency_unknown_downgrade(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            repo_root = pathlib.Path(tmp) / "dep-unknown-full"
+            repo_cig = copy_single_skill_folder(self.single_export, repo_root)
+            write_python_repo_with_dependencies(repo_root)
+            setup_repo(repo_cig, repo_root, profile="python-basic")
+
+            build_repo(repo_cig, repo_root)
+            manifest_path = repo_root / ".ai" / "codegraph" / "build-manifest.json"
+            manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest_payload.setdefault("meta", {}).pop("dependency_fingerprint", None)
+            manifest_path.write_text(json.dumps(manifest_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+            payload = build_repo(repo_cig, repo_root, full_rebuild=True)
+            decision = payload["build_decision"]
+            self.assertEqual(decision["build_mode"], "full")
+            self.assertEqual(decision["dependency_fingerprint_status"], "unknown")
+            self.assertIn("DEPENDENCY_FINGERPRINT_UNKNOWN", decision["reason_codes"])
+            self.assertIn("FORCED_FULL_REBUILD", decision["reason_codes"])
+            self.assertNotEqual(decision["graph_trust"], "high")
+
     def test_ts_type_literal_does_not_truncate_function_boundary(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             repo_root = pathlib.Path(tmp) / "typed-boundary"
@@ -466,6 +522,11 @@ class Stage11WorkflowTest(unittest.TestCase):
             finish_payload = finish_repo(repo_cig, repo_root, changed_files=["src/app.py"])
             self.assertEqual(finish_payload["tests"]["tests_run"], 2)
             self.assertEqual(finish_payload["tests"]["test_count_status"], "parsed")
+
+    def test_mixed_error_labels_do_not_double_count(self):
+        tests_run, status = parse_test_count("2 error\n2 errors", "python")
+        self.assertEqual(tests_run, 2)
+        self.assertEqual(status, "parsed")
 
     def test_unrecognized_test_output_reports_unknown_count(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:

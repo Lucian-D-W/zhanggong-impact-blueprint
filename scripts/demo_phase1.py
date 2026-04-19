@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import json
 import pathlib
 import shutil
 import subprocess
@@ -11,7 +12,14 @@ def template_root() -> pathlib.Path:
 
 
 def copy_template(source_root: pathlib.Path, destination_root: pathlib.Path) -> None:
-    ignore = shutil.ignore_patterns(".git", ".ai", "__pycache__", "*.pyc", "dist", "*.zip")
+    base_ignore = shutil.ignore_patterns(".git", ".ai", "__pycache__", "*.pyc", "dist", "*.zip")
+
+    def ignore(current_dir: str, entries: list[str]) -> set[str]:
+        ignored = set(base_ignore(current_dir, entries))
+        if pathlib.Path(current_dir).name == ".code-impact-guardian":
+            ignored.add("config.json")
+        return {entry for entry in entries if entry in ignored}
+
     if destination_root.exists():
         shutil.rmtree(destination_root)
     shutil.copytree(source_root, destination_root, ignore=ignore)
@@ -46,11 +54,32 @@ def apply_demo_edit(workspace_root: pathlib.Path) -> str:
 
 
 def execute_demo(workspace_root: pathlib.Path) -> None:
+    cig_script = workspace_root / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
     build_script = workspace_root / ".agents" / "skills" / "code-impact-guardian" / "scripts" / "build_graph.py"
     report_script = workspace_root / ".agents" / "skills" / "code-impact-guardian" / "scripts" / "generate_report.py"
     after_script = workspace_root / ".agents" / "skills" / "code-impact-guardian" / "scripts" / "after_edit_update.py"
     config_path = workspace_root / ".code-impact-guardian" / "config.json"
 
+    if workspace_root == template_root():
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+        payload["project_root"] = "examples/python_minimal"
+        payload["primary_adapter"] = "auto"
+        payload["language_adapter"] = "auto"
+        payload.setdefault("python", {})
+        payload["python"]["source_globs"] = ["src/*.py", "src/**/*.py"]
+        payload["python"]["test_globs"] = ["tests/*.py", "tests/**/*.py"]
+        payload["python"]["test_command"] = ["python", "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"]
+        payload["python"]["coverage_adapter"] = "coveragepy"
+        config_path = workspace_root / ".ai" / "codegraph" / "demo-phase1-config.json"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    else:
+        subprocess.run(
+            [sys.executable, str(cig_script), "init", "--workspace-root", str(workspace_root), "--project-root", "examples/python_minimal"],
+            cwd=workspace_root,
+            check=True,
+            text=True,
+        )
     run_python(build_script, workspace_root, "--config", str(config_path))
     run_python(report_script, workspace_root, "--config", str(config_path), "--task-id", "demo-login-impact", "--seed", "fn:src/app.py:login")
     changed_file = apply_demo_edit(workspace_root)

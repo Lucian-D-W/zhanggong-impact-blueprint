@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from adapters import detect_project_profile_name
 from build_graph import get_git_context, graph_paths, load_config, project_root_for, record_task_run, resolved_language_adapter
 
+TRUST_ORDER = {"low": 0, "medium": 1, "high": 2}
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -224,11 +226,14 @@ def test_signal_payload(*, sections: dict, test_summary: dict | None) -> dict:
             "affected_tests_found": affected_tests_found,
             "coverage_relevance": "not-run",
             "full_suite": False,
+            "requested_test_scope": None,
+            "effective_test_scope": "not-run",
+            "test_scope_reason": "tests have not run yet",
         }
     status = test_summary.get("status")
-    command = test_summary.get("command") or []
-    full_suite = bool(command)
+    full_suite = bool(test_summary.get("full_suite"))
     coverage_available = test_summary.get("coverage_status") == "available"
+    effective_test_scope = test_summary.get("effective_test_scope") or ("full" if full_suite else "configured")
     if status == "passed" and not affected_tests_found:
         relevance = "tests-passed-but-no-directly-affected-tests-identified"
     elif status == "passed" and coverage_available:
@@ -248,6 +253,128 @@ def test_signal_payload(*, sections: dict, test_summary: dict | None) -> dict:
         "affected_tests_found": affected_tests_found,
         "coverage_relevance": relevance,
         "full_suite": full_suite,
+        "requested_test_scope": test_summary.get("requested_test_scope"),
+        "effective_test_scope": effective_test_scope,
+        "test_scope_reason": test_summary.get("test_scope_reason"),
+    }
+
+
+def clamp_trust_level(*levels: str) -> str:
+    normalized = [level for level in levels if level in TRUST_ORDER]
+    if not normalized:
+        return "unknown"
+    return min(normalized, key=lambda item: TRUST_ORDER[item])
+
+
+def parser_trust_payload(seed_detail: dict | None, report_completeness: dict) -> str:
+    attrs = (seed_detail or {}).get("attrs", {})
+    if attrs.get("parser_warning"):
+        return "low"
+    parser_confidence = attrs.get("parser_confidence")
+    if isinstance(parser_confidence, (int, float)):
+        if parser_confidence >= 0.95:
+            return "high"
+        if parser_confidence >= 0.75:
+            return "medium"
+        return "low"
+    if report_completeness.get("level") == "low":
+        return "medium"
+    return "high"
+
+
+def dependency_trust_level(status: str) -> str:
+    if status in {"unknown", "changed"}:
+        return "medium"
+    if status in {"unchanged", "not_applicable"}:
+        return "high"
+    return "medium"
+
+
+def test_signal_trust_value(test_signal: dict) -> str:
+    status = test_signal.get("status")
+    effective_scope = test_signal.get("effective_test_scope")
+    if status == "failed":
+        return "failed"
+    if status == "passed":
+        return f"{effective_scope}-pass"
+    if status == "skipped":
+        return "skipped"
+    return "not-run"
+
+
+def test_signal_trust_level(signal_value: str) -> str:
+    if signal_value in {"targeted-pass", "configured-pass", "full-pass"}:
+        return "high"
+    if signal_value == "failed":
+        return "low"
+    return "medium"
+
+
+def coverage_trust_value(test_signal: dict) -> str:
+    if test_signal.get("coverage_available") and test_signal.get("affected_tests_found"):
+        return "direct-covered"
+    if test_signal.get("affected_tests_found"):
+        return "direct-tests-no-coverage"
+    return "unknown"
+
+
+def coverage_trust_level(value: str) -> str:
+    if value == "direct-covered":
+        return "high"
+    return "medium"
+
+
+def context_trust_value(*, context_resolution: dict | None, report_completeness: dict) -> str:
+    if report_completeness.get("level") == "low":
+        if bool((context_resolution or {}).get("fallback_used")):
+            return "fallback"
+        return "partial"
+    if (context_resolution or {}).get("context_status") == "partial":
+        return "partial"
+    return "explicit"
+
+
+def context_trust_level(value: str) -> str:
+    if value == "explicit":
+        return "high"
+    if value == "partial":
+        return "medium"
+    return "low"
+
+
+def multidimensional_trust_payload(
+    *,
+    build_decision: dict | None,
+    seed_detail: dict | None,
+    report_completeness: dict,
+    test_signal: dict,
+    context_resolution: dict | None,
+) -> dict:
+    build_decision = build_decision or {}
+    baseline = build_decision.get("trust") or {}
+    graph = build_decision.get("graph_trust", build_decision.get("trust_level", baseline.get("graph", "unknown")))
+    parser = parser_trust_payload(seed_detail, report_completeness)
+    raw_dependency = build_decision.get("dependency_fingerprint_status", baseline.get("dependency", "unknown"))
+    dependency = "unchanged" if raw_dependency == "not_applicable" else raw_dependency
+    test_signal_value = test_signal_trust_value(test_signal)
+    coverage = coverage_trust_value(test_signal)
+    context = context_trust_value(context_resolution=context_resolution, report_completeness=report_completeness)
+    overall = clamp_trust_level(
+        graph,
+        parser,
+        dependency_trust_level(dependency),
+        test_signal_trust_level(test_signal_value),
+        coverage_trust_level(coverage),
+        context_trust_level(context),
+    )
+    return {
+        "graph": graph,
+        "parser": parser,
+        "dependency": dependency,
+        "test_signal": test_signal_value,
+        "coverage": coverage,
+        "context": context,
+        "overall": overall,
     }
 
 
@@ -311,6 +438,7 @@ def brief_payload(
     report_completeness: dict,
     test_signal: dict,
     user_summary: str,
+    trust: dict,
 ) -> dict:
     decision = build_decision or {}
     return {
@@ -335,6 +463,7 @@ def brief_payload(
             "dependency_fingerprint_status": decision.get("dependency_fingerprint_status"),
         },
         "graph_trust": decision.get("graph_trust", decision.get("trust_level")),
+        "trust": trust,
         "report_completeness": report_completeness,
         "test_signal": test_signal,
         "top_risks": top_risks[:3],
@@ -409,6 +538,7 @@ def write_markdown_report(
         ]
         impact = brief["direct_impact_summary"]
         trust = brief["build_trust_summary"]
+        multidimensional_trust = brief.get("trust", {})
         lines = [
             "# Impact Brief",
             "",
@@ -420,8 +550,9 @@ def write_markdown_report(
             f"- changed_files: {', '.join(brief['changed_files_summary'])}",
             f"- direct_impact: callers={impact['callers']}, callees={impact['callees']}, tests={impact['tests']}, rules={impact['rules']}",
             f"- build_trust: mode={trust.get('build_mode') or 'unknown'}, graph_trust={trust.get('graph_trust') or trust.get('trust_level') or 'unknown'}, freshness={trust.get('graph_freshness') or 'unknown'}, dependencies={trust.get('dependency_fingerprint_status') or 'unknown'}, reasons={', '.join(trust.get('reason_codes', [])) or 'none'}, verification={trust.get('verification_status') or 'skipped'}",
+            f"- trust: overall={multidimensional_trust.get('overall', 'unknown')}, graph={multidimensional_trust.get('graph', 'unknown')}, parser={multidimensional_trust.get('parser', 'unknown')}, dependency={multidimensional_trust.get('dependency', 'unknown')}, test_signal={multidimensional_trust.get('test_signal', 'unknown')}, coverage={multidimensional_trust.get('coverage', 'unknown')}, context={multidimensional_trust.get('context', 'unknown')}",
             f"- report_completeness: {brief['report_completeness']['level']} ({brief['report_completeness']['reason']})",
-            f"- test_signal: tests_run={brief['test_signal']['tests_run']}, tests_passed={brief['test_signal']['tests_passed']}, coverage_available={brief['test_signal']['coverage_available']}, affected_tests_found={brief['test_signal']['affected_tests_found']}, coverage_relevance={brief['test_signal']['coverage_relevance']}",
+            f"- test_signal: tests_run={brief['test_signal']['tests_run']}, tests_passed={brief['test_signal']['tests_passed']}, coverage_available={brief['test_signal']['coverage_available']}, affected_tests_found={brief['test_signal']['affected_tests_found']}, coverage_relevance={brief['test_signal']['coverage_relevance']}, requested_scope={brief['test_signal'].get('requested_test_scope')}, effective_scope={brief['test_signal'].get('effective_test_scope')}",
             f"- top_risks: {' | '.join(brief['top_risks']) if brief['top_risks'] else 'none'}",
             f"- next_tests: {' | '.join(brief['next_tests']) if brief['next_tests'] else 'none'}",
             f"- next_step: {brief['next_step']}",
@@ -634,6 +765,13 @@ def generate_report(
         fallback_used=bool((seed_selection or {}).get("fallback_used")),
     )
     test_signal = test_signal_payload(sections=sections, test_summary=test_summary)
+    trust = multidimensional_trust_payload(
+        build_decision=build_decision,
+        seed_detail=seed_detail,
+        report_completeness=report_completeness,
+        test_signal=test_signal,
+        context_resolution=context_resolution,
+    )
     user_summary = user_summary_payload(
         seed=seed,
         changed_files=changed_files,
@@ -656,6 +794,7 @@ def generate_report(
         report_completeness=report_completeness,
         test_signal=test_signal,
         user_summary=user_summary,
+        trust=trust,
     )
     json_payload = {
         "task_id": task_id,
@@ -682,6 +821,7 @@ def generate_report(
         "key_evidence_paths": key_evidence_paths,
         "relationships": relationships,
         "brief": brief,
+        "trust": trust,
         "seed_selection": seed_selection or {},
         "build_decision": build_decision or {},
         "context_resolution": context_resolution or {},
@@ -740,7 +880,7 @@ def generate_report(
                 seed,
                 git["git_sha"],
                 str(report_path.relative_to(workspace_root)),
-                json.dumps({"max_depth": max_depth, "seed_kind": sections["seed_kind"], "mode": mode, "json_report_path": str(json_report_path.relative_to(workspace_root)), "brief": brief, "report_completeness": report_completeness, "test_signal": test_signal}, ensure_ascii=False),
+                json.dumps({"max_depth": max_depth, "seed_kind": sections["seed_kind"], "mode": mode, "json_report_path": str(json_report_path.relative_to(workspace_root)), "brief": brief, "report_completeness": report_completeness, "test_signal": test_signal, "trust": trust}, ensure_ascii=False),
             ),
         )
         conn.commit()
@@ -780,6 +920,12 @@ def generate_report(
         "direct_tests": related_test_names,
         "direct_rules": related_rule_names,
         "user_summary": user_summary,
+        "changed_files": changed_files,
+        "definition": seed_detail or {"node_id": seed, "kind": sections["seed_kind"]},
+        "direct": json_payload["direct"],
+        "report_completeness": report_completeness,
+        "test_signal": test_signal,
+        "trust": trust,
     }
 
 

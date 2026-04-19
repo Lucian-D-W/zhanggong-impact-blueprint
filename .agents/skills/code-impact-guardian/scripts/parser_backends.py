@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import ast
 import hashlib
+import os
 import pathlib
 import re
 from dataclasses import dataclass, field
@@ -30,24 +31,142 @@ def test_node_id(relative_path: str, test_name: str) -> str:
     return f"test:{relative_path}:{test_name}"
 
 
+DEFAULT_EXCLUDE_DIRS = [
+    ".git",
+    ".ai",
+    "node_modules",
+    "dist",
+    "build",
+    ".next",
+    ".nuxt",
+    ".turbo",
+    ".cache",
+    "coverage",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".playwright",
+    "test-results",
+]
+
+
+def normalize_glob_pattern(pattern: str) -> str:
+    normalized = pattern.replace("\\", "/")
+    if normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized
+
+
+def glob_static_prefix(pattern: str) -> str:
+    normalized = normalize_glob_pattern(pattern)
+    prefix_chars: list[str] = []
+    for char in normalized:
+        if char in "*?[":
+            break
+        prefix_chars.append(char)
+    return "".join(prefix_chars)
+
+
 def matches_any(relative_path: str, patterns: list[str]) -> bool:
-    pure = pathlib.PurePosixPath(relative_path)
-    return any(pure.match(pattern) for pattern in patterns)
+    normalized = relative_path.replace("\\", "/").strip()
+    pure = pathlib.PurePosixPath(normalized)
+    for pattern in patterns:
+        if not pattern:
+            continue
+        normalized_pattern = normalize_glob_pattern(pattern)
+        prefix = glob_static_prefix(normalized_pattern)
+        if prefix and not normalized.startswith(prefix):
+            continue
+        if pure.match(normalized_pattern):
+            return True
+    return False
 
 
-def iter_matching_files(project_root: pathlib.Path, patterns: list[str], include_files: list[str] | None = None) -> list[pathlib.Path]:
+def normalize_repo_relative_path(value: str) -> str:
+    normalized = str(value).replace("\\", "/").strip()
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized.strip("/")
+
+
+def configured_exclude_dirs(config: dict) -> list[str]:
+    graph_config = config.get("graph", {}) or {}
+    exclude_dirs = graph_config.get("exclude_dirs")
+    if isinstance(exclude_dirs, list):
+        return [str(item) for item in exclude_dirs if str(item).strip()]
+    return list(DEFAULT_EXCLUDE_DIRS)
+
+
+def normalized_exclude_dir_set(exclude_dirs: list[str] | None) -> set[str]:
+    values = exclude_dirs if exclude_dirs is not None else DEFAULT_EXCLUDE_DIRS
+    normalized: set[str] = set()
+    for item in values:
+        cleaned = normalize_repo_relative_path(item)
+        if cleaned:
+            normalized.add(cleaned)
+    return normalized
+
+
+def include_dir_prefixes(include_files: list[str] | None) -> set[str]:
+    prefixes: set[str] = set()
+    for item in include_files or []:
+        normalized = normalize_repo_relative_path(item)
+        if not normalized:
+            continue
+        parent = pathlib.PurePosixPath(normalized).parent
+        if str(parent) == ".":
+            continue
+        current = ""
+        for part in parent.parts:
+            current = f"{current}/{part}" if current else part
+            prefixes.add(current)
+    return prefixes
+
+
+def is_path_under_excluded_dir(path: str, excluded_dirs: set[str]) -> bool:
+    return any(path == excluded or path.startswith(f"{excluded}/") for excluded in excluded_dirs)
+
+
+def should_prune_dir(relative_root: str, dir_name: str, excluded_dirs: set[str], allowed_include_dirs: set[str]) -> bool:
+    current_path = normalize_repo_relative_path(f"{relative_root}/{dir_name}" if relative_root else dir_name)
+    if current_path in allowed_include_dirs:
+        return False
+    if normalize_repo_relative_path(dir_name) in excluded_dirs:
+        return True
+    return is_path_under_excluded_dir(current_path, excluded_dirs)
+
+
+def iter_matching_files(
+    project_root: pathlib.Path,
+    patterns: list[str],
+    include_files: list[str] | None = None,
+    exclude_dirs: list[str] | None = None,
+) -> list[pathlib.Path]:
     if not patterns:
         return []
-    include_set = {item.replace("\\", "/") for item in (include_files or [])}
+    include_set = {normalize_repo_relative_path(item) for item in (include_files or []) if normalize_repo_relative_path(item)}
+    excluded_dirs = normalized_exclude_dir_set(exclude_dirs)
+    allowed_include_dirs = include_dir_prefixes(include_files)
     results: dict[str, pathlib.Path] = {}
-    for path in project_root.rglob("*"):
-        if not path.is_file():
-            continue
-        relative = path.relative_to(project_root).as_posix()
-        if include_set and relative not in include_set:
-            continue
-        if matches_any(relative, patterns):
-            results[relative] = path
+    for current_root, dirs, files in os.walk(project_root, topdown=True):
+        current_root_path = pathlib.Path(current_root)
+        relative_root = ""
+        if current_root_path != project_root:
+            relative_root = normalize_repo_relative_path(current_root_path.relative_to(project_root).as_posix())
+        dirs[:] = sorted(
+            dir_name
+            for dir_name in dirs
+            if not should_prune_dir(relative_root, dir_name, excluded_dirs, allowed_include_dirs)
+        )
+        for file_name in sorted(files):
+            path = current_root_path / file_name
+            relative = normalize_repo_relative_path(path.relative_to(project_root).as_posix())
+            if include_set and relative not in include_set:
+                continue
+            if matches_any(relative, patterns):
+                results[relative] = path
     return [results[key] for key in sorted(results)]
 
 
@@ -154,12 +273,13 @@ def parse_python_backend(project_root: pathlib.Path, config: dict, include_files
     adapter_graph = AdapterGraph()
     python_config = config["python"]
     patterns = python_config["source_globs"] + python_config["test_globs"]
+    exclude_dirs = configured_exclude_dirs(config)
 
     file_records: dict[str, dict] = {}
     function_contexts: list[dict] = []
     test_contexts: list[dict] = []
 
-    for path in iter_matching_files(project_root, patterns, include_files):
+    for path in iter_matching_files(project_root, patterns, include_files, exclude_dirs=exclude_dirs):
         relative = path.relative_to(project_root).as_posix()
         source_text = path.read_text(encoding="utf-8")
         module = ast.parse(source_text, filename=str(path))
@@ -1125,12 +1245,13 @@ def parse_tsjs_backend(project_root: pathlib.Path, config: dict, include_files: 
     adapter_graph = AdapterGraph()
     tsjs_config = config["tsjs"]
     patterns = tsjs_config["source_globs"] + tsjs_config["test_globs"]
+    exclude_dirs = configured_exclude_dirs(config)
 
     known_function_ids: set[str] = set()
     function_contexts: list[dict] = []
     test_contexts: list[dict] = []
 
-    for path in iter_matching_files(project_root, patterns, include_files):
+    for path in iter_matching_files(project_root, patterns, include_files, exclude_dirs=exclude_dirs):
         relative = path.relative_to(project_root).as_posix()
         text = path.read_text(encoding="utf-8")
         lines = text.splitlines()
@@ -1559,7 +1680,12 @@ def parse_generic_backend(project_root: pathlib.Path, config: dict, include_file
     adapter_graph = AdapterGraph()
     generic_config = config["generic"]
     source_globs = generic_config.get("source_globs", ["src/*", "src/**/*"])
-    matched_files = iter_matching_files(project_root, source_globs, include_files)
+    matched_files = iter_matching_files(
+        project_root,
+        source_globs,
+        include_files,
+        exclude_dirs=configured_exclude_dirs(config),
+    )
     for path in matched_files:
         relative = path.relative_to(project_root).as_posix()
         adapter_graph.files.append(
@@ -1604,12 +1730,13 @@ def parse_sql_postgres_backend(project_root: pathlib.Path, config: dict, include
     source_globs = sql_config.get("source_globs", [])
     test_globs = sql_config.get("test_globs", [])
     patterns = source_globs + test_globs
+    exclude_dirs = configured_exclude_dirs(config)
 
     sql_targets: dict[str, list[str]] = {}
     routine_contexts: list[dict] = []
     test_contexts: list[dict] = []
 
-    for path in iter_matching_files(project_root, patterns, include_files):
+    for path in iter_matching_files(project_root, patterns, include_files, exclude_dirs=exclude_dirs):
         relative = path.relative_to(project_root).as_posix()
         text = path.read_text(encoding="utf-8")
         is_test_file = matches_any(relative, test_globs)

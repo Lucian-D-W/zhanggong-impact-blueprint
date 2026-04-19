@@ -17,6 +17,8 @@ GENERATED_PATTERNS = (
     "out/",
 )
 
+TRUST_ORDER = {"low": 0, "medium": 1, "high": 2}
+
 def stable_hash(payload: dict) -> str:
     return hashlib.sha1(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
@@ -77,6 +79,43 @@ def should_shadow_verify(*, build_mode: str, changed_files: list[str], tracked_c
     if not changed_files or len(changed_files) > 2:
         return False
     return tracked_count <= 40
+
+
+def clamp_trust_level(*levels: str) -> str:
+    normalized = [level for level in levels if level in TRUST_ORDER]
+    if not normalized:
+        return "unknown"
+    return min(normalized, key=lambda item: TRUST_ORDER[item])
+
+
+def dependency_trust_level(status: str) -> str:
+    if status in {"unknown", "changed"}:
+        return "medium"
+    if status in {"unchanged", "not_applicable"}:
+        return "high"
+    return "medium"
+
+
+def build_trust_payload(*, graph_trust: str, dependency_fingerprint_status: str) -> dict:
+    parser = "unknown"
+    dependency = dependency_fingerprint_status or "unknown"
+    test_signal = "not-run"
+    coverage = "unknown"
+    context = "build-only"
+    overall = clamp_trust_level(
+        graph_trust,
+        dependency_trust_level(dependency),
+        "medium",
+    )
+    return {
+        "graph": graph_trust,
+        "parser": parser,
+        "dependency": dependency,
+        "test_signal": test_signal,
+        "coverage": coverage,
+        "context": context,
+        "overall": overall,
+    }
 
 
 def build_decision(
@@ -186,11 +225,17 @@ def build_decision(
     if generated_noise:
         graph_trust = "low"
 
+    trust = build_trust_payload(
+        graph_trust=graph_trust,
+        dependency_fingerprint_status=dependency_fingerprint_status,
+    )
+
     return {
         "build_mode": decision_mode,
         "execution_mode": execution_mode,
         "trust_level": graph_trust,
         "graph_trust": graph_trust,
+        "trust": trust,
         "reason_codes": reason_codes or ["DEFAULT_SAFE_PATH"],
         "verification_status": "skipped",
         "verification_reason": "shadow verification not requested",
@@ -218,5 +263,10 @@ def apply_shadow_verification_result(decision: dict, *, matched: bool, detail: s
         updated["build_mode"] = "full"
         updated["trust_level"] = "low"
         updated["graph_trust"] = "low"
+        updated["trust"] = {
+            **(updated.get("trust") or {}),
+            "graph": "low",
+            "overall": "low",
+        }
         updated["reason_codes"] = [*updated.get("reason_codes", []), "SHADOW_VERIFICATION_MISMATCH"]
     return updated

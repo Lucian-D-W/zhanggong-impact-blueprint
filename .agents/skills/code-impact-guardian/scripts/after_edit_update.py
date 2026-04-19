@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import importlib.util
 import json
 import os
 import pathlib
@@ -39,8 +40,11 @@ def normalize_test_command(command: list[str]) -> list[str]:
     return command
 
 
+def coveragepy_available() -> bool:
+    return importlib.util.find_spec("coverage") is not None
+
+
 def parse_test_count(output: str, adapter_name: str) -> tuple[int | None, str]:
-    del adapter_name
     if not output:
         return None, "unknown"
 
@@ -56,10 +60,23 @@ def parse_test_count(output: str, adapter_name: str) -> tuple[int | None, str]:
     if vitest_match:
         return int(vitest_match.group(1)), "parsed"
 
-    if any(token in output for token in (" passed", " failed", " skipped", " error", " errors")):
+    filtered_output = output
+    if adapter_name in {"generic", "tsjs"}:
+        filtered_output = "\n".join(
+            line
+            for line in output.splitlines()
+            if not re.match(r"^\s*(Test Files|Test Suites)\b", line)
+        )
+
+    if any(token in filtered_output for token in (" passed", " failed", " skipped", " error", " errors")):
         total = 0
-        for count, label in re.findall(r"(\d+)\s+(passed|failed|skipped|error|errors|xfailed|xpassed)", output):
-            del label
+        seen_summaries: set[tuple[int, str]] = set()
+        for count, label in re.findall(r"\b(\d+)\s+(passed|failed|skipped|errors?|xfailed|xpassed)\b", filtered_output):
+            normalized_label = "error" if label in {"error", "errors"} else label
+            key = (int(count), normalized_label)
+            if key in seen_summaries:
+                continue
+            seen_summaries.add(key)
             total += int(count)
         if total:
             return total, "parsed"
@@ -67,22 +84,226 @@ def parse_test_count(output: str, adapter_name: str) -> tuple[int | None, str]:
     return None, "unknown"
 
 
-def run_tests_with_coverage(*, workspace_root: pathlib.Path, config_path: pathlib.Path, task_id: str) -> dict:
+def report_json_path_for_task(*, workspace_root: pathlib.Path, config_path: pathlib.Path, task_id: str) -> pathlib.Path:
+    config = build_graph.load_config(config_path)
+    paths = build_graph.graph_paths(workspace_root, config)
+    return paths["report_dir"] / f"impact-{task_id}.json"
+
+
+def load_task_report_json(*, workspace_root: pathlib.Path, config_path: pathlib.Path, task_id: str) -> dict:
+    report_json_path = report_json_path_for_task(
+        workspace_root=workspace_root,
+        config_path=config_path,
+        task_id=task_id,
+    )
+    if not report_json_path.exists():
+        return {}
+    return json.loads(report_json_path.read_text(encoding="utf-8"))
+
+
+def python_unittest_target_from_seed(seed: str) -> str | None:
+    parts = seed.split(":", 2)
+    if len(parts) != 3:
+        return None
+    _, relative_path, test_name = parts
+    if not relative_path.endswith(".py"):
+        return None
+    module_name = pathlib.PurePosixPath(relative_path).with_suffix("").as_posix().replace("/", ".")
+    if module_name.endswith(".__init__"):
+        module_name = module_name[: -len(".__init__")]
+    if not module_name or not test_name:
+        return None
+    return f"{module_name}.{test_name}"
+
+
+def map_test_seed_to_command(seed: str) -> tuple[list[str] | None, str, str]:
+    parts = seed.split(":", 2)
+    if len(parts) != 3 or parts[0] != "test":
+        return None, "low", "unsupported seed format"
+    _, relative_path, _ = parts
+    python_target = python_unittest_target_from_seed(seed)
+    if python_target:
+        return ["python", "-m", "unittest", python_target], "high", "direct COVERS edge"
+    if relative_path.endswith((".js", ".cjs", ".mjs", ".ts", ".tsx", ".jsx")):
+        return ["node", "--test", relative_path], "medium", "direct COVERS edge"
+    return None, "low", "no direct test command mapping available"
+
+
+def combine_recommended_commands(recommended_tests: list[dict]) -> list[list[str]]:
+    commands = [list(item.get("command") or []) for item in recommended_tests if item.get("command")]
+    if not commands:
+        return []
+    if all(command[:3] == ["python", "-m", "unittest"] for command in commands):
+        ordered_targets: list[str] = []
+        for command in commands:
+            for target in command[3:]:
+                if target not in ordered_targets:
+                    ordered_targets.append(target)
+        return [["python", "-m", "unittest", *ordered_targets]]
+    if all(command[:2] == ["node", "--test"] for command in commands):
+        ordered_files: list[str] = []
+        for command in commands:
+            for target in command[2:]:
+                if target not in ordered_files:
+                    ordered_files.append(target)
+        return [["node", "--test", *ordered_files]]
+
+    deduped: list[list[str]] = []
+    seen: set[tuple[str, ...]] = set()
+    for command in commands:
+        key = tuple(command)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(command)
+    return deduped
+
+
+def recommend_tests_for_task(*, workspace_root: pathlib.Path, config_path: pathlib.Path, task_id: str) -> dict:
+    config = build_graph.load_config(config_path)
+    project_root = build_graph.project_root_for(workspace_root, config)
+    adapter_name = detect_language_adapter(project_root, config)
+    fallback_command = adapter_test_command(config, adapter_name, project_root)
+    report_payload = load_task_report_json(
+        workspace_root=workspace_root,
+        config_path=config_path,
+        task_id=task_id,
+    )
+    direct_test_seeds = list(((report_payload.get("direct") or {}).get("tests")) or [])
+    recommended_tests: list[dict] = []
+    mapped_count = 0
+    for seed in direct_test_seeds:
+        command, confidence, reason = map_test_seed_to_command(seed)
+        if command:
+            mapped_count += 1
+            recommended_tests.append(
+                {
+                    "seed": seed,
+                    "command": command,
+                    "confidence": confidence,
+                    "reason": reason,
+                }
+            )
+    if not direct_test_seeds or mapped_count == 0:
+        mapping_status = "unavailable"
+    elif mapped_count == len(direct_test_seeds):
+        mapping_status = "mapped"
+    else:
+        mapping_status = "partial"
+    return {
+        "task_id": task_id,
+        "mapping_status": mapping_status,
+        "recommended_tests": recommended_tests,
+        "fallback_command": fallback_command,
+        "detected_adapter": adapter_name,
+        "direct_test_seed_count": len(direct_test_seeds),
+    }
+
+
+def aggregate_test_counts(items: list[tuple[int | None, str]]) -> tuple[int | None, str]:
+    counts = [count for count, status in items if status == "parsed" and count is not None]
+    if counts and len(counts) == len(items):
+        return sum(counts), "parsed"
+    return None, "unknown"
+
+
+def base_test_summary(
+    *,
+    task_id: str,
+    command: list[str],
+    commands: list[list[str]],
+    requested_test_scope: str,
+    effective_test_scope: str,
+    test_scope_reason: str,
+    full_suite: bool,
+    output_path: pathlib.Path,
+    adapter_name: str,
+) -> dict:
+    return {
+        "task_id": task_id,
+        "command": command,
+        "commands": commands,
+        "requested_test_scope": requested_test_scope,
+        "effective_test_scope": effective_test_scope,
+        "test_scope_reason": test_scope_reason,
+        "status": "skipped",
+        "tests_run": None,
+        "test_count_status": "unknown",
+        "tests_passed": False,
+        "exit_code": None,
+        "output_path": str(output_path.relative_to(output_path.parents[2])),
+        "coverage_path": None,
+        "coverage_status": "unavailable",
+        "coverage_available": False,
+        "coverage_reason": None,
+        "totals": {},
+        "full_suite": full_suite,
+        "detected_adapter": adapter_name,
+    }
+
+
+def run_tests_with_coverage(
+    *,
+    workspace_root: pathlib.Path,
+    config_path: pathlib.Path,
+    task_id: str,
+    requested_test_scope: str = "configured",
+) -> dict:
     config = build_graph.load_config(config_path)
     paths = build_graph.graph_paths(workspace_root, config)
     project_root = build_graph.project_root_for(workspace_root, config)
     adapter_name = detect_language_adapter(project_root, config)
     configured_command = adapter_test_command(config, adapter_name, project_root)
-    command = normalize_test_command(configured_command)
+    recommend_payload = recommend_tests_for_task(
+        workspace_root=workspace_root,
+        config_path=config_path,
+        task_id=task_id,
+    )
+    requested_test_scope = requested_test_scope or "configured"
 
     output_path = workspace_root / ".ai" / "codegraph" / f"test-output-{task_id}.log"
     coverage_data_path = workspace_root / ".ai" / "codegraph" / f"coverage-{task_id}.data"
     coverage_json_path = workspace_root / ".ai" / "codegraph" / f"coverage-{task_id}.json"
+    recommended_tests = list(recommend_payload.get("recommended_tests") or [])
+    targeted_commands = combine_recommended_commands(recommended_tests)
 
-    if not command:
+    effective_test_scope = requested_test_scope
+    test_scope_reason = "configured test command"
+    full_suite = requested_test_scope != "targeted"
+    command_groups: list[list[str]]
+    if requested_test_scope == "targeted":
+        if targeted_commands:
+            command_groups = targeted_commands
+            full_suite = False
+            if recommend_payload.get("mapping_status") == "partial":
+                test_scope_reason = "running mapped direct tests only; some direct test seeds could not be mapped"
+            else:
+                test_scope_reason = "running directly mapped affected tests"
+        else:
+            effective_test_scope = "configured"
+            command_groups = [configured_command] if configured_command else []
+            full_suite = True
+            test_scope_reason = "no direct test command mapping available"
+    elif requested_test_scope == "full":
+        command_groups = [configured_command] if configured_command else []
+        test_scope_reason = "explicit full suite requested"
+        full_suite = True
+    else:
+        command_groups = [configured_command] if configured_command else []
+        test_scope_reason = "using configured test command"
+        full_suite = True
+
+    normalized_commands = [normalize_test_command(command) for command in command_groups if command]
+    primary_command = normalized_commands[0] if normalized_commands else []
+
+    if not normalized_commands:
         summary = {
             "task_id": task_id,
-            "command": [],
+            "command": primary_command,
+            "commands": normalized_commands,
+            "requested_test_scope": requested_test_scope,
+            "effective_test_scope": "skipped",
+            "test_scope_reason": f"no test command configured for adapter {adapter_name}",
             "status": "skipped",
             "tests_run": None,
             "test_count_status": "unknown",
@@ -96,6 +317,9 @@ def run_tests_with_coverage(*, workspace_root: pathlib.Path, config_path: pathli
             "totals": {},
             "full_suite": False,
             "detected_adapter": adapter_name,
+            "recommended_tests": recommended_tests,
+            "mapping_status": recommend_payload.get("mapping_status"),
+            "fallback_command": recommend_payload.get("fallback_command", []),
         }
         output_path.write_text(summary["coverage_reason"], encoding="utf-8")
         paths["test_results_path"].write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -103,14 +327,60 @@ def run_tests_with_coverage(*, workspace_root: pathlib.Path, config_path: pathli
 
     coverage_adapter = adapter_coverage_adapter(config, adapter_name, project_root)
 
-    if coverage_adapter == "coveragepy":
+    if coverage_adapter == "coveragepy" and len(normalized_commands) == 1:
+        if not coveragepy_available():
+            if coverage_json_path.exists():
+                coverage_json_path.unlink()
+            if coverage_data_path.exists():
+                coverage_data_path.unlink()
+            result = subprocess.run(
+                normalized_commands[0],
+                cwd=project_root,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                check=False,
+            )
+            output_path.write_text(result.stdout + "\n" + result.stderr, encoding="utf-8")
+            parsed_tests_run, test_count_status = parse_test_count(
+                result.stdout + "\n" + result.stderr,
+                adapter_name,
+            )
+            summary = {
+                "task_id": task_id,
+                "command": normalized_commands[0],
+                "commands": normalized_commands,
+                "requested_test_scope": requested_test_scope,
+                "effective_test_scope": effective_test_scope,
+                "test_scope_reason": test_scope_reason,
+                "status": "passed" if result.returncode == 0 else "failed",
+                "tests_run": parsed_tests_run,
+                "test_count_status": test_count_status,
+                "tests_passed": result.returncode == 0,
+                "exit_code": result.returncode,
+                "output_path": str(output_path.relative_to(workspace_root)),
+                "coverage_path": None,
+                "coverage_status": "unavailable",
+                "coverage_available": False,
+                "coverage_reason": "coverage.py is not installed; ran tests without coverage",
+                "totals": {},
+                "full_suite": full_suite,
+                "detected_adapter": adapter_name,
+                "recommended_tests": recommended_tests,
+                "mapping_status": recommend_payload.get("mapping_status"),
+                "fallback_command": recommend_payload.get("fallback_command", []),
+            }
+            paths["test_results_path"].write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+            return summary
+
         coverage_command = [
             sys.executable,
             "-m",
             "coverage",
             "run",
             f"--data-file={coverage_data_path}",
-            *command[1:],
+            *normalized_commands[0][1:],
         ]
         try:
             result = subprocess.run(
@@ -156,6 +426,10 @@ def run_tests_with_coverage(*, workspace_root: pathlib.Path, config_path: pathli
         summary = {
             "task_id": task_id,
             "command": coverage_command,
+            "commands": [coverage_command],
+            "requested_test_scope": requested_test_scope,
+            "effective_test_scope": effective_test_scope,
+            "test_scope_reason": test_scope_reason,
             "status": "passed" if result.returncode == 0 else "failed",
             "tests_run": parsed_tests_run,
             "test_count_status": test_count_status,
@@ -167,13 +441,16 @@ def run_tests_with_coverage(*, workspace_root: pathlib.Path, config_path: pathli
             "coverage_available": coverage_status == "available",
             "coverage_reason": coverage_reason,
             "totals": coverage_payload.get("totals", {}),
-            "full_suite": True,
+            "full_suite": full_suite,
             "detected_adapter": adapter_name,
+            "recommended_tests": recommended_tests,
+            "mapping_status": recommend_payload.get("mapping_status"),
+            "fallback_command": recommend_payload.get("fallback_command", []),
         }
         paths["test_results_path"].write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
         return summary
 
-    if coverage_adapter == "v8_family":
+    if coverage_adapter == "v8_family" and len(normalized_commands) == 1:
         coverage_dir = workspace_root / ".ai" / "codegraph" / f"v8-coverage-{task_id}"
         coverage_dir.mkdir(parents=True, exist_ok=True)
         for stale in coverage_dir.glob("*.json"):
@@ -181,7 +458,7 @@ def run_tests_with_coverage(*, workspace_root: pathlib.Path, config_path: pathli
         env = os.environ.copy()
         env["NODE_V8_COVERAGE"] = str(coverage_dir)
         result = subprocess.run(
-            command,
+            normalized_commands[0],
             cwd=project_root,
             env=env,
             text=True,
@@ -232,7 +509,11 @@ def run_tests_with_coverage(*, workspace_root: pathlib.Path, config_path: pathli
 
         summary = {
             "task_id": task_id,
-            "command": command,
+            "command": normalized_commands[0],
+            "commands": normalized_commands,
+            "requested_test_scope": requested_test_scope,
+            "effective_test_scope": effective_test_scope,
+            "test_scope_reason": test_scope_reason,
             "status": "passed" if result.returncode == 0 else "failed",
             "tests_run": parsed_tests_run,
             "test_count_status": test_count_status,
@@ -246,42 +527,59 @@ def run_tests_with_coverage(*, workspace_root: pathlib.Path, config_path: pathli
             "totals": {
                 "file_count": len(coverage_payload.get("summary", {}).get("files", {})),
             },
-            "full_suite": True,
+            "full_suite": full_suite,
             "detected_adapter": adapter_name,
+            "recommended_tests": recommended_tests,
+            "mapping_status": recommend_payload.get("mapping_status"),
+            "fallback_command": recommend_payload.get("fallback_command", []),
         }
         paths["test_results_path"].write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
         return summary
 
-    result = subprocess.run(
-        command,
-        cwd=project_root,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        capture_output=True,
-        check=False,
-    )
-    output_path.write_text(result.stdout + "\n" + result.stderr, encoding="utf-8")
-    parsed_tests_run, test_count_status = parse_test_count(
-        result.stdout + "\n" + result.stderr,
-        adapter_name,
-    )
+    outputs: list[str] = []
+    parsed_counts: list[tuple[int | None, str]] = []
+    exit_code = 0
+    for command in normalized_commands:
+        result = subprocess.run(
+            command,
+            cwd=project_root,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            check=False,
+        )
+        outputs.append(" ".join(command))
+        outputs.append(result.stdout)
+        outputs.append(result.stderr)
+        parsed_counts.append(parse_test_count(result.stdout + "\n" + result.stderr, adapter_name))
+        if result.returncode != 0 and exit_code == 0:
+            exit_code = result.returncode
+    output_path.write_text("\n".join(outputs), encoding="utf-8")
+    parsed_tests_run, test_count_status = aggregate_test_counts(parsed_counts)
     summary = {
         "task_id": task_id,
-        "command": command,
-        "status": "passed" if result.returncode == 0 else "failed",
+        "command": primary_command,
+        "commands": normalized_commands,
+        "requested_test_scope": requested_test_scope,
+        "effective_test_scope": effective_test_scope,
+        "test_scope_reason": test_scope_reason,
+        "status": "passed" if exit_code == 0 else "failed",
         "tests_run": parsed_tests_run,
         "test_count_status": test_count_status,
-        "tests_passed": result.returncode == 0,
-        "exit_code": result.returncode,
+        "tests_passed": exit_code == 0,
+        "exit_code": exit_code,
         "output_path": str(output_path.relative_to(workspace_root)),
         "coverage_path": None,
         "coverage_status": "unavailable",
         "coverage_available": False,
         "coverage_reason": f"coverage adapter unavailable for {adapter_name}",
         "totals": {},
-        "full_suite": True,
+        "full_suite": full_suite,
         "detected_adapter": adapter_name,
+        "recommended_tests": recommended_tests,
+        "mapping_status": recommend_payload.get("mapping_status"),
+        "fallback_command": recommend_payload.get("fallback_command", []),
     }
     paths["test_results_path"].write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     return summary
@@ -303,14 +601,23 @@ def record_test_run(*, workspace_root: pathlib.Path, config_path: pathlib.Path, 
             (
                 run_id,
                 task_id,
-                json.dumps(test_summary["command"], ensure_ascii=False),
+                json.dumps(test_summary.get("command") or test_summary.get("commands") or [], ensure_ascii=False),
                 test_summary["status"],
                 test_summary["exit_code"],
                 test_summary["output_path"],
                 test_summary["coverage_path"],
                 test_summary["coverage_status"],
                 test_summary["coverage_reason"],
-                json.dumps({"totals": test_summary.get("totals", {}), "detected_adapter": test_summary.get("detected_adapter")}, ensure_ascii=False),
+                json.dumps(
+                    {
+                        "totals": test_summary.get("totals", {}),
+                        "detected_adapter": test_summary.get("detected_adapter"),
+                        "commands": test_summary.get("commands", []),
+                        "requested_test_scope": test_summary.get("requested_test_scope"),
+                        "effective_test_scope": test_summary.get("effective_test_scope"),
+                    },
+                    ensure_ascii=False,
+                ),
             ),
         )
         conn.commit()
@@ -545,6 +852,7 @@ def after_edit_update(
     seed: str,
     changed_files: list[str],
     report_mode: str = "brief",
+    test_scope: str = "configured",
 ) -> dict:
     config = build_graph.load_config(config_path)
     paths = build_graph.graph_paths(workspace_root, config)
@@ -571,7 +879,12 @@ def after_edit_update(
         symbol_diffs=symbol_diffs,
     )
 
-    test_summary = run_tests_with_coverage(workspace_root=workspace_root, config_path=config_path, task_id=task_id)
+    test_summary = run_tests_with_coverage(
+        workspace_root=workspace_root,
+        config_path=config_path,
+        task_id=task_id,
+        requested_test_scope=test_scope,
+    )
     report_summary = generate_report.generate_report(
         workspace_root=workspace_root,
         config_path=config_path,
@@ -581,6 +894,7 @@ def after_edit_update(
         mode=report_mode,
         changed_files=changed_files,
         test_summary=test_summary,
+        build_decision=graph_summary.get("build_decision"),
     )
     test_signal = (report_summary.get("brief") or {}).get("test_signal", {})
     test_summary["affected_tests_found"] = test_signal.get("affected_tests_found", False)
@@ -645,6 +959,7 @@ def main() -> int:
     parser.add_argument("--task-id", required=True, help="Task identifier")
     parser.add_argument("--seed", required=True, help="Seed node id")
     parser.add_argument("--changed-file", action="append", default=[], help="Changed file relative to the configured project root")
+    parser.add_argument("--test-scope", choices=["targeted", "configured", "full"], default="configured", help="How broadly to run tests after the edit")
     args = parser.parse_args()
     workspace_root = pathlib.Path(args.workspace_root).resolve()
     config_path = pathlib.Path(args.config)
@@ -656,6 +971,7 @@ def main() -> int:
         task_id=args.task_id,
         seed=args.seed,
         changed_files=args.changed_file,
+        test_scope=args.test_scope,
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0

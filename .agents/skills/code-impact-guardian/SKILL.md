@@ -26,20 +26,25 @@ Do NOT trigger for:
 ## Required flow
 
 1. If `.code-impact-guardian/config.json` is missing, run `setup` automatically.
-2. Before editing, run `analyze`.
-3. Read the brief impact result.
-4. Only then edit code.
-5. After editing, run `finish`.
+2. Start with `health` when repo readiness is unclear.
+3. Before editing, run `analyze`.
+4. Read the brief impact result and `.ai/codegraph/next-action.json`.
+5. Only then edit code.
+6. After editing, run `finish --test-scope targeted`.
+7. If targeted mapping is unavailable or risk is elevated, escalate to configured or full tests before handoff.
 
 ## Hard rules
 
 - MUST auto-run `setup` when the repo is not initialized.
+- MUST prefer `health -> analyze -> next-action.json -> edit -> finish --test-scope targeted`.
 - MUST run `analyze` before changing source, config, schema, or tests.
 - MUST NOT edit if the report is missing, empty, or marked `context incomplete`, unless the user explicitly tells you to continue anyway.
 - MUST run `finish` after the edit.
 - MUST record unavailable coverage honestly.
 - MUST NOT describe `coverage unavailable` as safety.
 - MUST NOT describe `tests passed` as safety.
+- MUST NOT default every small edit to a full suite.
+- MUST NOT claim high confidence when `graph_trust` is low or dependency state is unknown.
 - MUST only say which tests passed, which tests were directly affected, and what remains uncovered.
 
 ## Preferred commands
@@ -48,8 +53,9 @@ Use these high-level commands first:
 
 ```bash
 python .agents/skills/code-impact-guardian/cig.py setup --project-root .
+python .agents/skills/code-impact-guardian/cig.py health
 python .agents/skills/code-impact-guardian/cig.py analyze
-python .agents/skills/code-impact-guardian/cig.py finish
+python .agents/skills/code-impact-guardian/cig.py finish --test-scope targeted
 ```
 
 Use these when context needs help:
@@ -98,7 +104,7 @@ After `analyze`, expect:
 - JSON report
 - context resolution
 - seed candidates
-- next action
+- next-action.json
 
 After `finish`, expect:
 

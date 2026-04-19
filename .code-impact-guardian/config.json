@@ -1,6 +1,6 @@
 {
-  "project_root": "examples/python_minimal",
-  "primary_adapter": "auto",
+  "project_root": ".",
+  "primary_adapter": "python",
   "supplemental_adapters": [],
   "language_adapter": "auto",
   "project_profile": "auto",
@@ -14,7 +14,26 @@
     "db_path": ".ai/codegraph/codegraph.db",
     "report_dir": ".ai/codegraph/reports",
     "build_log_path": ".ai/codegraph/build.log",
-    "test_results_path": ".ai/codegraph/test-results.json"
+    "test_results_path": ".ai/codegraph/test-results.json",
+    "exclude_dirs": [
+      ".git",
+      ".ai",
+      "node_modules",
+      "dist",
+      "build",
+      ".next",
+      ".nuxt",
+      ".turbo",
+      ".cache",
+      "coverage",
+      ".venv",
+      "venv",
+      "__pycache__",
+      ".pytest_cache",
+      ".mypy_cache",
+      ".playwright",
+      "test-results"
+    ]
   },
   "rules": {
     "globs": [
@@ -23,8 +42,10 @@
   },
   "python": {
     "source_globs": [
-      "src/*.py",
-      "src/**/*.py"
+      "scripts/*.py",
+      "scripts/**/*.py",
+      ".agents/skills/code-impact-guardian/*.py",
+      ".agents/skills/code-impact-guardian/**/*.py"
     ],
     "test_globs": [
       "tests/*.py",

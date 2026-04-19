@@ -1102,8 +1102,6 @@ def _build_graph_unlocked(*, workspace_root: pathlib.Path, config_path: pathlib.
     )
     if force_full:
         decision["build_mode"] = "full"
-        decision["trust_level"] = "high"
-        decision["graph_trust"] = "high"
         decision["reason_codes"] = [*decision.get("reason_codes", []), "FORCED_FULL_REBUILD"]
     if decision["build_mode"] == "full":
         plan["build_mode"] = "full"

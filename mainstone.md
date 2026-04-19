@@ -1,6 +1,6 @@
 # Mainstone
 
-本文件根据本轮对话整理，记录 Code Impact Guardian 从 Stage1 到 Stage14 的核心里程碑。每个阶段只保留目标、关键交付与状态摘要。
+本文件根据本轮对话整理，记录 Code Impact Guardian 从 Stage1 到 Stage15 的核心里程碑。每个阶段只保留目标、关键交付与状态摘要。
 
 更新时间：2026-04-19（Asia/Singapore）
 
@@ -92,12 +92,33 @@
 - 2026-04-19：加入 runtime integration pack 与 contract graph 初版。仓库内可生成 `AGENTS.md` 受管块、`.ai/codegraph/runtime/*` 会话契约文档，并开始识别 `env/config/ipc/sql/obsidian/playwright` 这些更接近真实产品链路的 contract，而不再只盯函数级关系。
 - 2026-04-19：完成 Stage14 回归矩阵并补 helper 收尾。`test_stage14_workflow`、兼容测试与全量 workflow 回归通过；同时补了 `matches_any()` 点前缀路径最小回归与最小修复，避免 helper 层路径写法差异在后续新调用点里埋雷。
 
+## Stage 15
+
+时间：2026-04-19
+
+把“所有文件一视同仁地走同一条 guardian 流程”和“同一个 bug 修不好却一直只补局部”这两个问题推进到可治理状态。新增 flow scope governance 与 repair loop escalation，让文档、规则、测试、配置、源码不再被同样对待，也让重复失败会逐步揭露更大的影响链。
+
+## Stage 15 重要节点
+
+- 2026-04-19：新增 change flow classifier。系统现在能把改动分成 `bypass`、`lightweight`、`guarded`、`risk_sensitive`、`mixed`，并据此决定 `skip / health_only / analyze_only / full_guardian`、`B0-B4` 与 `none / targeted / configured / full` 的验证建议。
+- 2026-04-19：修掉 Stage14 的一个边界问题。纯文档 bypass 改动不会再被后续 `no_direct_tests` 逻辑误抬到 `B3`；普通归档/总结 markdown 能稳定停在 `B0`，不需要完整 guardian 流程，也不需要测试。
+- 2026-04-19：新增 repair loop runtime。加入 `.ai/codegraph/repair-attempts.jsonl`、`.ai/codegraph/loop-breaker-report.json`、`loop-status`、`diagnose-loop` 与 `--escalation-level L0|L1|L2|L3|auto`，让 repeated failure 会从 `L0 -> L1 -> L2 -> L3` 逐步展开 chain，而不是继续只补同一块文件。
+- 2026-04-19：把 loop escalation 接进 `next-action.json`。当失败重复出现时，next-action 会带上 `repair_loop`、`expanded_chain_summary`、升级后的 budget、以及“先读扩展链条，不要继续局部修补”的 agent instruction。
+- 2026-04-19：新增 Stage15 测试矩阵并通过回归。`tests/test_stage15_workflow.py` 覆盖 docs bypass、rule docs guarded、README/AGENTS lightweight、mixed heaviest、risk-sensitive dependency、repair attempt 记录、`L0-L3` 升级与 loop breaker report；Stage15 单测、Stage13/14 回归、以及 Stage9/10/11/13/14/15 广义组合都保持通过。
+- 2026-04-19：做了一轮独立暴力黑盒验证。在不改源码的前提下，用临时工作区和 subagent 并行验证 `classify-change`、`analyze`、`loop-status`、`diagnose-loop`、组合回归与重复失败升级；结果显示 bypass 不污染 loop，repeat_count 到 4 时会稳定进入 `L3/B4/full`，而 Stage9/10/11/13/14/15 组合回归连续两次都是 67/67 通过。
+
 ## 文档治理节点
 
 时间：2026-04-19
 
 对仓库文档做了一次结构化收口：更新 `README.md`、`STAGE13_REVIEW_GUIDE.md`、`STAGE13_CHANGELOG.md` 以反映当前能力；新增 `docs/README.md` 与 `docs/archive/README.md`；把 `background.md`、初始实现 prompt、历史 review 记录归档到 `docs/archive/`，让当前运行文档、兼容 review 文档和历史过程文档分层更清楚。
 
+## 规则治理节点
+
+时间：2026-04-19
+
+补了一条删除安全规则到仓库级与全局级 agent 约定：删除动作默认只能移入回收站或 trash，不得直接永久删除；任何永久删除都必须先获得用户明确且严格的审批。这条规则已写入仓库 `AGENTS.md`、consumer 生成模板，以及全局 Codex `AGENTS.md`。
+
 ## 当前状态
 
-截至 2026-04-19，Code Impact Guardian 已推进到 Stage14，具备 repo-local、可复制、可分发、可恢复、支持 Python / TSJS / React / SQL / generic fallback 的完整主流程，并开始具备 verification budget、shadow calibration、contract graph 与 runtime-neutral 集成层。产品边界也更明确：它首先是给 agents 用的工程图册与验证护栏，而不是平台型重智能系统。
+截至 2026-04-19，Code Impact Guardian 已推进到 Stage15，具备 repo-local、可复制、可分发、可恢复、支持 Python / TSJS / React / SQL / generic fallback 的完整主流程，并已经形成 verification budget、shadow calibration、contract graph、flow scope governance 与 repair loop escalation 的组合能力。产品边界也更明确：它首先是给 agents 用的工程图册与验证护栏，而不是平台型重智能系统。

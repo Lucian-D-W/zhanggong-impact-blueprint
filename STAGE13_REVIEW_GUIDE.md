@@ -10,6 +10,10 @@ entry point for the current repository state. For current product behavior, use:
 - `docs/README.md`
 - `.agents/skills/code-impact-guardian/SKILL.md`
 
+The repository has continued through Stage 14 and Stage 15. Those later stages
+add adaptive verification, flow scope governance, and repair-loop escalation,
+but they are not the contract described by this Stage 13 review guide.
+
 ## What this document is for
 
 Use this guide when reviewing the Stage 13 external bundle specifically:
@@ -26,6 +30,16 @@ Use this guide when reviewing the Stage 13 external bundle specifically:
 - multidimensional trust payloads
 - excluded-directory pruning during traversal
 - targeted fallback behavior that stays explicit in machine-readable output
+
+## What changed later but is outside this bundle
+
+- Stage 14 added verification budgets, `--shadow-full`, local test-history
+  calibration, and runtime integration-pack support
+- Stage 15 added flow classes (`bypass`, `lightweight`, `guarded`,
+  `risk_sensitive`, `mixed`) plus repair-loop escalation (`L0` through `L3`)
+
+If you are reviewing the current repository instead of the historical Stage 13
+bundle, read the current root/docs entry points first.
 
 ## What was hardened after Stage 13 review
 

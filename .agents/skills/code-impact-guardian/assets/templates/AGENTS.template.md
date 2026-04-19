@@ -16,6 +16,7 @@ Whenever a task changes code, behavior, configuration, schema, or tests:
 - Never persist indirect or transitive impact as durable graph truth.
 - Compute transitive impact only while generating the report.
 - If coverage is unavailable, record that fact. Never fabricate coverage-backed results.
+- Delete actions must move items to the recycle bin or trash by default. Permanent deletion requires explicit, strict user approval first.
 - Tests passed is not the same thing as safe.
 - If `analyze` says the report is incomplete, do not treat that as edit-safe context unless the user explicitly overrides it.
 - Local markdown rules remain the default rule source.

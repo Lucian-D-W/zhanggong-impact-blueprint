@@ -9,6 +9,10 @@ that package was considered reviewable. For the current repository state, use:
 - `README.md`
 - `docs/README.md`
 
+The repository now includes later Stage 14 and Stage 15 work. This changelog
+is intentionally Stage 13-scoped and is retained only because the external
+Stage 13 review package still expects it at the repository root.
+
 ## Stage 13 product changes
 
 - Added real-use test scope layering
@@ -42,6 +46,13 @@ that package was considered reviewable. For the current repository state, use:
 - fixed skipped tests being described as passed
 - fixed multi-command targeted run persistence
 - fixed missing `coverage.py` to fall back to plain test execution with explicit `coverage_status=unavailable`
+
+## Related later stages
+
+- Stage 14 added adaptive verification budgets, `--shadow-full`, local
+  calibration/history, and runtime integration-pack support
+- Stage 15 added flow scope governance, non-runtime bypass/lightweight paths,
+  repair-loop escalation, and expanded-chain diagnostics
 
 ## Regression coverage added for Stage 13
 

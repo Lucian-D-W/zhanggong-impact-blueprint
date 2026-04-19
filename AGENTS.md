@@ -25,6 +25,7 @@ Whenever a task changes code, behavior, configuration, schema, or tests:
 - Compute transitive impact only while generating the report.
 - GitHub permalink, blame, and compare are optional evidence enhancements, not required dependencies.
 - If coverage is unavailable, record that fact. Never fabricate coverage-backed results.
+- Delete actions must move items to the recycle bin or trash by default. Permanent deletion requires explicit, strict user approval first.
 
 ## Review Bundle Packaging
 

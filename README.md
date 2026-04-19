@@ -20,33 +20,55 @@ and used by agents as part of the normal edit loop.
 
 ## Current focus
 
-The repository has moved beyond the earlier Stage 10 daily-driver work. The
-current shape includes the Stage 13 "Real-Use Intelligence Layer" and the
-Stage 14 "Adaptive Verification Orchestrator" additions:
+The repository is now in the Stage 15 shape.
 
+That means the repo keeps the Stage 13 and Stage 14 verification/intelligence
+work, and adds two newer controls:
+
+- flow scope governance so docs, rules, tests, configs, and code do not all go
+  through the same weight of workflow
+- repair loop escalation so repeated failures widen the visible chain instead
+  of encouraging local patching forever
+
+The current operating model includes:
+
+- change classes: `bypass`, `lightweight`, `guarded`, `risk_sensitive`, `mixed`
 - verification budgets (`B0` through `B4`)
 - `targeted`, `configured`, and `full` test scopes
 - `recommend-tests` for executable affected-test commands
 - `--shadow-full` calibration for targeted verification
-- local test-history ranking
+- `classify-change`, `loop-status`, and `diagnose-loop`
 - runtime integration pack files under `.ai/codegraph/runtime/`
 - multidimensional trust instead of a single trust flag
-- early runtime-contract graph support for env/config/ipc/sql-style edges
+- lightweight runtime-contract graph support for env/config/ipc/sql-style edges
+- repair-loop reveal levels `L0` through `L3`
 
-The repo is still a development source for the template, so some review-bundle
-documents remain at the root for compatibility even though the product workflow
-has advanced.
+The repository root is intentionally kept lean:
 
-## Fixed workflow
+- current entry docs stay at the root
+- active working records such as `mainstone.md` may stay at the root when they
+  are part of the ongoing development workflow
+- Stage 13 compatibility review docs stay at the root because the external
+  review bundle still expects them there
+- historical process material lives under `docs/archive/`
+- generated zips, logs, temp workspaces, and old review artifacts should not
+  remain at the root
 
-The core workflow remains stable:
+## Current operating workflow
 
-1. run `health` when repo readiness is unclear
-2. run `analyze`
-3. read the brief report and `.ai/codegraph/next-action.json`
-4. edit only after the impact context is clear
-5. run `finish` with the budget-driven scope
+The workflow is no longer one single path for every edit:
+
+1. run `classify-change` or `analyze`
+2. if the change is `bypass`, edit directly and skip the full guardian flow
+3. if the change is `lightweight`, use health/analyze guidance only and avoid
+   unnecessary full verification
+4. if the change is `guarded` or `risk_sensitive`, read the brief report and
+   `.ai/codegraph/next-action.json` before editing
+5. run `finish` with the budget-driven scope when the change is runtime- or
+   verification-relevant
 6. use `--shadow-full` when targeted verification needs calibration
+7. if the same failure keeps repeating, rerun `analyze` with escalation and
+   read the expanded chain before patching again
 
 For agents, the canonical operational instructions live in:
 
@@ -129,6 +151,7 @@ Current docs:
 
 - `README.md`
 - `AGENTS.md`
+- `mainstone.md`
 - `docs/README.md`
 - `benchmark/README.md`
 - `docs/demo/without-vs-with-skill.md`
@@ -141,6 +164,7 @@ Compatibility review docs:
 Archived process/history docs:
 
 - `docs/archive/README.md`
+- `docs/archive/stage-history-through-stage15.md`
 
 ## Exporting the skill
 
@@ -183,8 +207,12 @@ These are the main user-facing commands now:
 ```bash
 python .agents/skills/code-impact-guardian/cig.py setup --project-root .
 python .agents/skills/code-impact-guardian/cig.py health
+python .agents/skills/code-impact-guardian/cig.py classify-change --workspace-root . --changed-file path/to/file
 python .agents/skills/code-impact-guardian/cig.py analyze
+python .agents/skills/code-impact-guardian/cig.py analyze --workspace-root . --changed-file path/to/file --escalation-level auto
 python .agents/skills/code-impact-guardian/cig.py recommend-tests --workspace-root . --task-id <task-id>
+python .agents/skills/code-impact-guardian/cig.py loop-status --workspace-root .
+python .agents/skills/code-impact-guardian/cig.py diagnose-loop --workspace-root . --changed-file path/to/file
 python .agents/skills/code-impact-guardian/cig.py install-integration-pack
 python .agents/skills/code-impact-guardian/cig.py finish --test-scope targeted
 python .agents/skills/code-impact-guardian/cig.py finish --test-scope targeted --shadow-full
@@ -194,8 +222,11 @@ What they do:
 
 - `setup` = initialize config, schema, consumer docs, and repo defaults
 - `health` = report readiness, trust freshness, and recovery hints
+- `classify-change` = classify changed files before deciding how much guardian flow is actually needed
 - `analyze` = infer context, refresh or reuse the graph, and write next-action guidance
 - `recommend-tests` = turn direct test seeds into executable commands
+- `loop-status` = summarize the current repeated-failure state
+- `diagnose-loop` = expand repair-loop context for a specific changed file
 - `install-integration-pack` = write runtime-neutral repo guidance and session contract files
 - `finish` = refresh evidence, run the chosen verification scope, and update handoff/status state
 
@@ -213,8 +244,8 @@ Useful flags:
 
 Verification is no longer a simple "light vs full" choice.
 
-- `B0` = no-op or docs-only
-- `B1` = health + analyze only
+- `B0` = bypass-class non-runtime edits
+- `B1` = lightweight documentation/process edits
 - `B2` = targeted tests
 - `B3` = configured tests
 - `B4` = full tests plus dependency/schema review
@@ -224,6 +255,29 @@ The verification budget is written to:
 - `.ai/codegraph/verification-policy.json`
 - `.ai/codegraph/next-action.json`
 - finish/test results payloads
+
+Flow class and budget are related, but not identical:
+
+- `bypass` typically maps to `B0`
+- `lightweight` typically maps to `B1`
+- `guarded` usually starts at `B2` and can escalate
+- `risk_sensitive` is expected to run at the heaviest budget
+- repeated failures can raise the budget, but never lower it
+
+### Repair-loop escalation
+
+Repeated failure is treated as a signal that the visible chain is too small.
+
+- `L0` = normal mode
+- `L1` = widen one hop after a repeated failure
+- `L2` = widen two hops and include more intermediate rule/contract context
+- `L3` = full-chain mode with `B4` and full tests
+
+The loop state is written to runtime artifacts such as:
+
+- `.ai/codegraph/repair-attempts.jsonl`
+- `.ai/codegraph/loop-breaker-report.json`
+- `.ai/codegraph/next-action.json`
 
 ## Profiles
 
@@ -313,12 +367,13 @@ Focused validation:
 ```bash
 python -m unittest tests.test_stage11_workflow tests.test_stage13_workflow -v
 python -m unittest tests.test_stage14_workflow -v
+python -m unittest tests.test_stage15_workflow -v
 ```
 
 Broader regression:
 
 ```bash
-python -m unittest tests.test_stage9_workflow tests.test_stage10_workflow tests.test_stage11_workflow tests.test_stage13_workflow tests.test_stage14_workflow -v
+python -m unittest tests.test_stage9_workflow tests.test_stage10_workflow tests.test_stage11_workflow tests.test_stage13_workflow tests.test_stage14_workflow tests.test_stage15_workflow -v
 ```
 
 Full current workflow matrix:

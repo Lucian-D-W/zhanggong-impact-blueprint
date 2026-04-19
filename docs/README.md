@@ -8,9 +8,13 @@ Use these first when you want the current behavior of the product:
 
 - `../README.md`
 - `../AGENTS.md`
+- `../mainstone.md`
 - `../.agents/skills/code-impact-guardian/SKILL.md`
 - `../benchmark/README.md`
 - `demo/without-vs-with-skill.md`
+
+These documents describe the current Stage 15 operating shape, including flow
+scope governance and repair-loop escalation.
 
 ## Compatibility review docs
 

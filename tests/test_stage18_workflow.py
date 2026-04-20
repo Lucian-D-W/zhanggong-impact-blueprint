@@ -162,13 +162,13 @@ class Stage18WorkflowTest(unittest.TestCase):
             self.repo_root / NEW_STATE_DIR,
             self.repo_root / "tests",
             self.repo_root / "scripts",
+            self.repo_root / "docs" / "archive" / "STAGE17_CHANGELOG.md",
+            self.repo_root / "docs" / "archive" / "STAGE17_REVIEW_GUIDE.md",
             self.repo_root / "docs" / "demo",
             self.repo_root / "docs" / "superpowers" / "plans",
             self.repo_root / "README.md",
             self.repo_root / "AGENTS.md",
             self.repo_root / "mainstone.md",
-            self.repo_root / "STAGE17_CHANGELOG.md",
-            self.repo_root / "STAGE17_REVIEW_GUIDE.md",
         ]
 
         allowed_old_identity_files = {self.repo_root / "tests" / "test_stage18_workflow.py"}
@@ -191,6 +191,9 @@ class Stage18WorkflowTest(unittest.TestCase):
                 text = root.read_text(encoding="utf-8")
                 self.assertNotIn(OLD_SKILL_SLUG, text, str(root))
                 self.assertNotIn(OLD_STATE_DIR, text, str(root))
+
+        self.assertFalse((self.repo_root / "STAGE17_CHANGELOG.md").exists())
+        self.assertFalse((self.repo_root / "STAGE17_REVIEW_GUIDE.md").exists())
 
 
 if __name__ == "__main__":

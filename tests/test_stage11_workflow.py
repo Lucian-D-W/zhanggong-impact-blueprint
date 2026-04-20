@@ -615,6 +615,41 @@ class Stage11WorkflowTest(unittest.TestCase):
             last_error = json.loads((repo_root / ".ai" / "codegraph" / "logs" / "last-error.json").read_text(encoding="utf-8"))
             self.assertEqual(last_error["error_code"], "SEED_SELECTION_REQUIRED")
 
+    def test_non_runtime_analyze_with_null_seed_does_not_break_followup_code_analyze(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            repo_root = pathlib.Path(tmp) / "null-seed-followup"
+            repo_cig = copy_single_skill_folder(self.single_export, repo_root)
+            write_python_repo(repo_root)
+            (repo_root / "notes.md").write_text("working note\n", encoding="utf-8")
+            setup_repo(repo_cig, repo_root, profile="python-basic")
+            build_repo(repo_cig, repo_root)
+
+            note_payload = analyze_repo(repo_cig, repo_root, changed_files=["notes.md"])
+            self.assertIsNone(note_payload["seed"])
+            last_task = json.loads((repo_root / ".ai" / "codegraph" / "last-task.json").read_text(encoding="utf-8"))
+            self.assertIsNone(last_task["seed"])
+
+            followup_run = subprocess.run(
+                [
+                    sys.executable,
+                    str(repo_cig),
+                    "analyze",
+                    "--workspace-root",
+                    str(repo_root),
+                    "--config",
+                    str(config_path(repo_root)),
+                    "--changed-file",
+                    "src/app.py",
+                ],
+                cwd=repo_root,
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(followup_run.returncode, 0, followup_run.stderr or followup_run.stdout)
+            followup_payload = json.loads(followup_run.stdout)
+            self.assertEqual(followup_payload["changed_files"], ["src/app.py"])
+            self.assertEqual(followup_payload["seed"], "fn:src/app.py:login")
+
     def test_python_instance_method_calls_create_call_and_cover_edges(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             repo_root = pathlib.Path(tmp) / "instance-method"

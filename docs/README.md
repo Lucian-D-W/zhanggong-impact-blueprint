@@ -32,6 +32,8 @@ These are useful for project history, but they are not the current product
 entry points:
 
 - `archive/README.md`
+- `archive/STAGE17_CHANGELOG.md`
+- `archive/STAGE17_REVIEW_GUIDE.md`
 - `archive/initial-implementation-prompt.md`
 - `archive/project-background.md`
 - `superpowers/plans/`

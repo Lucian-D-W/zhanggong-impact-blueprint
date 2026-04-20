@@ -8,6 +8,8 @@ retaining, but should not be confused with the current product instructions.
 - `project-background.md`
 - `initial-implementation-prompt.md`
 - `review-2026-04-19.txt`
+- `STAGE17_CHANGELOG.md`
+- `STAGE17_REVIEW_GUIDE.md`
 
 ## Other historical material
 

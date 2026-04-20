@@ -127,6 +127,7 @@ Do not publish:
 - Exclude reviewer-irrelevant noise by default:
   - `.git/`
   - `.ai/`
+  - `docs/` except files explicitly listed in the required include set above
   - `dist/`
   - `build/`
   - `__pycache__/`

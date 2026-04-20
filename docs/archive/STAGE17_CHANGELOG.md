@@ -61,5 +61,5 @@ Stage 17 intentionally does not add:
 - Reframed `README.md` from stage-progress narrative into product documentation.
 - Updated `AGENTS.md` to reflect final atlas reading rules and repeated-failure behavior.
 - Updated `.agents/skills/zhanggong-impact-blueprint/SKILL.md` with final boundary, atlas reading order, and uncertainty handling.
-- Added `STAGE17_REVIEW_GUIDE.md` for reviewer validation.
+- Added the Stage 17 reviewer guide, now archived at `docs/archive/STAGE17_REVIEW_GUIDE.md`, for validation.
 

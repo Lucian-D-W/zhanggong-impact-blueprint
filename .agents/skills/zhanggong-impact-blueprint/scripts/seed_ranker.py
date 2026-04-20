@@ -111,11 +111,12 @@ def score_candidate(candidate: dict, *, changed_line_map: dict[str, list[int]], 
     if last_task:
         last_task_files = set(last_task.get("changed_files", []))
         same_file_overlap = bool(candidate["path"] in last_task_files and last_task_files)
-        if last_task.get("seed") == candidate["node_id"]:
+        last_task_seed = last_task.get("seed")
+        if last_task_seed == candidate["node_id"]:
             recent_seed_bonus = 0.75 if same_file_overlap else 0.5
             score += recent_seed_bonus
             reasons.append(f"recent task seed overlap (+{recent_seed_bonus:.2f})")
-        elif last_task.get("project_root") and last_task.get("seed", "").split(":")[-1] == candidate.get("symbol"):
+        elif isinstance(last_task_seed, str) and last_task.get("project_root") and last_task_seed.split(":")[-1] == candidate.get("symbol"):
             symbol_bonus = 0.6 if same_file_overlap else 0.35
             score += symbol_bonus
             reasons.append(f"symbol matches recent task context (+{symbol_bonus:.2f})")

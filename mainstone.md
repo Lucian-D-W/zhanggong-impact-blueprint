@@ -133,6 +133,21 @@
 - 2026-04-19：把删除保护落成默认机制。普通删除默认只能 `recycle_only`，永久删除会落到 `never_delete_without_approval`，需要用户明确且严格审批；受保护工作文档在 move/archive 时也会要求先确认。
 - 2026-04-19：新增 `tests/test_stage15_1_workflow.py`，覆盖 declared working note、heuristic working note、rule doc override、move/archive/delete/permanent delete 的 mutation guard 行为。Stage15.1 单测通过，同时 Stage15 与 Stage13/14/15/15.1 组合回归通过，确保没有把原 Stage 15 行为打坏。
 
+## Stage 18
+
+时间：2026-04-20
+
+把产品身份从旧内部名迁移到统一的新主身份。Stage 18 的目标不是再扩 atlas 能力，而是把 skill、状态目录、导出包、公开文案和测试断言全部收成单一身份 `zhanggong-impact-blueprint`，避免“外面一个名字、里面另一个名字”的割裂。
+
+## Stage 18 重要节点
+
+- 2026-04-20：统一机器层标识为 `zhanggong-impact-blueprint`。skill 主目录迁移到 `.agents/skills/zhanggong-impact-blueprint/`，repo-local state 目录迁移到 `.zhanggong-impact-blueprint/`，consumer export 与 single-folder export 默认也全部切到新 slug。
+- 2026-04-20：新增 `scripts/identity.py`，把 `SKILL_SLUG`、`DISPLAY_NAME`、`FORMAL_NAME`、`STATE_DIRNAME` 等身份常量集中管理；`cig.py`、`consumer_install.py`、`change_classifier.py` 等入口不再各自散落一套旧名字。
+- 2026-04-20：更新 `README.md`、`AGENTS.md`、`.agents/skills/zhanggong-impact-blueprint/SKILL.md`、consumer templates、demo 文档与活跃测试面，让用户可见表面统一为 `张工的施工图 / ZhangGong Impact Blueprint` 与 `ZG Impact Blueprint`。
+- 2026-04-20：把 Stage 17 的过程文档归档到 `docs/archive/`，同时保留 `STAGE13_CHANGELOG.md` / `STAGE13_REVIEW_GUIDE.md` 在根目录作为历史 review-bundle 兼容件；外部 review bundle 规则补充为默认不上传 `docs/`，除非必带清单明确点名。
+- 2026-04-20：新增 `tests/test_stage18_workflow.py`，覆盖 frontmatter/identity 常量、新 skill/state 路径、consumer export、single-folder export、active repo surface 无旧身份残留等迁移约束，保证以后不会把旧名偷偷带回来。
+- 2026-04-20：完成分层回归与 guardian 收尾。`tests.test_stage18_workflow`、`tests.test_stage17_workflow`、`tests.test_stage16_workflow`、`tests.test_stage15_workflow`、`tests.test_stage15_1_workflow`、`tests.test_stage14_workflow`、`tests.test_stage13_workflow` 关键回归通过；严格 `ResourceWarning` 模式通过；`release-check --skill-only` 通过；最后 `finish --test-scope configured` 与 `health` 都重新回到可工作状态。
+
 ## 当前状态
 
-截至 2026-04-19，ZG Impact Blueprint 已推进到 Stage15.1，具备 repo-local、可复制、可分发、可恢复、支持 Python / TSJS / React / SQL / generic fallback 的完整主流程，并已经形成 verification budget、shadow calibration、contract graph、flow scope governance、repair loop escalation、doc-role-aware working-note handling 与 mutation safety 的组合能力。产品边界也更明确：它首先是给 agents 用的工程图册与验证护栏，而不是平台型重智能系统。
+截至 2026-04-20，ZG Impact Blueprint 已推进到 Stage18，具备 repo-local、可复制、可分发、可恢复、支持 Python / TSJS / React / SQL / generic fallback 的完整主流程，并已经形成 verification budget、shadow calibration、contract graph、flow scope governance、repair loop escalation、doc-role-aware working-note handling、mutation safety、Stage 17 的最终 atlas 收口，以及 Stage 18 的单一身份迁移与发布面统一。产品边界也更明确：它首先是给 agents 用的工程图册与验证护栏，而不是平台型重智能系统。

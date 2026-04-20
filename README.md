@@ -133,6 +133,6 @@ python .agents/skills/zhanggong-impact-blueprint/cig.py export-skill --mode debu
 
 - `.agents/skills/zhanggong-impact-blueprint/SKILL.md`
 - `AGENTS.md`
-- `STAGE17_CHANGELOG.md`
-- `STAGE17_REVIEW_GUIDE.md`
+- `docs/archive/STAGE17_CHANGELOG.md`
+- `docs/archive/STAGE17_REVIEW_GUIDE.md`
 

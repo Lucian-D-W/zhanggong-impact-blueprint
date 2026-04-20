@@ -1,8 +1,8 @@
 # Mainstone
 
-本文件根据本轮对话整理，记录 ZG Impact Blueprint 从 Stage1 到 Stage15 的核心里程碑。每个阶段只保留目标、关键交付与状态摘要。
+本文件根据本轮对话整理，记录 ZG Impact Blueprint 从 Stage1 到 Stage18 的核心里程碑。每个阶段只保留目标、关键交付与状态摘要。
 
-更新时间：2026-04-19（Asia/Singapore）
+更新时间：2026-04-20（Asia/Singapore）
 
 ## Stage 1
 
@@ -96,12 +96,12 @@
 
 时间：2026-04-19
 
-把“所有文件一视同仁地走同一条 guardian 流程”和“同一个 bug 修不好却一直只补局部”这两个问题推进到可治理状态。新增 flow scope governance 与 repair loop escalation，让文档、规则、测试、配置、源码不再被同样对待，也让重复失败会逐步揭露更大的影响链。
+把“所有文件一视同仁地走同一条主流程”和“同一个 bug 修不好却一直只补局部”这两个问题推进到可治理状态。新增 flow scope governance 与 repair loop escalation，让文档、规则、测试、配置、源码不再被同样对待，也让重复失败会逐步揭露更大的影响链。
 
 ## Stage 15 重要节点
 
 - 2026-04-19：新增 change flow classifier。系统现在能把改动分成 `bypass`、`lightweight`、`guarded`、`risk_sensitive`、`mixed`，并据此决定 `skip / health_only / analyze_only / full_guardian`、`B0-B4` 与 `none / targeted / configured / full` 的验证建议。
-- 2026-04-19：修掉 Stage14 的一个边界问题。纯文档 bypass 改动不会再被后续 `no_direct_tests` 逻辑误抬到 `B3`；普通归档/总结 markdown 能稳定停在 `B0`，不需要完整 guardian 流程，也不需要测试。
+- 2026-04-19：修掉 Stage14 的一个边界问题。纯文档 bypass 改动不会再被后续 `no_direct_tests` 逻辑误抬到 `B3`；普通归档/总结 markdown 能稳定停在 `B0`，不需要完整主流程，也不需要测试。
 - 2026-04-19：新增 repair loop runtime。加入 `.ai/codegraph/repair-attempts.jsonl`、`.ai/codegraph/loop-breaker-report.json`、`loop-status`、`diagnose-loop` 与 `--escalation-level L0|L1|L2|L3|auto`，让 repeated failure 会从 `L0 -> L1 -> L2 -> L3` 逐步展开 chain，而不是继续只补同一块文件。
 - 2026-04-19：把 loop escalation 接进 `next-action.json`。当失败重复出现时，next-action 会带上 `repair_loop`、`expanded_chain_summary`、升级后的 budget、以及“先读扩展链条，不要继续局部修补”的 agent instruction。
 - 2026-04-19：新增 Stage15 测试矩阵并通过回归。`tests/test_stage15_workflow.py` 覆盖 docs bypass、rule docs guarded、README/AGENTS lightweight、mixed heaviest、risk-sensitive dependency、repair attempt 记录、`L0-L3` 升级与 loop breaker report；Stage15 单测、Stage13/14 回归、以及 Stage9/10/11/13/14/15 广义组合都保持通过。
@@ -111,7 +111,7 @@
 
 时间：2026-04-19
 
-对仓库文档做了一次结构化收口：更新 `README.md`、`STAGE13_REVIEW_GUIDE.md`、`STAGE13_CHANGELOG.md` 以反映当前能力；新增 `docs/README.md` 与 `docs/archive/README.md`；把 `background.md`、初始实现 prompt、历史 review 记录归档到 `docs/archive/`，让当前运行文档、兼容 review 文档和历史过程文档分层更清楚。
+对仓库文档做了一次结构化收口：更新 `README.md` 与阶段说明文档以反映当时能力；新增 `docs/README.md` 与 `docs/archive/README.md`；把 `background.md`、初始实现 prompt、历史 review 记录归档到 `docs/archive/`，让当前运行文档、兼容 review 文档和历史过程文档分层更清楚。
 
 ## 规则治理节点
 
@@ -128,8 +128,8 @@
 ## Stage 15.1 重要节点
 
 - 2026-04-19：给 change classifier 增加 `doc_roles`。系统现在除了看路径和扩展名，也会看文档角色；`working_note`、`guide_doc`、`archive_note`、`rule_doc` 会影响 flow 判断。`mainstone.md` 已通过 repo-local config 明确声明为 `working_note + protected_doc`。
-- 2026-04-19：working note 不再因为写了 `verification budget`、`finish --test-scope` 这类关键词就自动被抬成 guarded。对于活跃工作记录，guardian 现在优先理解“这是工作记录”，而不是只看命令词。
-- 2026-04-19：新增 `assess-mutation` CLI，用来单独判断 `edit / move / archive / delete / permanent_delete` 的动作风险。现在系统会把“这次改动要不要走 full guardian”与“这个动作会不会伤到用户文件”分开处理。
+- 2026-04-19：working note 不再因为写了 `verification budget`、`finish --test-scope` 这类关键词就自动被抬成 guarded。对于活跃工作记录，系统现在优先理解“这是工作记录”，而不是只看命令词。
+- 2026-04-19：新增 `assess-mutation` CLI，用来单独判断 `edit / move / archive / delete / permanent_delete` 的动作风险。现在系统会把“这次改动要不要走完整主流程”与“这个动作会不会伤到用户文件”分开处理。
 - 2026-04-19：把删除保护落成默认机制。普通删除默认只能 `recycle_only`，永久删除会落到 `never_delete_without_approval`，需要用户明确且严格审批；受保护工作文档在 move/archive 时也会要求先确认。
 - 2026-04-19：新增 `tests/test_stage15_1_workflow.py`，覆盖 declared working note、heuristic working note、rule doc override、move/archive/delete/permanent delete 的 mutation guard 行为。Stage15.1 单测通过，同时 Stage15 与 Stage13/14/15/15.1 组合回归通过，确保没有把原 Stage 15 行为打坏。
 
@@ -144,9 +144,9 @@
 - 2026-04-20：统一机器层标识为 `zhanggong-impact-blueprint`。skill 主目录迁移到 `.agents/skills/zhanggong-impact-blueprint/`，repo-local state 目录迁移到 `.zhanggong-impact-blueprint/`，consumer export 与 single-folder export 默认也全部切到新 slug。
 - 2026-04-20：新增 `scripts/identity.py`，把 `SKILL_SLUG`、`DISPLAY_NAME`、`FORMAL_NAME`、`STATE_DIRNAME` 等身份常量集中管理；`cig.py`、`consumer_install.py`、`change_classifier.py` 等入口不再各自散落一套旧名字。
 - 2026-04-20：更新 `README.md`、`AGENTS.md`、`.agents/skills/zhanggong-impact-blueprint/SKILL.md`、consumer templates、demo 文档与活跃测试面，让用户可见表面统一为 `张工的施工图 / ZhangGong Impact Blueprint` 与 `ZG Impact Blueprint`。
-- 2026-04-20：把 Stage 17 的过程文档归档到 `docs/archive/`，同时保留 `STAGE13_CHANGELOG.md` / `STAGE13_REVIEW_GUIDE.md` 在根目录作为历史 review-bundle 兼容件；外部 review bundle 规则补充为默认不上传 `docs/`，除非必带清单明确点名。
+- 2026-04-20：把 Stage 17 过程文档和历史 Stage 13 review 文档统一归档到 `docs/archive/`；外部上传规则也进一步收紧为默认不上传整个 `docs/` 目录。
 - 2026-04-20：新增 `tests/test_stage18_workflow.py`，覆盖 frontmatter/identity 常量、新 skill/state 路径、consumer export、single-folder export、active repo surface 无旧身份残留等迁移约束，保证以后不会把旧名偷偷带回来。
-- 2026-04-20：完成分层回归与 guardian 收尾。`tests.test_stage18_workflow`、`tests.test_stage17_workflow`、`tests.test_stage16_workflow`、`tests.test_stage15_workflow`、`tests.test_stage15_1_workflow`、`tests.test_stage14_workflow`、`tests.test_stage13_workflow` 关键回归通过；严格 `ResourceWarning` 模式通过；`release-check --skill-only` 通过；最后 `finish --test-scope configured` 与 `health` 都重新回到可工作状态。
+- 2026-04-20：完成分层回归与流程收尾。`tests.test_stage18_workflow`、`tests.test_stage17_workflow`、`tests.test_stage16_workflow`、`tests.test_stage15_workflow`、`tests.test_stage15_1_workflow`、`tests.test_stage14_workflow`、`tests.test_stage13_workflow` 关键回归通过；严格 `ResourceWarning` 模式通过；`release-check --skill-only` 通过；最后 `finish --test-scope configured` 与 `health` 都重新回到可工作状态。
 
 ## 当前状态
 

@@ -39,7 +39,7 @@ The high-level equivalent is:
 
 ## When not to run the full flow
 
-Do not run the full guardian flow for every Markdown file.
+Do not run the full workflow for every Markdown file.
 
 Use bypass or lightweight handling for:
 
@@ -107,8 +107,6 @@ Do not publish:
 
 ## Review Bundle Packaging
 
-- Default external review bundle name: `Stage 13.zip` at the repository root.
-- The zip should unpack into a single top-level folder named `Stage 13/`.
 - A review bundle must be self-consistent: if it includes `tests/`, it must also include every fixture directory those tests depend on.
 - For this repository that means review bundles should include:
   - `.agents/skills/zhanggong-impact-blueprint/`
@@ -119,15 +117,12 @@ Do not publish:
   - `benchmark/`
   - `README.md`
   - `AGENTS.md`
-  - `STAGE13_REVIEW_GUIDE.md`
-  - `STAGE13_CHANGELOG.md`
-  - `docs/archive/review-2026-04-19.txt`
 - Do not omit `benchmark/` when shipping `tests/test_stage9_workflow.py` or any benchmark-driven review/tests.
 - Preserve repo-relative paths exactly; do not rewrite config paths inside the bundle just to make the zip smaller.
 - Exclude reviewer-irrelevant noise by default:
   - `.git/`
   - `.ai/`
-  - `docs/` except files explicitly listed in the required include set above
+  - `docs/`
   - `dist/`
   - `build/`
   - `__pycache__/`

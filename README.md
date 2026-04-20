@@ -1,138 +1,43 @@
-# 张工的施工图 / ZhangGong Impact Blueprint
+# ZhangGong Impact Blueprint skill.md
 
-张工的施工图 / ZhangGong Impact Blueprint is a repo-local impact atlas plus verification guardrail for agent-driven edits.
+[English](README.md) | [简体中文](README.zh-CN.md)
 
-It answers a practical question before and after a change:
+## Background Message
 
-`If this file changes, what else should I read, verify, and keep honest before I claim it is safe enough to hand off?`
+> ZhangGong is a friend of mine. He started out drawing construction blueprints on job sites, then one day slapped his thigh and switched into software. After a while he noticed that AI agents edit code like a demolition crew: one hit here, one patch there, no sense of the full structure. ZhangGong slammed the keyboard and said, "Fine. I'll be the chief engineer." So he wrapped himself into a skill that hands agents a proper construction blueprint before they touch anything. These days, every agent in the company is supposed to ask ZhangGong for the drawings before getting to work.
+
+Formal name: `张工的施工图 / ZhangGong Impact Blueprint`
+
+ZhangGong Impact Blueprint is a repo-local impact atlas plus verification guardrail for agent-driven edits.
+For the full rules and behavior details, read [`.agents/skills/zhanggong-impact-blueprint/SKILL.md`](E:/AA-HomeforAI/CodeAccounting/.agents/skills/zhanggong-impact-blueprint/SKILL.md:1).
 
 ## What it is
 
-- a copyable skill folder, not a hosted platform
-- a repo-local SQLite graph with direct edges only
-- a lightweight atlas for functions, tests, rules, and non-function contract surfaces
-- a verification guardrail that helps choose bypass, lightweight, targeted, configured, or full validation
-- a repair loop that widens the reading surface when repeated failures suggest the agent is patching too locally
+- a copyable skill folder
+- a repo-local SQLite graph that persists direct edges only
+- a lightweight workflow that shows the impact surface before edits and keeps structured evidence after edits
 
-## What it is not
+## What it is for
 
-- not an LSP
-- not a runtime trace or profiler
-- not embedding or semantic search
-- not CI history learning
-- not an automatic planner that decides for the agent
-- not a proof system that turns `tests_passed` into “safe”
+- its main job is to put guardrails around AI edits so the model does not start by blindly changing things
+- it makes the project easier to maintain and easier to hand off over the long run
+- it costs more tokens and a few more steps in the short term, but it can compound over time
+- it is especially useful for context-poor AI, because it lowers the chance of bad edits, missed chains, repeated debugging, and patch-loop behavior
 
-The system only does three things:
+## When it fits
 
-- make graph facts visible
-- mark uncertainty clearly
-- keep runtime artifacts and release packaging clean
+- when AI has already become part of your daily development flow instead of being just an occasional helper
+- when your project is no longer a throwaway script and needs to survive long-term iteration
+- when AI often breaks things because it forgets context, deletes the wrong code, or keeps fixing bugs into worse bugs
+- when you want a different model or a later session to pick up the work without starting from zero every time
+- when you want "read the impact surface first, then edit, then leave verification evidence" to become a habit
 
-## Quick workflow
+## How to use it
 
-1. Run `python .agents/skills/zhanggong-impact-blueprint/cig.py health` when repo state is unclear.
-2. Run `python .agents/skills/zhanggong-impact-blueprint/cig.py analyze --workspace-root . --changed-file <path>`.
-3. Read `change_class`, `verification_budget`, `affected_contracts`, and `atlas_views`.
-4. Edit only after reading the relevant view.
-5. Run `python .agents/skills/zhanggong-impact-blueprint/cig.py finish --workspace-root . --test-scope targeted` or the heavier budget-recommended scope.
-6. Read the refreshed `next-action.json` and handoff output.
-7. If the same failure repeats, stop local patching and read `loop_atlas_views` before changing code again.
+1. Copy the `zhanggong-impact-blueprint` folder into the repository where you want to use it, under `./.agents/skills/`.
+2. After that, the target path should be `./.agents/skills/zhanggong-impact-blueprint/`.
+3. In your conversations with AI, explicitly tell it to use this skill.
+4. Your job is mostly to describe what you want changed. The AI using this skill should decide when to run `analyze` and when to run `finish` according to the rules.
 
-## When to skip the full flow
-
-Use bypass or lightweight flow for:
-
-- ordinary Markdown notes and summaries
-- archives and historical notes
-- diagrams and images
-- formatting-only edits
-- lightweight copy updates that do not change rules, commands, tests, config, schema, or runtime behavior
-
-Do not drag every Markdown change into a full guardian run. The full flow is for source, tests, rules, config, schema, dependency, API, route, event, IPC, SQL, env, and config-surface changes.
-
-## Atlas views
-
-`affected_contracts` keeps the full fact list.
-
-`atlas_views` is the reading layer. It reorganizes existing graph facts so an agent can read the right booklet without pretending the system already made the decision.
-
-- `bilateral_contract`: puts both sides together, such as sender and handler, emit and handle, register and invoke, backend endpoint and frontend caller
-- `page_flow`: shows route to component to child component to prop or flow
-- `data_flow`: shows function or endpoint to query or mutation to SQL table to migration or tests
-- `config_surface`: shows env var or config key to reader path to affected flow
-- `uncertainty`: isolates low-confidence matches such as `DEPENDS_ON`, dynamic names, low-confidence extractors, and file-level fallback
-
-## Reading examples
-
-- IPC change: read the `bilateral_contract` view so the renderer send side and the main handle side are reviewed together.
-- Route or component change: read the `page_flow` view so the page chain is reviewed together.
-- SQL migration or query change: read the `data_flow` view so query, mutation, table, and migration context are read together.
-- Env or config change: read the `config_surface` view so every reader path is visible before editing.
-- `DEPENDS_ON` or low-confidence edges: read the `uncertainty` view as a hint list, not as proof.
-
-## Verification budget
-
-- `B0`: bypass-class non-runtime edits
-- `B1`: lightweight documentation or process edits
-- `B2`: targeted tests
-- `B3`: configured tests
-- `B4`: full tests plus dependency or schema review
-
-Passing tests means only that the chosen tests passed. It does not mean the change is fully safe.
-
-## Repeated failure behavior
-
-Repeated failure is treated as a sign that the reading surface is too narrow.
-
-- at repeated failures, widen the atlas surface first
-- at three retries, uncertainty must be read explicitly
-- at four retries, stop local patching and move to full-chain review plus full validation
-
-The repair loop should not degrade into “just run more tests.” Its real job is to widen what the agent reads.
-
-## Release check
-
-Before publishing the public skill folder, run:
-
-```bash
-python .agents/skills/zhanggong-impact-blueprint/cig.py release-check --workspace-root . --skill-only
-```
-
-It checks for:
-
-- private names or private doc examples
-- absolute user paths
-- temp-path leaks
-- token-like secrets
-- stale stage text in the public skill
-- private config files
-- `.ai/codegraph` runtime artifacts inside the exported skill folder
-
-## Export modes
-
-Consumer export:
-
-```bash
-python .agents/skills/zhanggong-impact-blueprint/cig.py export-skill --out path/to/exported-skill
-```
-
-Single-folder export:
-
-```bash
-python .agents/skills/zhanggong-impact-blueprint/cig.py export-skill --mode single-folder --out path/to/exported-skill
-```
-
-Debug bundle export:
-
-```bash
-python .agents/skills/zhanggong-impact-blueprint/cig.py export-skill --mode debug-bundle --out path/to/exported-debug-bundle
-```
-
-## Primary docs
-
-- `.agents/skills/zhanggong-impact-blueprint/SKILL.md`
-- `AGENTS.md`
-- `docs/archive/STAGE17_CHANGELOG.md`
-- `docs/archive/STAGE17_REVIEW_GUIDE.md`
+For normal use, you usually do not need to run the internal commands by hand. Those commands are more for maintenance, troubleshooting, or verifying the skill itself.
 

@@ -1,7 +1,7 @@
 # Stage 13 Review Guide
 
-This file is kept at the repository root for Stage 13 review-bundle
-compatibility.
+This file is archived under `docs/archive/` as historical Stage 13 review
+material.
 
 It still describes the external Stage 13 package, but it is no longer the best
 entry point for the current repository state. For current product behavior, use:
@@ -10,10 +10,11 @@ entry point for the current repository state. For current product behavior, use:
 - `docs/README.md`
 - `.agents/skills/zhanggong-impact-blueprint/SKILL.md`
 
-The repository has continued through Stage 14, Stage 15, and Stage 15.1. Those
-later stages add adaptive verification, flow scope governance, repair-loop
-escalation, doc-role-aware working-note handling, and mutation safety, but they
-are not the contract described by this Stage 13 review guide.
+The repository has continued through Stage 14, Stage 15, Stage 15.1, Stage 17,
+and Stage 18. Those later stages add adaptive verification, flow scope
+governance, repair-loop escalation, final atlas closure, identity unification,
+and mutation safety, but they are not the contract described by this Stage 13
+review guide.
 
 ## What this document is for
 

@@ -1,7 +1,7 @@
 # Stage 13 Changelog
 
-This file is kept at the repository root for Stage 13 review-bundle
-compatibility.
+This file is archived under `docs/archive/` as historical Stage 13 review
+material.
 
 It summarizes what the Stage 13 package contained and what was hardened before
 that package was considered reviewable. For the current repository state, use:
@@ -9,9 +9,9 @@ that package was considered reviewable. For the current repository state, use:
 - `README.md`
 - `docs/README.md`
 
-The repository now includes later Stage 14 and Stage 15 work. This changelog
-is intentionally Stage 13-scoped and is retained only because the external
-Stage 13 review package still expects it at the repository root.
+The repository now includes later Stage 14 through Stage 18 work. This
+changelog remains intentionally Stage 13-scoped and is retained as archive
+history, not as a current upload requirement.
 
 ## Stage 13 product changes
 
@@ -78,6 +78,6 @@ python -m unittest tests.test_stage9_workflow tests.test_stage10_workflow tests.
 
 - review zip name: `Stage 13.zip`
 - top-level folder: `Stage 13/`
-- root compatibility docs retained:
-  - `STAGE13_REVIEW_GUIDE.md`
-  - `STAGE13_CHANGELOG.md`
+- archived companion docs:
+  - `docs/archive/STAGE13_REVIEW_GUIDE.md`
+  - `docs/archive/STAGE13_CHANGELOG.md`

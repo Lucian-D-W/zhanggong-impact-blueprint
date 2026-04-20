@@ -32,7 +32,7 @@ You MUST use this skill when a task will:
 - change behavior
 - add or remove functions, routines, rules, or test commands
 
-Do NOT trigger the full guardian flow for:
+Do NOT trigger the full workflow for:
 
 - ordinary summaries, archives, and historical notes
 - non-rule Markdown that does not change commands, rules, tests, config, schema, or source behavior
@@ -42,7 +42,7 @@ Do NOT trigger the full guardian flow for:
 
 ## Flow Scope
 
-### A. Skip full guardian flow
+### A. Skip full workflow
 
 Use bypass flow for:
 
@@ -56,7 +56,7 @@ Bypass flow means:
 
 - read `next-action.json`
 - allow direct editing
-- do not require full guardian finish
+- do not require `finish`
 - do not require tests
 
 ### B. Lightweight flow
@@ -80,9 +80,9 @@ Lightweight flow means:
 - do not default to full tests
 - escalate only if command, rule, test, config, or schema semantics changed
 
-### C. Full guardian flow
+### C. Full workflow
 
-Use full guardian flow for:
+Use the full workflow for:
 
 - source code
 - tests
@@ -133,7 +133,7 @@ Mutation rules:
 - MUST auto-run `setup` when the repo is not initialized.
 - MUST prefer `health -> analyze -> next-action.json -> edit -> finish with budget-driven scope`.
 - MUST run `analyze` before changing source, config, schema, or tests.
-- MUST classify changed files before deciding whether to skip, stay lightweight, or run the full guardian flow.
+- MUST classify changed files before deciding whether to skip, stay lightweight, or run the full workflow.
 - MUST treat working notes as lightweight unless they truly change command, rule, test, config, or schema semantics.
 - MUST assess move/archive/delete risk separately from change classification.
 - MUST NOT edit if the report is missing, empty, or marked `context incomplete`, unless the user explicitly tells you to continue anyway.
@@ -192,7 +192,7 @@ Use these when context needs help:
 - If `analyze` returns multiple candidates, do not guess. Ask the user or rerun with `--seed`.
 - If context cannot be inferred and fallback is not allowed, stop and surface the recovery steps.
 - If fallback is allowed, make it explicit that the report is file-level or context-incomplete.
-- If `change_class` is `bypass`, say that the edit does not affect the runtime graph and skip full guardian flow.
+- If `change_class` is `bypass`, say that the edit does not affect the runtime graph and skip the full workflow.
 - If `change_class` is `lightweight`, keep the flow light unless command semantics changed.
 - If `doc_role` is `working_note`, do not promote it to guarded just because it mentions verification vocabulary.
 - If the action is move/archive/delete, use mutation safety instead of pretending change classification alone is enough.

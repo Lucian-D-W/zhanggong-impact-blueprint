@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import closing
 
 from tests.test_stage11_workflow import build_repo, setup_repo, write_python_repo_with_two_tests
 from tests.test_stage15_workflow import analyze_change, load_next_action, run_finish_raw
@@ -61,7 +62,7 @@ def edge_rows(repo_root: pathlib.Path, edge_type: str | None = None) -> list[dic
         sql += " WHERE e.edge_type = ?"
         params = (edge_type,)
     sql += " ORDER BY e.edge_type, e.src_id, e.dst_id"
-    with sqlite3.connect(graph_db_path(repo_root)) as conn:
+    with closing(sqlite3.connect(graph_db_path(repo_root))) as conn:
         rows = conn.execute(sql, params).fetchall()
     payload: list[dict] = []
     for row in rows:
@@ -90,7 +91,7 @@ def node_rows(repo_root: pathlib.Path, kind: str | None = None) -> list[dict]:
         sql += " WHERE kind = ?"
         params = (kind,)
     sql += " ORDER BY node_id"
-    with sqlite3.connect(graph_db_path(repo_root)) as conn:
+    with closing(sqlite3.connect(graph_db_path(repo_root))) as conn:
         rows = conn.execute(sql, params).fetchall()
     return [
         {
@@ -355,7 +356,7 @@ class Stage16WorkflowTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.repo_root = pathlib.Path(__file__).resolve().parents[1]
-        cls.cig_script = cls.repo_root / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
+        cls.cig_script = cls.repo_root / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py"
         cls.export_tmp = tempfile.TemporaryDirectory()
         cls.single_export = pathlib.Path(cls.export_tmp.name) / "single-folder-export"
         run_json(
@@ -802,3 +803,4 @@ class Stage16WorkflowTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

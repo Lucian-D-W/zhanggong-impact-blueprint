@@ -6,6 +6,8 @@ import fnmatch
 import pathlib
 import re
 
+from identity import SKILL_DIR_FRAGMENT, STATE_CONFIG_RELATIVE_PATH, STATE_SCHEMA_RELATIVE_PATH
+
 
 TEXT_DOC_SUFFIXES = {".md", ".txt", ".rst"}
 IMAGE_SUFFIXES = {".drawio", ".excalidraw", ".png", ".jpg", ".jpeg", ".svg"}
@@ -63,7 +65,7 @@ DEFAULT_FLOW_POLICY = {
     "lightweight_globs": [
         "README.md",
         "AGENTS.md",
-        ".agents/skills/code-impact-guardian/SKILL.md",
+        f"{SKILL_DIR_FRAGMENT}/SKILL.md",
         ".ai/codegraph/runtime/*.md",
         ".ai/codegraph/runtime/**/*.md",
     ],
@@ -71,9 +73,9 @@ DEFAULT_FLOW_POLICY = {
         "src/**",
         "scripts/**",
         "tests/**",
-        ".agents/skills/code-impact-guardian/**/*.py",
-        ".code-impact-guardian/config.json",
-        ".code-impact-guardian/schema.sql",
+        f"{SKILL_DIR_FRAGMENT}/**/*.py",
+        STATE_CONFIG_RELATIVE_PATH,
+        STATE_SCHEMA_RELATIVE_PATH,
         "docs/rules/**",
     ],
     "risk_sensitive_globs": [
@@ -100,7 +102,7 @@ DEFAULT_FLOW_POLICY = {
         "test_command",
         "verification budget",
         "finish --test-scope",
-        "python .agents/skills/code-impact-guardian/cig.py",
+        f"python {SKILL_DIR_FRAGMENT}/cig.py",
         "governs:",
         "docs/rules",
         "context_missing",
@@ -113,7 +115,7 @@ DEFAULT_DOC_ROLES = {
     "protected_doc_globs": [
         "README.md",
         "AGENTS.md",
-        ".agents/skills/code-impact-guardian/SKILL.md",
+        f"{SKILL_DIR_FRAGMENT}/SKILL.md",
     ],
 }
 
@@ -597,3 +599,4 @@ def max_escalation_level(*levels: str) -> str:
     if not valid_levels:
         return "L0"
     return max(valid_levels, key=lambda level: LEVEL_PRIORITY[level])
+

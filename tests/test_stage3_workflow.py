@@ -12,12 +12,12 @@ from contextlib import closing
 class Stage3WorkflowTest(unittest.TestCase):
     def test_init_and_doctor_work_for_skill_only_copy(self):
         repo_root = pathlib.Path(__file__).resolve().parents[1]
-        skill_dir = repo_root / ".agents" / "skills" / "code-impact-guardian"
+        skill_dir = repo_root / ".agents" / "skills" / "zhanggong-impact-blueprint"
 
         with tempfile.TemporaryDirectory() as tmp:
             temp_repo = pathlib.Path(tmp) / "skill-only-copy"
             (temp_repo / ".agents" / "skills").mkdir(parents=True, exist_ok=True)
-            shutil.copytree(skill_dir, temp_repo / ".agents" / "skills" / "code-impact-guardian")
+            shutil.copytree(skill_dir, temp_repo / ".agents" / "skills" / "zhanggong-impact-blueprint")
             (temp_repo / "src").mkdir(parents=True, exist_ok=True)
             (temp_repo / "tests").mkdir(parents=True, exist_ok=True)
             (temp_repo / "docs" / "rules").mkdir(parents=True, exist_ok=True)
@@ -35,7 +35,7 @@ class Stage3WorkflowTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            cig_script = temp_repo / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
+            cig_script = temp_repo / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py"
             init_cmd = [
                 sys.executable,
                 str(cig_script),
@@ -46,8 +46,8 @@ class Stage3WorkflowTest(unittest.TestCase):
             subprocess.run(init_cmd, check=True, cwd=temp_repo)
             subprocess.run(init_cmd, check=True, cwd=temp_repo)
 
-            self.assertTrue((temp_repo / ".code-impact-guardian" / "config.json").exists())
-            self.assertTrue((temp_repo / ".code-impact-guardian" / "schema.sql").exists())
+            self.assertTrue((temp_repo / ".zhanggong-impact-blueprint" / "config.json").exists())
+            self.assertTrue((temp_repo / ".zhanggong-impact-blueprint" / "schema.sql").exists())
             self.assertTrue((temp_repo / ".ai" / "codegraph").exists())
 
             doctor_output = subprocess.check_output(
@@ -58,7 +58,7 @@ class Stage3WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(temp_repo),
                     "--config",
-                    str(temp_repo / ".code-impact-guardian" / "config.json"),
+                    str(temp_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=temp_repo,
                 text=True,
@@ -68,7 +68,7 @@ class Stage3WorkflowTest(unittest.TestCase):
 
     def test_after_edit_records_lightweight_process_diffs(self):
         repo_root = pathlib.Path(__file__).resolve().parents[1]
-        cig_script = repo_root / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
+        cig_script = repo_root / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py"
 
         with tempfile.TemporaryDirectory() as tmp:
             temp_repo = pathlib.Path(tmp) / "stage3-copy"
@@ -86,7 +86,7 @@ class Stage3WorkflowTest(unittest.TestCase):
                 cwd=repo_root,
             )
 
-            config_path = temp_repo / ".code-impact-guardian" / "config.json"
+            config_path = temp_repo / ".zhanggong-impact-blueprint" / "config.json"
             task_id = "stage3-process"
             seed = "fn:src/app.py:login"
             subprocess.run(
@@ -181,3 +181,4 @@ class Stage3WorkflowTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -11,8 +11,8 @@ from contextlib import closing
 class Stage1WorkflowTest(unittest.TestCase):
     def test_stage1_template_uses_json_config_and_gitignore(self):
         repo_root = pathlib.Path(__file__).resolve().parents[1]
-        config_json = repo_root / ".code-impact-guardian" / "config.json"
-        config_yaml = repo_root / ".code-impact-guardian" / "config.yaml"
+        config_json = repo_root / ".zhanggong-impact-blueprint" / "config.json"
+        config_yaml = repo_root / ".zhanggong-impact-blueprint" / "config.yaml"
         gitignore = repo_root / ".gitignore"
 
         self.assertTrue(config_json.exists(), "config should be explicitly named as JSON")
@@ -62,10 +62,10 @@ class Stage1WorkflowTest(unittest.TestCase):
             self.assertEqual(payload["status"], "passed")
             self.assertEqual(payload["coverage_status"], "available")
 
-            list_seeds_script = temp_repo / ".agents" / "skills" / "code-impact-guardian" / "scripts" / "list_seeds.py"
+            list_seeds_script = temp_repo / ".agents" / "skills" / "zhanggong-impact-blueprint" / "scripts" / "list_seeds.py"
             self.assertTrue(list_seeds_script.exists(), "seed listing script must exist")
             seed_output = subprocess.check_output(
-                [sys.executable, str(list_seeds_script), "--workspace-root", str(temp_repo), "--config", str(temp_repo / ".code-impact-guardian" / "config.json")],
+                [sys.executable, str(list_seeds_script), "--workspace-root", str(temp_repo), "--config", str(temp_repo / ".zhanggong-impact-blueprint" / "config.json")],
                 cwd=temp_repo,
                 text=True,
             )
@@ -74,3 +74,4 @@ class Stage1WorkflowTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

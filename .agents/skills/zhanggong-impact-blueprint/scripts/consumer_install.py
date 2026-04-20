@@ -3,6 +3,8 @@ import json
 import pathlib
 import shutil
 
+from identity import SKILL_SLUG
+
 
 SKILL_DIR = pathlib.Path(__file__).resolve().parents[1]
 TEMPLATES_DIR = SKILL_DIR / "assets" / "templates"
@@ -64,16 +66,25 @@ def export_single_folder(skill_dir: pathlib.Path, out_dir: pathlib.Path) -> dict
         shutil.rmtree(out_dir)
     shutil.copytree(
         skill_dir,
-        out_dir / "code-impact-guardian",
-        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        out_dir / SKILL_SLUG,
+        ignore=shutil.ignore_patterns(
+            "__pycache__",
+            "*.pyc",
+            ".ai",
+            ".git",
+            "dist",
+            "*.zip",
+            "config.local.json",
+        ),
     )
     return {
         "status": "exported",
         "mode": "single-folder",
         "out_dir": str(out_dir),
-        "exported_files": ["code-impact-guardian/"],
+        "exported_files": [f"{SKILL_SLUG}/"],
     }
 
 
 def config_template_text(default_payload: dict) -> str:
     return json.dumps(default_payload, ensure_ascii=False, indent=2) + "\n"
+

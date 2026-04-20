@@ -1,4 +1,4 @@
-# Code Impact Guardian Troubleshooting
+# ZG Impact Blueprint Troubleshooting
 
 This file defines the recovery protocol for agents and humans.
 
@@ -28,7 +28,7 @@ This file defines the recovery protocol for agents and humans.
 
 ## Build is locked
 
-1. Run `python .agents/skills/code-impact-guardian/cig.py status --workspace-root .`
+1. Run `python .agents/skills/zhanggong-impact-blueprint/cig.py status --workspace-root .`
 2. Confirm no other build is still running before touching `.ai/codegraph/build.lock`
 3. Only then remove the stale lock file and retry
 4. Do not delete the lock preemptively while another agent or process may still be building
@@ -85,3 +85,4 @@ This file defines the recovery protocol for agents and humans.
 - `TASK_CONTEXT_MISSING`: rerun `analyze`, or provide `--seed` / `--task-id` explicitly when no recent context exists
 - `TEST_COMMAND_FAILED`: inspect `test-results.json` and the command output log, then retry after fixing the command or failing code
 - `UNEXPECTED_ERROR`: retry with `--debug` and inspect the latest error log
+

@@ -7,8 +7,9 @@ import sys
 import tempfile
 import unittest
 from unittest import mock
+from contextlib import closing
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / ".agents" / "skills" / "code-impact-guardian" / "scripts"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / ".agents" / "skills" / "zhanggong-impact-blueprint" / "scripts"))
 
 import parser_backends
 
@@ -98,10 +99,10 @@ class Stage13WorkflowTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.repo_root = pathlib.Path(__file__).resolve().parents[1]
-        cls.cig_script = cls.repo_root / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
+        cls.cig_script = cls.repo_root / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py"
         spec = importlib.util.spec_from_file_location("stage13_cig_module", cls.cig_script)
         if spec is None or spec.loader is None:
-            raise RuntimeError("Unable to load Code Impact Guardian module for Stage 13 tests")
+                raise RuntimeError("Unable to load ZG Impact Blueprint module for Stage 13 tests")
         cls.cig_module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cls.cig_module)
         cls.export_tmp = tempfile.TemporaryDirectory()
@@ -301,7 +302,7 @@ class Stage13WorkflowTest(unittest.TestCase):
             )
 
             db_path = repo_root / ".ai" / "codegraph" / "codegraph.db"
-            with sqlite3.connect(db_path) as conn:
+            with closing(sqlite3.connect(db_path)) as conn:
                 row = conn.execute(
                     "SELECT command_json, attrs_json FROM test_runs ORDER BY rowid DESC LIMIT 1"
                 ).fetchone()
@@ -526,7 +527,7 @@ class Stage13WorkflowTest(unittest.TestCase):
         self.assertIn("warning", payload["suggested_next_step"].lower())
 
     def test_skill_doc_mentions_health_next_action_and_test_scope(self):
-        skill_path = pathlib.Path(__file__).resolve().parents[1] / ".agents" / "skills" / "code-impact-guardian" / "SKILL.md"
+        skill_path = pathlib.Path(__file__).resolve().parents[1] / ".agents" / "skills" / "zhanggong-impact-blueprint" / "SKILL.md"
         skill_text = skill_path.read_text(encoding="utf-8")
 
         self.assertIn("health", skill_text)
@@ -536,3 +537,4 @@ class Stage13WorkflowTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

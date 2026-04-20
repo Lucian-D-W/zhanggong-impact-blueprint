@@ -11,7 +11,7 @@ from contextlib import closing
 class Stage2WorkflowTest(unittest.TestCase):
     def test_cig_tsjs_demo_runs_end_to_end(self):
         repo_root = pathlib.Path(__file__).resolve().parents[1]
-        cig_script = repo_root / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
+        cig_script = repo_root / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py"
         self.assertTrue(cig_script.exists(), "cig.py must exist")
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -38,7 +38,7 @@ class Stage2WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(temp_repo),
                     "--config",
-                    str(temp_repo / ".code-impact-guardian" / "config.json"),
+                    str(temp_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=temp_repo,
                 text=True,
@@ -53,7 +53,7 @@ class Stage2WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(temp_repo),
                     "--config",
-                    str(temp_repo / ".code-impact-guardian" / "config.json"),
+                    str(temp_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=temp_repo,
                 text=True,
@@ -87,7 +87,7 @@ class Stage2WorkflowTest(unittest.TestCase):
 
     def test_cig_generic_demo_runs_file_level_fallback(self):
         repo_root = pathlib.Path(__file__).resolve().parents[1]
-        cig_script = repo_root / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
+        cig_script = repo_root / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py"
         self.assertTrue(cig_script.exists(), "cig.py must exist")
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -114,7 +114,7 @@ class Stage2WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(temp_repo),
                     "--config",
-                    str(temp_repo / ".code-impact-guardian" / "config.json"),
+                    str(temp_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=temp_repo,
                 text=True,
@@ -129,7 +129,7 @@ class Stage2WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(temp_repo),
                     "--config",
-                    str(temp_repo / ".code-impact-guardian" / "config.json"),
+                    str(temp_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=temp_repo,
                 text=True,
@@ -157,3 +157,4 @@ class Stage2WorkflowTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

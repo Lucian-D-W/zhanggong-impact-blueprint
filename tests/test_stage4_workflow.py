@@ -22,7 +22,7 @@ def run_json(cmd: list[str], cwd: pathlib.Path) -> dict:
 class Stage4WorkflowTest(unittest.TestCase):
     def test_node_cli_profile_runs_tsjs_flow_with_real_coverage(self):
         repo_root = pathlib.Path(__file__).resolve().parents[1]
-        cig_script = repo_root / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
+        cig_script = repo_root / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py"
 
         with tempfile.TemporaryDirectory() as tmp:
             temp_repo = copy_repo(repo_root, pathlib.Path(tmp) / "stage4-node-cli")
@@ -43,7 +43,7 @@ class Stage4WorkflowTest(unittest.TestCase):
             )
             self.assertEqual(init_payload["project_profile"], "node-cli")
 
-            config_payload = json.loads((temp_repo / ".code-impact-guardian" / "config.json").read_text(encoding="utf-8"))
+            config_payload = json.loads((temp_repo / ".zhanggong-impact-blueprint" / "config.json").read_text(encoding="utf-8"))
             self.assertEqual(config_payload["project_profile"], "node-cli")
             self.assertEqual(config_payload["project_root"], "examples/tsjs_node_cli")
             self.assertEqual(config_payload["tsjs"]["coverage_adapter"], "v8_family")
@@ -57,7 +57,7 @@ class Stage4WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(temp_repo),
                     "--config",
-                    str(temp_repo / ".code-impact-guardian" / "config.json"),
+                    str(temp_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=temp_repo,
             )
@@ -72,7 +72,7 @@ class Stage4WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(temp_repo),
                     "--config",
-                    str(temp_repo / ".code-impact-guardian" / "config.json"),
+                    str(temp_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=temp_repo,
                 text=True,
@@ -88,7 +88,7 @@ class Stage4WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(temp_repo),
                     "--config",
-                    str(temp_repo / ".code-impact-guardian" / "config.json"),
+                    str(temp_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=temp_repo,
             )
@@ -103,7 +103,7 @@ class Stage4WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(temp_repo),
                     "--config",
-                    str(temp_repo / ".code-impact-guardian" / "config.json"),
+                    str(temp_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=temp_repo,
             )
@@ -125,7 +125,7 @@ class Stage4WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(temp_repo),
                     "--config",
-                    str(temp_repo / ".code-impact-guardian" / "config.json"),
+                    str(temp_repo / ".zhanggong-impact-blueprint" / "config.json"),
                     "--task-id",
                     "stage4-node-cli",
                     "--seed",
@@ -155,7 +155,7 @@ class Stage4WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(temp_repo),
                     "--config",
-                    str(temp_repo / ".code-impact-guardian" / "config.json"),
+                    str(temp_repo / ".zhanggong-impact-blueprint" / "config.json"),
                     "--task-id",
                     "stage4-node-cli",
                     "--seed",
@@ -184,7 +184,7 @@ class Stage4WorkflowTest(unittest.TestCase):
 
     def test_react_vite_profile_parses_jsx_family_and_keeps_full_flow(self):
         repo_root = pathlib.Path(__file__).resolve().parents[1]
-        cig_script = repo_root / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
+        cig_script = repo_root / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py"
 
         with tempfile.TemporaryDirectory() as tmp:
             temp_repo = copy_repo(repo_root, pathlib.Path(tmp) / "stage4-react-vite")
@@ -212,7 +212,7 @@ class Stage4WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(temp_repo),
                     "--config",
-                    str(temp_repo / ".code-impact-guardian" / "config.json"),
+                    str(temp_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=temp_repo,
             )
@@ -227,7 +227,7 @@ class Stage4WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(temp_repo),
                     "--config",
-                    str(temp_repo / ".code-impact-guardian" / "config.json"),
+                    str(temp_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=temp_repo,
                 text=True,
@@ -243,7 +243,7 @@ class Stage4WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(temp_repo),
                     "--config",
-                    str(temp_repo / ".code-impact-guardian" / "config.json"),
+                    str(temp_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=temp_repo,
             )
@@ -256,7 +256,7 @@ class Stage4WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(temp_repo),
                     "--config",
-                    str(temp_repo / ".code-impact-guardian" / "config.json"),
+                    str(temp_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=temp_repo,
             )
@@ -275,7 +275,7 @@ class Stage4WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(temp_repo),
                     "--config",
-                    str(temp_repo / ".code-impact-guardian" / "config.json"),
+                    str(temp_repo / ".zhanggong-impact-blueprint" / "config.json"),
                     "--task-id",
                     "stage4-react-vite",
                     "--seed",
@@ -305,7 +305,7 @@ class Stage4WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(temp_repo),
                     "--config",
-                    str(temp_repo / ".code-impact-guardian" / "config.json"),
+                    str(temp_repo / ".zhanggong-impact-blueprint" / "config.json"),
                     "--task-id",
                     "stage4-react-vite",
                     "--seed",
@@ -324,3 +324,4 @@ class Stage4WorkflowTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

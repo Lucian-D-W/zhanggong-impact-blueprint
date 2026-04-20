@@ -67,7 +67,7 @@ def write_react_vite_repo(repo_root: pathlib.Path) -> None:
 class Stage8WorkflowTest(unittest.TestCase):
     def test_daily_driver_analyze_finish_prefers_brief_and_smarter_seed_selection(self):
         repo_root = pathlib.Path(__file__).resolve().parents[1]
-        cig_script = repo_root / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
+        cig_script = repo_root / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py"
 
         with tempfile.TemporaryDirectory() as tmp:
             single_export = pathlib.Path(tmp) / "single-folder-export"
@@ -111,7 +111,7 @@ class Stage8WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(python_repo),
                     "--config",
-                    str(python_repo / ".code-impact-guardian" / "config.json"),
+                    str(python_repo / ".zhanggong-impact-blueprint" / "config.json"),
                     "--changed-file",
                     "src/app.py",
                     "--changed-line",
@@ -136,7 +136,7 @@ class Stage8WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(python_repo),
                     "--config",
-                    str(python_repo / ".code-impact-guardian" / "config.json"),
+                    str(python_repo / ".zhanggong-impact-blueprint" / "config.json"),
                     "--changed-file",
                     "src/app.py",
                 ],
@@ -153,7 +153,7 @@ class Stage8WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(python_repo),
                     "--config",
-                    str(python_repo / ".code-impact-guardian" / "config.json"),
+                    str(python_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=python_repo,
             )
@@ -162,7 +162,7 @@ class Stage8WorkflowTest(unittest.TestCase):
 
     def test_react_tsx_and_tsjs_sql_flows_gain_daily_driver_metadata(self):
         repo_root = pathlib.Path(__file__).resolve().parents[1]
-        cig_script = repo_root / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
+        cig_script = repo_root / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py"
 
         with tempfile.TemporaryDirectory() as tmp:
             single_export = pathlib.Path(tmp) / "single-folder-export"
@@ -206,7 +206,7 @@ class Stage8WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(react_repo),
                     "--config",
-                    str(react_repo / ".code-impact-guardian" / "config.json"),
+                    str(react_repo / ".zhanggong-impact-blueprint" / "config.json"),
                     "--changed-file",
                     "src/AppShell.tsx",
                     "--changed-line",
@@ -247,7 +247,7 @@ class Stage8WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(compound_repo),
                     "--config",
-                    str(compound_repo / ".code-impact-guardian" / "config.json"),
+                    str(compound_repo / ".zhanggong-impact-blueprint" / "config.json"),
                     "--changed-file",
                     "db/functions/001_session.sql",
                     "--changed-line",
@@ -265,7 +265,7 @@ class Stage8WorkflowTest(unittest.TestCase):
 
     def test_incremental_reuse_and_fallback_daily_flow(self):
         repo_root = pathlib.Path(__file__).resolve().parents[1]
-        cig_script = repo_root / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
+        cig_script = repo_root / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py"
 
         with tempfile.TemporaryDirectory() as tmp:
             single_export = pathlib.Path(tmp) / "single-folder-export"
@@ -309,7 +309,7 @@ class Stage8WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(tsjs_repo),
                     "--config",
-                    str(tsjs_repo / ".code-impact-guardian" / "config.json"),
+                    str(tsjs_repo / ".zhanggong-impact-blueprint" / "config.json"),
                     "--changed-file",
                     "src/cli.js",
                     "--changed-line",
@@ -325,7 +325,7 @@ class Stage8WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(tsjs_repo),
                     "--config",
-                    str(tsjs_repo / ".code-impact-guardian" / "config.json"),
+                    str(tsjs_repo / ".zhanggong-impact-blueprint" / "config.json"),
                     "--changed-file",
                     "src/cli.js",
                     "--changed-line",
@@ -359,7 +359,7 @@ class Stage8WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(generic_repo),
                     "--config",
-                    str(generic_repo / ".code-impact-guardian" / "config.json"),
+                    str(generic_repo / ".zhanggong-impact-blueprint" / "config.json"),
                     "--changed-file",
                     "src/settings.workflow",
                     "--allow-fallback",
@@ -372,3 +372,4 @@ class Stage8WorkflowTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

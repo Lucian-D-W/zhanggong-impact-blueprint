@@ -1,426 +1,138 @@
-# Code Impact Guardian
+# 张工的施工图 / ZhangGong Impact Blueprint
 
-Code Impact Guardian is a lightweight, repo-local skill template for safer
-agent-driven code changes.
+张工的施工图 / ZhangGong Impact Blueprint is a repo-local impact atlas plus verification guardrail for agent-driven edits.
 
-It is designed to answer one practical question before an edit lands:
+It answers a practical question before and after a change:
 
-`If I change this, what else do I risk breaking?`
+`If this file changes, what else should I read, verify, and keep honest before I claim it is safe enough to hand off?`
 
-The template stays intentionally small:
+## What it is
 
-- one repo-local skill folder
-- one SQLite graph
-- one direct-edge workflow
-- one unified CLI
-- one export path for consumer repos
+- a copyable skill folder, not a hosted platform
+- a repo-local SQLite graph with direct edges only
+- a lightweight atlas for functions, tests, rules, and non-function contract surfaces
+- a verification guardrail that helps choose bypass, lightweight, targeted, configured, or full validation
+- a repair loop that widens the reading surface when repeated failures suggest the agent is patching too locally
 
-It is not a hosted platform. It is meant to be copied into another repository
-and used by agents as part of the normal edit loop.
+## What it is not
 
-## Current focus
+- not an LSP
+- not a runtime trace or profiler
+- not embedding or semantic search
+- not CI history learning
+- not an automatic planner that decides for the agent
+- not a proof system that turns `tests_passed` into “safe”
 
-The repository is now in the Stage 16 shape.
+The system only does three things:
 
-That means the repo keeps the Stage 13 through Stage 15 workflow and trust
-work, and adds the architecture contract atlas on top of the function/test
-graph:
+- make graph facts visible
+- mark uncertainty clearly
+- keep runtime artifacts and release packaging clean
 
-- flow scope governance so docs, rules, tests, configs, and code do not all go
-  through the same weight of workflow
-- doc-role-aware handling so working notes are not forced through the same path
-  as rule docs just because they mention verification vocabulary
-- repair loop escalation so repeated failures widen the visible chain instead
-  of encouraging local patching forever
-- mutation safety so move/archive/delete risk is evaluated separately from
-  verification flow weight
-- architecture-contract extraction for endpoints, routes, components, props,
-  events, env/config keys, SQL tables, IPC channels, Obsidian commands, and
-  Playwright flows
-- report surfaces such as `affected_contracts` and `architecture_chains` so
-  agents do not stop at function callers/callees
-- low-confidence fallback edges via `DEPENDS_ON` when dependency facts are real
-  but the exact relationship type is not stable enough to overclaim
+## Quick workflow
 
-The current operating model includes:
+1. Run `python .agents/skills/zhanggong-impact-blueprint/cig.py health` when repo state is unclear.
+2. Run `python .agents/skills/zhanggong-impact-blueprint/cig.py analyze --workspace-root . --changed-file <path>`.
+3. Read `change_class`, `verification_budget`, `affected_contracts`, and `atlas_views`.
+4. Edit only after reading the relevant view.
+5. Run `python .agents/skills/zhanggong-impact-blueprint/cig.py finish --workspace-root . --test-scope targeted` or the heavier budget-recommended scope.
+6. Read the refreshed `next-action.json` and handoff output.
+7. If the same failure repeats, stop local patching and read `loop_atlas_views` before changing code again.
 
-- change classes: `bypass`, `lightweight`, `guarded`, `risk_sensitive`, `mixed`
-- verification budgets (`B0` through `B4`)
-- `targeted`, `configured`, and `full` test scopes
-- `recommend-tests` for executable affected-test commands
-- `--shadow-full` calibration for targeted verification
-- `classify-change`, `assess-mutation`, `loop-status`, and `diagnose-loop`
-- runtime integration pack files under `.ai/codegraph/runtime/`
-- multidimensional trust instead of a single trust flag
-- lightweight architecture-contract graph support that reaches beyond
-  functions into API, UI, event, config, SQL, and IPC surfaces
-- `affected_contracts` and `architecture_chains` in report and next-action
-  outputs
-- `DEPENDS_ON` fallback edges with bounded confidence instead of fabricated
-  precision
-- repair-loop reveal levels `L0` through `L3`
-- configurable `doc_roles` for working notes and protected documents
+## When to skip the full flow
 
-The repository root is intentionally kept lean:
+Use bypass or lightweight flow for:
 
-- current entry docs stay at the root
-- active working records such as `mainstone.md` may stay at the root when they
-  are part of the ongoing development workflow
-- Stage 13 compatibility review docs stay at the root because the external
-  review bundle still expects them there
-- historical process material lives under `docs/archive/`
-- generated zips, logs, temp workspaces, and old review artifacts should not
-  remain at the root
+- ordinary Markdown notes and summaries
+- archives and historical notes
+- diagrams and images
+- formatting-only edits
+- lightweight copy updates that do not change rules, commands, tests, config, schema, or runtime behavior
 
-## Current operating workflow
+Do not drag every Markdown change into a full guardian run. The full flow is for source, tests, rules, config, schema, dependency, API, route, event, IPC, SQL, env, and config-surface changes.
 
-The workflow is no longer one single path for every edit:
+## Atlas views
 
-1. run `classify-change` or `analyze`
-2. if the change is `bypass`, edit directly and skip the full guardian flow
-3. if the change is `lightweight`, use health/analyze guidance only and avoid
-   unnecessary full verification
-4. if the file is a working note, keep the flow lightweight unless it is really
-   changing commands, rules, tests, config, or schema behavior
-5. if the action is move/archive/delete/permanent delete, run `assess-mutation`
-   because mutation safety is stricter than normal text editing
-6. if the change is `guarded` or `risk_sensitive`, read the brief report and
-   `.ai/codegraph/next-action.json` before editing
-7. if the change touches API, route, event, SQL, env/config, or IPC contracts,
-   read `affected_contracts` and `architecture_chains` before treating the
-   problem as function-only
-8. run `finish` with the budget-driven scope when the change is runtime- or
-   verification-relevant
-9. use `--shadow-full` when targeted verification needs calibration
-10. if the same failure keeps repeating, rerun `analyze` with escalation and
-   read the expanded chain before patching again
+`affected_contracts` keeps the full fact list.
 
-For agents, the canonical operational instructions live in:
+`atlas_views` is the reading layer. It reorganizes existing graph facts so an agent can read the right booklet without pretending the system already made the decision.
 
-- `.agents/skills/code-impact-guardian/SKILL.md`
+- `bilateral_contract`: puts both sides together, such as sender and handler, emit and handle, register and invoke, backend endpoint and frontend caller
+- `page_flow`: shows route to component to child component to prop or flow
+- `data_flow`: shows function or endpoint to query or mutation to SQL table to migration or tests
+- `config_surface`: shows env var or config key to reader path to affected flow
+- `uncertainty`: isolates low-confidence matches such as `DEPENDS_ON`, dynamic names, low-confidence extractors, and file-level fallback
+
+## Reading examples
+
+- IPC change: read the `bilateral_contract` view so the renderer send side and the main handle side are reviewed together.
+- Route or component change: read the `page_flow` view so the page chain is reviewed together.
+- SQL migration or query change: read the `data_flow` view so query, mutation, table, and migration context are read together.
+- Env or config change: read the `config_surface` view so every reader path is visible before editing.
+- `DEPENDS_ON` or low-confidence edges: read the `uncertainty` view as a hint list, not as proof.
+
+## Verification budget
+
+- `B0`: bypass-class non-runtime edits
+- `B1`: lightweight documentation or process edits
+- `B2`: targeted tests
+- `B3`: configured tests
+- `B4`: full tests plus dependency or schema review
+
+Passing tests means only that the chosen tests passed. It does not mean the change is fully safe.
+
+## Repeated failure behavior
+
+Repeated failure is treated as a sign that the reading surface is too narrow.
+
+- at repeated failures, widen the atlas surface first
+- at three retries, uncertainty must be read explicitly
+- at four retries, stop local patching and move to full-chain review plus full validation
+
+The repair loop should not degrade into “just run more tests.” Its real job is to widen what the agent reads.
+
+## Release check
+
+Before publishing the public skill folder, run:
+
+```bash
+python .agents/skills/zhanggong-impact-blueprint/cig.py release-check --workspace-root . --skill-only
+```
+
+It checks for:
+
+- private names or private doc examples
+- absolute user paths
+- temp-path leaks
+- token-like secrets
+- stale stage text in the public skill
+- private config files
+- `.ai/codegraph` runtime artifacts inside the exported skill folder
+
+## Export modes
+
+Consumer export:
+
+```bash
+python .agents/skills/zhanggong-impact-blueprint/cig.py export-skill --out path/to/exported-skill
+```
+
+Single-folder export:
+
+```bash
+python .agents/skills/zhanggong-impact-blueprint/cig.py export-skill --mode single-folder --out path/to/exported-skill
+```
+
+Debug bundle export:
+
+```bash
+python .agents/skills/zhanggong-impact-blueprint/cig.py export-skill --mode debug-bundle --out path/to/exported-debug-bundle
+```
+
+## Primary docs
+
+- `.agents/skills/zhanggong-impact-blueprint/SKILL.md`
 - `AGENTS.md`
-- `.ai/codegraph/*` runtime state files
+- `STAGE17_CHANGELOG.md`
+- `STAGE17_REVIEW_GUIDE.md`
 
-## Current support level
-
-### Python
-
-- stable regression baseline
-- `file`, `function`, `test`, `rule`
-- direct `DEFINES`, `CALLS`, `IMPORTS`, `COVERS`, `GOVERNS`
-- real `coverage.py` support with honest fallback when coverage is unavailable
-
-### TS/JS family
-
-- `.js`, `.ts`, `.jsx`, `.tsx`
-- function declarations
-- exported const arrow functions
-- React function components
-- custom hooks
-- minimal class methods
-- import / export / re-export / require / module.exports
-- `node:test`, Jest, and Vitest style detection
-- conservative file-level test recommendations when method-level mapping is not available
-
-### SQL/PostgreSQL supplemental
-
-- lightweight SQL supplemental adapter
-- SQL files as `file` nodes
-- PostgreSQL routines as `function` nodes
-- high-confidence SQL `CALLS`
-- high-confidence SQL test `COVERS`
-- honest no-coverage behavior when runtime coverage is not available
-
-### Architecture contract atlas
-
-The graph still centers on `file`, `function`, `test`, and `rule`, but the
-repo now also has lightweight support for identifying higher-level contracts
-such as env vars, config keys, endpoints, routes, components, props, events,
-IPC channels, SQL tables, Obsidian commands, and Playwright flows.
-
-These contract nodes are intentionally lightweight and repo-local. They are
-meant to widen the visible change surface, not to pretend the system is a full
-language server or runtime tracer.
-
-When the extractor can confirm a dependency but cannot safely label the exact
-relationship type, it records `DEPENDS_ON` with reduced confidence instead of
-overstating precision.
-
-The main user-facing contract surfaces are:
-
-- `affected_contracts`
-- `architecture_chains`
-
-Agents should read those before concluding that a change is only about function
-`CALLS`.
-
-## Development repo vs consumer install
-
-This repository is the development source.
-
-It contains:
-
-- examples
-- tests
-- benchmark fixtures
-- review-bundle documents
-- archived process/history documents
-
-The consumer-facing install path is still:
-
-1. copy only `.agents/skills/code-impact-guardian/` into the target repo
-2. run `python .agents/skills/code-impact-guardian/cig.py setup --project-root .`
-
-That single-folder install generates:
-
-- `AGENTS.md`
-- `.gitignore`
-- `.code-impact-guardian/config.json`
-- `.code-impact-guardian/schema.sql`
-- `QUICKSTART.md`
-- `TROUBLESHOOTING.md`
-- `CONSUMER_GUIDE.md`
-
-## Documentation map
-
-The repo now separates current operating docs from archived process docs.
-
-Current docs:
-
-- `README.md`
-- `AGENTS.md`
-- `mainstone.md`
-- `docs/README.md`
-- `benchmark/README.md`
-- `docs/demo/without-vs-with-skill.md`
-
-Compatibility review docs:
-
-- `STAGE13_REVIEW_GUIDE.md`
-- `STAGE13_CHANGELOG.md`
-
-Archived process/history docs:
-
-- `docs/archive/README.md`
-- `docs/archive/initial-implementation-prompt.md`
-- `docs/archive/project-background.md`
-- `docs/archive/review-2026-04-19.txt`
-
-## Exporting the skill
-
-### Consumer export
-
-```bash
-python .agents/skills/code-impact-guardian/cig.py export-skill --out path/to/exported-skill
-```
-
-This is the default. It produces the consumer-safe package and does not include
-`.ai` runtime artifacts.
-
-### Debug bundle export
-
-```bash
-python .agents/skills/code-impact-guardian/cig.py export-skill --mode debug-bundle --out path/to/exported-debug-bundle
-```
-
-Use this only for troubleshooting or handoff. It may include reports, logs,
-handoff notes, and last-error snapshots.
-
-### Single-folder export
-
-```bash
-python .agents/skills/code-impact-guardian/cig.py export-skill --mode single-folder --out path/to/exported-skill
-```
-
-This produces only:
-
-```text
-.agents/skills/code-impact-guardian/
-```
-
-## Recommended commands
-
-### High-level commands
-
-These are the main user-facing commands now:
-
-```bash
-python .agents/skills/code-impact-guardian/cig.py setup --project-root .
-python .agents/skills/code-impact-guardian/cig.py health
-python .agents/skills/code-impact-guardian/cig.py classify-change --workspace-root . --changed-file path/to/file
-python .agents/skills/code-impact-guardian/cig.py assess-mutation --workspace-root . --path path/to/file --action move
-python .agents/skills/code-impact-guardian/cig.py analyze
-python .agents/skills/code-impact-guardian/cig.py analyze --workspace-root . --changed-file path/to/file --escalation-level auto
-python .agents/skills/code-impact-guardian/cig.py recommend-tests --workspace-root . --task-id <task-id>
-python .agents/skills/code-impact-guardian/cig.py loop-status --workspace-root .
-python .agents/skills/code-impact-guardian/cig.py diagnose-loop --workspace-root . --changed-file path/to/file
-python .agents/skills/code-impact-guardian/cig.py install-integration-pack
-python .agents/skills/code-impact-guardian/cig.py finish --test-scope targeted
-python .agents/skills/code-impact-guardian/cig.py finish --test-scope targeted --shadow-full
-```
-
-What they do:
-
-- `setup` = initialize config, schema, consumer docs, and repo defaults
-- `health` = report readiness, trust freshness, and recovery hints
-- `classify-change` = classify changed files before deciding how much guardian flow is actually needed
-- `analyze` = infer context, refresh or reuse the graph, and write next-action guidance
-- `recommend-tests` = turn direct test seeds into executable commands
-- `loop-status` = summarize the current repeated-failure state
-- `diagnose-loop` = expand repair-loop context for a specific changed file
-- `install-integration-pack` = write runtime-neutral repo guidance and session contract files
-- `finish` = refresh evidence, run the chosen verification scope, and update handoff/status state
-
-Useful flags:
-
-- `--changed-file <path>`
-- `--changed-line <path:line>`
-- `--patch-file <path>`
-- `--allow-fallback`
-- `--full`
-- `--shadow-full`
-- `--test-scope targeted|configured|full`
-
-### Budget-driven verification
-
-Verification is no longer a simple "light vs full" choice.
-
-- `B0` = bypass-class non-runtime edits
-- `B1` = lightweight documentation/process edits
-- `B2` = targeted tests
-- `B3` = configured tests
-- `B4` = full tests plus dependency/schema review
-
-The verification budget is written to:
-
-- `.ai/codegraph/verification-policy.json`
-- `.ai/codegraph/next-action.json`
-- finish/test results payloads
-
-Flow class and budget are related, but not identical:
-
-- `bypass` typically maps to `B0`
-- `lightweight` typically maps to `B1`
-- `guarded` usually starts at `B2` and can escalate
-- `risk_sensitive` is expected to run at the heaviest budget
-- repeated failures can raise the budget, but never lower it
-
-### Repair-loop escalation
-
-Repeated failure is treated as a signal that the visible chain is too small.
-
-- `L0` = normal mode
-- `L1` = widen one hop after a repeated failure
-- `L2` = widen two hops and include more intermediate rule/contract context
-- `L3` = full-chain mode with `B4` and full tests
-
-The loop state is written to runtime artifacts such as:
-
-- `.ai/codegraph/repair-attempts.jsonl`
-- `.ai/codegraph/loop-breaker-report.json`
-- `.ai/codegraph/next-action.json`
-
-## Profiles
-
-Real working profiles:
-
-- `python-basic`
-- `node-cli`
-- `react-vite`
-
-Setup-ready profiles:
-
-- `next-basic`
-- `electron-renderer`
-- `obsidian-plugin`
-- `tauri-frontend`
-
-Profiles only change config defaults, doctor expectations, and suggested
-commands. They do not create separate graph systems.
-
-## Structured runtime artifacts
-
-Runtime data is written under:
-
-```text
-.ai/codegraph/
-```
-
-Key files:
-
-- graph DB: `.ai/codegraph/codegraph.db`
-- reports: `.ai/codegraph/reports/`
-- logs: `.ai/codegraph/logs/`
-- handoff: `.ai/codegraph/handoff/latest.md`
-- context resolution: `.ai/codegraph/context-resolution.json`
-- next action: `.ai/codegraph/next-action.json`
-- verification policy: `.ai/codegraph/verification-policy.json`
-- test history: `.ai/codegraph/test-history.jsonl`
-- calibration history: `.ai/codegraph/calibration.jsonl`
-- pending changes: `.ai/codegraph/pending-changes.jsonl`
-
-When the integration pack is installed, runtime-neutral session docs also live
-under:
-
-```text
-.ai/codegraph/runtime/
-```
-
-## Trust and safety
-
-`tests passed` is useful evidence, but it is not proof that a change is safe.
-
-The runtime now separates:
-
-- seed confidence
-- graph trust
-- parser trust
-- dependency status
-- test signal
-- coverage signal
-- context completeness
-- overall trust
-
-That split is intentional. The skill should help an agent avoid overclaiming,
-not manufacture confidence.
-
-## Recovery and handoff
-
-Read in this order when something goes wrong:
-
-1. `.ai/codegraph/logs/last-error.json`
-2. `.ai/codegraph/handoff/latest.md`
-3. `TROUBLESHOOTING.md`
-
-Use:
-
-```bash
-python .agents/skills/code-impact-guardian/cig.py status
-```
-
-to inspect the latest build/report/finish state, trust decision, inferred
-context, and recommended next step.
-
-## Verification
-
-Focused validation:
-
-```bash
-python -m unittest tests.test_stage11_workflow tests.test_stage13_workflow -v
-python -m unittest tests.test_stage14_workflow -v
-python -m unittest tests.test_stage15_1_workflow -v
-python -m unittest tests.test_stage15_workflow -v
-python -m unittest tests.test_stage16_workflow -v
-```
-
-Broader regression:
-
-```bash
-python -m unittest tests.test_stage9_workflow tests.test_stage10_workflow tests.test_stage11_workflow tests.test_stage13_workflow tests.test_stage14_workflow tests.test_stage15_1_workflow tests.test_stage15_workflow tests.test_stage16_workflow -v
-```
-
-Full current workflow matrix:
-
-```bash
-python -m unittest discover -s tests -p test_*.py -v
-```

@@ -1,6 +1,6 @@
 # Mainstone
 
-本文件根据本轮对话整理，记录 Code Impact Guardian 从 Stage1 到 Stage15 的核心里程碑。每个阶段只保留目标、关键交付与状态摘要。
+本文件根据本轮对话整理，记录 ZG Impact Blueprint 从 Stage1 到 Stage15 的核心里程碑。每个阶段只保留目标、关键交付与状态摘要。
 
 更新时间：2026-04-19（Asia/Singapore）
 
@@ -135,4 +135,4 @@
 
 ## 当前状态
 
-截至 2026-04-19，Code Impact Guardian 已推进到 Stage15.1，具备 repo-local、可复制、可分发、可恢复、支持 Python / TSJS / React / SQL / generic fallback 的完整主流程，并已经形成 verification budget、shadow calibration、contract graph、flow scope governance、repair loop escalation、doc-role-aware working-note handling 与 mutation safety 的组合能力。产品边界也更明确：它首先是给 agents 用的工程图册与验证护栏，而不是平台型重智能系统。
+截至 2026-04-19，ZG Impact Blueprint 已推进到 Stage15.1，具备 repo-local、可复制、可分发、可恢复、支持 Python / TSJS / React / SQL / generic fallback 的完整主流程，并已经形成 verification budget、shadow calibration、contract graph、flow scope governance、repair loop escalation、doc-role-aware working-note handling 与 mutation safety 的组合能力。产品边界也更明确：它首先是给 agents 用的工程图册与验证护栏，而不是平台型重智能系统。

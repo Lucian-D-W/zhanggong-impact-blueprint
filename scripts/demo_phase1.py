@@ -16,7 +16,7 @@ def copy_template(source_root: pathlib.Path, destination_root: pathlib.Path) -> 
 
     def ignore(current_dir: str, entries: list[str]) -> set[str]:
         ignored = set(base_ignore(current_dir, entries))
-        if pathlib.Path(current_dir).name == ".code-impact-guardian":
+        if pathlib.Path(current_dir).name == ".zhanggong-impact-blueprint":
             ignored.add("config.json")
         return {entry for entry in entries if entry in ignored}
 
@@ -27,7 +27,7 @@ def copy_template(source_root: pathlib.Path, destination_root: pathlib.Path) -> 
 
 def init_git_repo(workspace_root: pathlib.Path) -> None:
     subprocess.run(["git", "init"], cwd=workspace_root, check=True, capture_output=True, text=True)
-    subprocess.run(["git", "config", "user.name", "Code Impact Guardian Demo"], cwd=workspace_root, check=True)
+    subprocess.run(["git", "config", "user.name", "ZG Impact Blueprint Demo"], cwd=workspace_root, check=True)
     subprocess.run(["git", "config", "user.email", "demo@example.invalid"], cwd=workspace_root, check=True)
     subprocess.run(["git", "config", "core.autocrlf", "false"], cwd=workspace_root, check=True)
     subprocess.run(["git", "add", "."], cwd=workspace_root, check=True)
@@ -54,11 +54,11 @@ def apply_demo_edit(workspace_root: pathlib.Path) -> str:
 
 
 def execute_demo(workspace_root: pathlib.Path) -> None:
-    cig_script = workspace_root / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
-    build_script = workspace_root / ".agents" / "skills" / "code-impact-guardian" / "scripts" / "build_graph.py"
-    report_script = workspace_root / ".agents" / "skills" / "code-impact-guardian" / "scripts" / "generate_report.py"
-    after_script = workspace_root / ".agents" / "skills" / "code-impact-guardian" / "scripts" / "after_edit_update.py"
-    config_path = workspace_root / ".code-impact-guardian" / "config.json"
+    cig_script = workspace_root / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py"
+    build_script = workspace_root / ".agents" / "skills" / "zhanggong-impact-blueprint" / "scripts" / "build_graph.py"
+    report_script = workspace_root / ".agents" / "skills" / "zhanggong-impact-blueprint" / "scripts" / "generate_report.py"
+    after_script = workspace_root / ".agents" / "skills" / "zhanggong-impact-blueprint" / "scripts" / "after_edit_update.py"
+    config_path = workspace_root / ".zhanggong-impact-blueprint" / "config.json"
 
     if workspace_root == template_root():
         payload = json.loads(config_path.read_text(encoding="utf-8"))
@@ -107,3 +107,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

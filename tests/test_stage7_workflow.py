@@ -13,8 +13,8 @@ def run_json(cmd: list[str], cwd: pathlib.Path) -> dict:
 
 def copy_single_skill_folder(single_folder_export: pathlib.Path, repo_root: pathlib.Path) -> pathlib.Path:
     repo_root.mkdir(parents=True, exist_ok=True)
-    skill_source = single_folder_export / "code-impact-guardian"
-    skill_target = repo_root / ".agents" / "skills" / "code-impact-guardian"
+    skill_source = single_folder_export / "zhanggong-impact-blueprint"
+    skill_target = repo_root / ".agents" / "skills" / "zhanggong-impact-blueprint"
     skill_target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(skill_source, skill_target)
     return skill_target / "cig.py"
@@ -164,7 +164,7 @@ def write_generic_repo(repo_root: pathlib.Path) -> None:
 class Stage7WorkflowTest(unittest.TestCase):
     def test_single_folder_setup_analyze_finish_for_python_tsjs_sql_and_generic(self):
         repo_root = pathlib.Path(__file__).resolve().parents[1]
-        cig_script = repo_root / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
+        cig_script = repo_root / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py"
 
         with tempfile.TemporaryDirectory() as tmp:
             single_export = pathlib.Path(tmp) / "single-folder-export"
@@ -183,7 +183,7 @@ class Stage7WorkflowTest(unittest.TestCase):
                 cwd=repo_root,
             )
             self.assertEqual(export_payload["mode"], "single-folder")
-            self.assertTrue((single_export / "code-impact-guardian" / "cig.py").exists())
+            self.assertTrue((single_export / "zhanggong-impact-blueprint" / "cig.py").exists())
             self.assertFalse((single_export / ".ai").exists())
             self.assertFalse((single_export / "tests").exists())
             self.assertFalse((single_export / "examples").exists())
@@ -208,8 +208,8 @@ class Stage7WorkflowTest(unittest.TestCase):
             self.assertEqual(setup_payload["detect"]["detected_profile"], "python-basic")
             self.assertTrue((python_repo / "AGENTS.md").exists())
             self.assertTrue((python_repo / ".gitignore").exists())
-            self.assertTrue((python_repo / ".code-impact-guardian" / "config.json").exists())
-            self.assertTrue((python_repo / ".code-impact-guardian" / "schema.sql").exists())
+            self.assertTrue((python_repo / ".zhanggong-impact-blueprint" / "config.json").exists())
+            self.assertTrue((python_repo / ".zhanggong-impact-blueprint" / "schema.sql").exists())
             self.assertTrue((python_repo / "QUICKSTART.md").exists())
             self.assertTrue((python_repo / "TROUBLESHOOTING.md").exists())
             self.assertTrue((python_repo / "CONSUMER_GUIDE.md").exists())
@@ -221,7 +221,7 @@ class Stage7WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(python_repo),
                     "--config",
-                    str(python_repo / ".code-impact-guardian" / "config.json"),
+                    str(python_repo / ".zhanggong-impact-blueprint" / "config.json"),
                     "--changed-file",
                     "src/app.py",
                 ],
@@ -240,7 +240,7 @@ class Stage7WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(python_repo),
                     "--config",
-                    str(python_repo / ".code-impact-guardian" / "config.json"),
+                    str(python_repo / ".zhanggong-impact-blueprint" / "config.json"),
                     "--changed-file",
                     "src/app.py",
                 ],
@@ -276,7 +276,7 @@ class Stage7WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(tsjs_repo),
                     "--config",
-                    str(tsjs_repo / ".code-impact-guardian" / "config.json"),
+                    str(tsjs_repo / ".zhanggong-impact-blueprint" / "config.json"),
                     "--changed-file",
                     "src/cli.js",
                 ],
@@ -293,7 +293,7 @@ class Stage7WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(tsjs_repo),
                     "--config",
-                    str(tsjs_repo / ".code-impact-guardian" / "config.json"),
+                    str(tsjs_repo / ".zhanggong-impact-blueprint" / "config.json"),
                     "--changed-file",
                     "src/cli.js",
                 ],
@@ -329,7 +329,7 @@ class Stage7WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(compound_repo),
                     "--config",
-                    str(compound_repo / ".code-impact-guardian" / "config.json"),
+                    str(compound_repo / ".zhanggong-impact-blueprint" / "config.json"),
                     "--changed-file",
                     "src/dbClient.js",
                 ],
@@ -350,7 +350,7 @@ class Stage7WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(compound_repo),
                     "--config",
-                    str(compound_repo / ".code-impact-guardian" / "config.json"),
+                    str(compound_repo / ".zhanggong-impact-blueprint" / "config.json"),
                     "--changed-file",
                     "src/dbClient.js",
                 ],
@@ -365,7 +365,7 @@ class Stage7WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(compound_repo),
                     "--config",
-                    str(compound_repo / ".code-impact-guardian" / "config.json"),
+                    str(compound_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=compound_repo,
             )
@@ -397,7 +397,7 @@ class Stage7WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(generic_repo),
                     "--config",
-                    str(generic_repo / ".code-impact-guardian" / "config.json"),
+                    str(generic_repo / ".zhanggong-impact-blueprint" / "config.json"),
                     "--changed-file",
                     "src/settings.workflow",
                     "--allow-fallback",
@@ -415,7 +415,7 @@ class Stage7WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(generic_repo),
                     "--config",
-                    str(generic_repo / ".code-impact-guardian" / "config.json"),
+                    str(generic_repo / ".zhanggong-impact-blueprint" / "config.json"),
                     "--changed-file",
                     "src/settings.workflow",
                     "--allow-fallback",
@@ -426,7 +426,7 @@ class Stage7WorkflowTest(unittest.TestCase):
 
     def test_status_handoff_and_structured_recovery_are_more_actionable(self):
         repo_root = pathlib.Path(__file__).resolve().parents[1]
-        cig_script = repo_root / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
+        cig_script = repo_root / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py"
 
         with tempfile.TemporaryDirectory() as tmp:
             single_export = pathlib.Path(tmp) / "single-folder-export"
@@ -470,13 +470,13 @@ class Stage7WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(repo),
                     "--config",
-                    str(repo / ".code-impact-guardian" / "config.json"),
+                    str(repo / ".zhanggong-impact-blueprint" / "config.json"),
                     "--changed-file",
                     "src/app.py",
                 ],
                 cwd=repo,
             )
-            config_path = repo / ".code-impact-guardian" / "config.json"
+            config_path = repo / ".zhanggong-impact-blueprint" / "config.json"
             config_payload = json.loads(config_path.read_text(encoding="utf-8"))
             config_payload["python"]["test_command"] = ["python", "-c", "import sys; sys.exit(3)"]
             config_path.write_text(json.dumps(config_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -533,3 +533,4 @@ class Stage7WorkflowTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -1,6 +1,6 @@
 # Demo Script: Without Skill vs With Skill
 
-## Without Code Impact Guardian
+## Without ZG Impact Blueprint
 
 1. Open a file.
 2. Guess what is affected.
@@ -8,7 +8,7 @@
 4. Run whatever tests seem plausible.
 5. Hope nothing important was missed.
 
-## With Code Impact Guardian
+## With ZG Impact Blueprint
 
 1. Run `setup` once after copying the skill folder.
 2. Run `analyze`.

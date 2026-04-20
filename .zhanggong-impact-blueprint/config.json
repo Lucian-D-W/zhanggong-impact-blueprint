@@ -44,8 +44,8 @@
     "source_globs": [
       "scripts/*.py",
       "scripts/**/*.py",
-      ".agents/skills/code-impact-guardian/*.py",
-      ".agents/skills/code-impact-guardian/**/*.py"
+      ".agents/skills/zhanggong-impact-blueprint/*.py",
+      ".agents/skills/zhanggong-impact-blueprint/**/*.py"
     ],
     "test_globs": [
       "tests/*.py",
@@ -149,7 +149,7 @@
     "lightweight_globs": [
       "README.md",
       "AGENTS.md",
-      ".agents/skills/code-impact-guardian/SKILL.md",
+      ".agents/skills/zhanggong-impact-blueprint/SKILL.md",
       ".ai/codegraph/runtime/*.md",
       ".ai/codegraph/runtime/**/*.md"
     ],
@@ -157,9 +157,9 @@
       "src/**",
       "scripts/**",
       "tests/**",
-      ".agents/skills/code-impact-guardian/**/*.py",
-      ".code-impact-guardian/config.json",
-      ".code-impact-guardian/schema.sql",
+      ".agents/skills/zhanggong-impact-blueprint/**/*.py",
+      ".zhanggong-impact-blueprint/config.json",
+      ".zhanggong-impact-blueprint/schema.sql",
       "docs/rules/**"
     ],
     "risk_sensitive_globs": [
@@ -186,7 +186,7 @@
       "test_command",
       "verification budget",
       "finish --test-scope",
-      "python .agents/skills/code-impact-guardian/cig.py",
+      "python .agents/skills/zhanggong-impact-blueprint/cig.py",
       "governs:",
       "docs/rules",
       "CONTEXT_MISSING",
@@ -201,7 +201,7 @@
       "mainstone.md",
       "README.md",
       "AGENTS.md",
-      ".agents/skills/code-impact-guardian/SKILL.md"
+      ".agents/skills/zhanggong-impact-blueprint/SKILL.md"
     ]
   },
   "mutation_guard": {
@@ -221,3 +221,4 @@
     }
   }
 }
+

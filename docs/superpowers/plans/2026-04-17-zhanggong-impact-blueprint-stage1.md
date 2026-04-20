@@ -1,4 +1,4 @@
-# Code Impact Guardian Stage 1 Implementation Plan
+# ZG Impact Blueprint Stage 1 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -73,12 +73,12 @@ Expected: PASS
 
 **Files:**
 - Create: `AGENTS.md`
-- Create: `.agents/skills/code-impact-guardian/SKILL.md`
-- Create: `.agents/skills/code-impact-guardian/scripts/build_graph.py`
-- Create: `.agents/skills/code-impact-guardian/scripts/generate_report.py`
-- Create: `.agents/skills/code-impact-guardian/scripts/after_edit_update.py`
-- Create: `.code-impact-guardian/config.yaml`
-- Create: `.code-impact-guardian/schema.sql`
+- Create: `.agents/skills/zhanggong-impact-blueprint/SKILL.md`
+- Create: `.agents/skills/zhanggong-impact-blueprint/scripts/build_graph.py`
+- Create: `.agents/skills/zhanggong-impact-blueprint/scripts/generate_report.py`
+- Create: `.agents/skills/zhanggong-impact-blueprint/scripts/after_edit_update.py`
+- Create: `.zhanggong-impact-blueprint/config.yaml`
+- Create: `.zhanggong-impact-blueprint/schema.sql`
 - Create: `README.md`
 - Create: `examples/python_minimal/README.md`
 - Create: `examples/python_minimal/src/app.py`
@@ -127,3 +127,4 @@ Confirm:
 
 Run: `python -m unittest tests.test_stage1_workflow -v`
 Expected: PASS
+

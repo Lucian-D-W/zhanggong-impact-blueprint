@@ -4,7 +4,7 @@ import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / ".agents" / "skills" / "code-impact-guardian" / "scripts"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / ".agents" / "skills" / "zhanggong-impact-blueprint" / "scripts"))
 
 from after_edit_update import parse_test_count, run_tests_with_coverage
 
@@ -44,12 +44,12 @@ class ParseTestCountRegressionTest(unittest.TestCase):
 
     def test_no_test_command_stays_skipped(self):
         repo_root = pathlib.Path(__file__).resolve().parents[1]
-        base_config = json.loads((repo_root / ".code-impact-guardian" / "config.json").read_text(encoding="utf-8"))
+        base_config = json.loads((repo_root / ".zhanggong-impact-blueprint" / "config.json").read_text(encoding="utf-8"))
 
         with tempfile.TemporaryDirectory() as tmp:
             workspace_root = pathlib.Path(tmp)
             (workspace_root / ".ai" / "codegraph").mkdir(parents=True, exist_ok=True)
-            (workspace_root / ".code-impact-guardian").mkdir(parents=True, exist_ok=True)
+            (workspace_root / ".zhanggong-impact-blueprint").mkdir(parents=True, exist_ok=True)
             (workspace_root / "src").mkdir(parents=True, exist_ok=True)
             (workspace_root / "src" / "settings.conf").write_text("mode=active\n", encoding="utf-8")
 
@@ -58,7 +58,7 @@ class ParseTestCountRegressionTest(unittest.TestCase):
             base_config["language_adapter"] = "generic"
             base_config["generic"]["test_command"] = []
 
-            config_path = workspace_root / ".code-impact-guardian" / "config.json"
+            config_path = workspace_root / ".zhanggong-impact-blueprint" / "config.json"
             config_path.write_text(json.dumps(base_config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
             summary = run_tests_with_coverage(
@@ -71,3 +71,4 @@ class ParseTestCountRegressionTest(unittest.TestCase):
             self.assertIsNone(summary["tests_run"])
             self.assertEqual(summary["test_count_status"], "unknown")
             self.assertIn("no test command configured", summary["coverage_reason"])
+

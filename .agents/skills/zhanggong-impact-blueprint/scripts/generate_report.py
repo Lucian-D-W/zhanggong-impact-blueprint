@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 from adapters import detect_project_profile_name
 from build_graph import get_git_context, graph_paths, load_config, project_root_for, record_task_run, resolved_language_adapter
+from db_support import connect_db
 
 TRUST_ORDER = {"low": 0, "medium": 1, "high": 2}
 CONTRACT_NODE_KINDS = {
@@ -418,6 +419,287 @@ def architecture_chains_payload(contract_edges: list[dict]) -> list[dict]:
         )
 
     return chains
+
+
+def confidence_label(values: list[float]) -> str:
+    floor = min(values or [0.0])
+    if floor >= 0.85:
+        return "high"
+    if floor >= 0.65:
+        return "medium"
+    return "low"
+
+
+def compact_contract_ref(node: dict) -> dict:
+    return {
+        "node_id": node["node_id"],
+        "kind": node["kind"],
+        "name": node["name"],
+        "path": node["path"],
+    }
+
+
+def contract_refs_from_chain(chain: dict) -> list[dict]:
+    refs: list[dict] = []
+    seen: set[str] = set()
+    for node in chain.get("nodes", []):
+        if node.get("kind") not in CONTRACT_NODE_KINDS:
+            continue
+        node_id = node.get("node_id")
+        if not node_id or node_id in seen:
+            continue
+        seen.add(node_id)
+        refs.append(compact_contract_ref(node))
+    return refs
+
+
+def chain_read_first(chain: dict) -> list[str]:
+    values: list[str] = []
+    for node in chain.get("nodes", []):
+        path = node.get("path")
+        if path:
+            values.append(path)
+    for edge in chain.get("edges", []):
+        for key in ("src_path", "dst_path"):
+            if edge.get(key):
+                values.append(edge[key])
+    return unique_strings(values)
+
+
+def chain_title(chain_type: str) -> str:
+    if chain_type == "ipc":
+        return "IPC bilateral view"
+    if chain_type == "event":
+        return "Event bilateral view"
+    if chain_type == "endpoint":
+        return "Endpoint bilateral view"
+    if chain_type == "obsidian_command":
+        return "Command bilateral view"
+    if chain_type in {"route_component_prop", "endpoint_route_flow"}:
+        return "Page flow view"
+    if chain_type == "sql":
+        return "Data flow view"
+    if chain_type in {"env", "config"}:
+        return "Config surface view"
+    return "Atlas view"
+
+
+def chain_view_type(chain_type: str) -> str | None:
+    if chain_type in {"ipc", "event", "endpoint", "obsidian_command"}:
+        return "bilateral_contract"
+    if chain_type in {"route_component_prop", "endpoint_route_flow"}:
+        return "page_flow"
+    if chain_type == "sql":
+        return "data_flow"
+    if chain_type in {"env", "config"}:
+        return "config_surface"
+    return None
+
+
+def why_this_view(chain: dict) -> str:
+    chain_type = chain.get("chain_type")
+    contracts = contract_refs_from_chain(chain)
+    primary_name = contracts[0]["name"] if contracts else "this contract surface"
+    if chain_type == "ipc":
+        return f"This change touches ipc_channel `{primary_name}`; review both the send side and the handle side before editing."
+    if chain_type == "event":
+        return f"This change touches event `{primary_name}`; review both the emit side and the handle side together."
+    if chain_type == "endpoint":
+        return f"This change touches endpoint `{primary_name}`; review both the exposing backend path and the caller path."
+    if chain_type == "obsidian_command":
+        return f"This change touches command `{primary_name}`; review both registration and invocation paths."
+    if chain_type == "route_component_prop":
+        return f"This change touches page route `{primary_name}`; review the route, component chain, and prop surface together."
+    if chain_type == "endpoint_route_flow":
+        return f"This change touches a page flow around `{primary_name}`; review the route and flow path together."
+    if chain_type == "sql":
+        return f"This change touches sql_table `{primary_name}`; review query, mutation, and schema-adjacent paths together."
+    if chain_type in {"env", "config"}:
+        return f"This change touches configuration surface `{primary_name}`; review every reader path before editing."
+    return chain.get("summary") or "Review the linked architecture chain before editing."
+
+
+def atlas_view_from_chain(chain: dict) -> dict | None:
+    view_type = chain_view_type(chain.get("chain_type"))
+    if not view_type:
+        return None
+    edges = list(chain.get("edges", []))
+    edge_confidences = [float(edge.get("confidence") or 0.0) for edge in edges]
+    low_confidence = [edge for edge in edges if edge.get("edge_type") == "DEPENDS_ON" or float(edge.get("confidence") or 0.0) < 0.85]
+    uncertainties = [
+        (
+            f"{edge.get('edge_type')} for `{edge.get('dst_name') or edge.get('dst')}` is a low-confidence hint; "
+            "treat it as evidence to review, not proof."
+        )
+        for edge in low_confidence
+    ]
+    return {
+        "view_type": view_type,
+        "title": chain_title(chain.get("chain_type")),
+        "why_this_view": why_this_view(chain),
+        "confidence": confidence_label(edge_confidences),
+        "primary_contracts": contract_refs_from_chain(chain),
+        "read_first": chain_read_first(chain),
+        "supporting_edges": edges,
+        "uncertainties": unique_strings(uncertainties),
+    }
+
+
+def uncertainty_view_payload(
+    affected_contracts: list[dict],
+    architecture_chains: list[dict],
+    *,
+    report_completeness: dict | None = None,
+) -> dict | None:
+    supporting_edges: list[dict] = []
+    uncertainties: list[str] = []
+    primary_contracts: list[dict] = []
+    read_first: list[str] = []
+    seen_contracts: set[str] = set()
+    for contract in affected_contracts:
+        relationship = contract.get("relationship")
+        confidence = float(contract.get("confidence") or 0.0)
+        if relationship != "DEPENDS_ON" and confidence >= 0.85:
+            continue
+        node_id = contract.get("node_id")
+        if node_id and node_id not in seen_contracts:
+            seen_contracts.add(node_id)
+            primary_contracts.append(
+                {
+                    "node_id": node_id,
+                    "kind": contract.get("kind"),
+                    "name": contract.get("name"),
+                    "path": (contract.get("files") or [""])[0],
+                }
+            )
+        read_first.extend(contract.get("files") or [])
+        supporting_edges.append(
+            {
+                "relationship": relationship,
+                "kind": contract.get("kind"),
+                "name": contract.get("name"),
+                "confidence": confidence,
+                "files": contract.get("files", []),
+            }
+        )
+        uncertainties.append(
+            f"{relationship} for `{contract.get('name')}` is low-confidence fallback evidence. Do not treat it as proof."
+        )
+    for chain in architecture_chains:
+        for edge in chain.get("edges", []):
+            if edge.get("edge_type") != "DEPENDS_ON" and float(edge.get("confidence") or 0.0) >= 0.85:
+                continue
+            read_first.extend([edge.get("src_path"), edge.get("dst_path")])
+            supporting_edges.append(edge)
+            uncertainties.append(
+                f"{edge.get('edge_type')} from `{edge.get('src_name')}` to `{edge.get('dst_name')}` is a hint, not proof."
+            )
+    if (report_completeness or {}).get("level") == "low":
+        uncertainties.append(
+            "Report completeness is low for this seed, so broaden your reading before relying on a narrow local patch."
+        )
+    uncertainties = unique_strings(uncertainties)
+    if not uncertainties:
+        return None
+    return {
+        "view_type": "uncertainty",
+        "title": "Uncertainty view",
+        "why_this_view": "Some contract matches are fallback evidence or the context is incomplete. Review them as hints, not conclusions.",
+        "confidence": "low",
+        "primary_contracts": primary_contracts,
+        "read_first": unique_strings(read_first),
+        "supporting_edges": supporting_edges,
+        "uncertainties": uncertainties,
+    }
+
+
+def compress_atlas_views(
+    atlas_views: list[dict],
+    *,
+    full_contracts_path: str,
+    limit_per_type: int = 3,
+) -> tuple[list[dict], dict]:
+    def view_priority(view: dict) -> tuple[int, int, int, str]:
+        edges = view.get("supporting_edges") or []
+        edge_types = {
+            edge.get("edge_type")
+            for edge in edges
+            if isinstance(edge, dict) and edge.get("edge_type")
+        }
+        confidence_rank = {"high": 0, "medium": 1, "low": 2}.get(view.get("confidence"), 3)
+        uncertainty_penalty = len(view.get("uncertainties") or [])
+        mutation_bonus = 0 if "MUTATES_TABLE" in edge_types else 1
+        bilateral_bonus = 0 if {"IPC_SENDS", "IPC_HANDLES"} & edge_types or {"EMITS_EVENT", "HANDLES_EVENT"} & edge_types else 1
+        data_bonus = mutation_bonus if view.get("view_type") == "data_flow" else bilateral_bonus
+        read_first = view.get("read_first") or [""]
+        return (
+            data_bonus,
+            confidence_rank,
+            uncertainty_penalty,
+            read_first[0],
+        )
+
+    deduped: list[dict] = []
+    seen: set[tuple[str, tuple[str, ...], tuple[str, ...]]] = set()
+    for view in atlas_views:
+        contract_key = tuple(
+            sorted(
+                f"{item.get('kind')}:{item.get('name')}"
+                for item in view.get("primary_contracts", [])
+                if item.get("name")
+            )
+        )
+        read_key = tuple(view.get("read_first", [])[:3])
+        key = (view.get("view_type", ""), contract_key, read_key)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(view)
+    per_type: dict[str, list[dict]] = {}
+    for view in deduped:
+        per_type.setdefault(view.get("view_type", "unknown"), []).append(view)
+    compressed: list[dict] = []
+    omitted_count = 0
+    for view_type, views in per_type.items():
+        views = sorted(views, key=view_priority)
+        kept = views[:limit_per_type]
+        omitted = max(0, len(views) - len(kept))
+        if omitted and kept:
+            kept[-1] = {
+                **kept[-1],
+                "more_contracts_omitted": True,
+                "omitted_count": omitted,
+                "full_contracts_path": full_contracts_path,
+            }
+        compressed.extend(kept)
+        omitted_count += omitted
+    summary = {
+        "view_count": len(compressed),
+        "primary_views": unique_strings([view["view_type"] for view in compressed if view.get("view_type") != "uncertainty"]),
+        "uncertainty_count": len([view for view in compressed if view.get("view_type") == "uncertainty"]),
+        "omitted_count": omitted_count,
+        "more_contracts_omitted": omitted_count > 0,
+        "full_contracts_path": full_contracts_path,
+    }
+    return compressed, summary
+
+
+def summarize_contracts_for_agent(
+    affected_contracts: list[dict],
+    architecture_chains: list[dict],
+    *,
+    report_completeness: dict | None,
+    full_contracts_path: str,
+) -> tuple[list[dict], dict]:
+    atlas_views = [view for chain in architecture_chains if (view := atlas_view_from_chain(chain))]
+    uncertainty_view = uncertainty_view_payload(
+        affected_contracts,
+        architecture_chains,
+        report_completeness=report_completeness,
+    )
+    if uncertainty_view:
+        atlas_views.append(uncertainty_view)
+    return compress_atlas_views(atlas_views, full_contracts_path=full_contracts_path)
 
 
 def recursive_paths(conn: sqlite3.Connection, seed: str, edge_type: str, max_depth: int, reverse: bool = False) -> list[str]:
@@ -1105,7 +1387,7 @@ def generate_report(
     project_root = project_root_for(workspace_root, config)
     detected_profile = detect_project_profile_name(project_root, config, detected_adapter)
 
-    with sqlite3.connect(paths["db_path"]) as conn:
+    with connect_db(paths["db_path"]) as conn:
         seed_row = conn.execute("SELECT node_id, kind FROM nodes WHERE node_id = ?", (seed,)).fetchone()
         if not seed_row:
             raise SystemExit(f"Seed node not found: {seed}")
@@ -1155,6 +1437,12 @@ def generate_report(
         seed_kind=sections["seed_kind"],
         context_resolution=context_resolution,
         fallback_used=bool((seed_selection or {}).get("fallback_used")),
+    )
+    atlas_views, atlas_summary = summarize_contracts_for_agent(
+        affected_contracts,
+        architecture_chains,
+        report_completeness=report_completeness,
+        full_contracts_path=str(json_report_path.relative_to(workspace_root)),
     )
     test_signal = test_signal_payload(sections=sections, test_summary=test_summary)
     trust = multidimensional_trust_payload(
@@ -1214,6 +1502,8 @@ def generate_report(
         "relationships": relationships,
         "affected_contracts": affected_contracts,
         "architecture_chains": architecture_chains,
+        "atlas_views": atlas_views,
+        "atlas_summary": atlas_summary,
         "brief": brief,
         "trust": trust,
         "seed_selection": seed_selection or {},
@@ -1262,7 +1552,7 @@ def generate_report(
     json_report_path.write_text(json.dumps(json_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     mermaid_path.write_text(mermaid, encoding="utf-8")
 
-    with sqlite3.connect(paths["db_path"]) as conn:
+    with connect_db(paths["db_path"]) as conn:
         conn.execute(
             """
             INSERT OR REPLACE INTO impact_reports (report_id, task_id, seed_node_id, git_sha, report_path, attrs_json)
@@ -1274,10 +1564,9 @@ def generate_report(
                 seed,
                 git["git_sha"],
                 str(report_path.relative_to(workspace_root)),
-                json.dumps({"max_depth": max_depth, "seed_kind": sections["seed_kind"], "mode": mode, "json_report_path": str(json_report_path.relative_to(workspace_root)), "brief": brief, "report_completeness": report_completeness, "test_signal": test_signal, "trust": trust}, ensure_ascii=False),
+                json.dumps({"max_depth": max_depth, "seed_kind": sections["seed_kind"], "mode": mode, "json_report_path": str(json_report_path.relative_to(workspace_root)), "brief": brief, "report_completeness": report_completeness, "test_signal": test_signal, "trust": trust, "atlas_summary": atlas_summary}, ensure_ascii=False),
             ),
         )
-        conn.commit()
 
     task_run_id = record_task_run(
         db_path=paths["db_path"],
@@ -1319,6 +1608,8 @@ def generate_report(
         "direct": json_payload["direct"],
         "affected_contracts": affected_contracts,
         "architecture_chains": architecture_chains,
+        "atlas_views": atlas_views,
+        "atlas_summary": atlas_summary,
         "report_completeness": report_completeness,
         "test_signal": test_signal,
         "trust": trust,
@@ -1328,7 +1619,7 @@ def generate_report(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate an impact report from the direct-edge graph")
     parser.add_argument("--workspace-root", default=".", help="Workspace root")
-    parser.add_argument("--config", default=".code-impact-guardian/config.json", help="Config path")
+    parser.add_argument("--config", default=".zhanggong-impact-blueprint/config.json", help="Config path")
     parser.add_argument("--task-id", required=True, help="Task identifier")
     parser.add_argument("--seed", required=True, help="Seed node id")
     parser.add_argument("--max-depth", type=int, default=None, help="Override transitive depth")
@@ -1354,3 +1645,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

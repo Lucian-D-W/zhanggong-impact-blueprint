@@ -1,4 +1,4 @@
-name: code-impact-guardian
+name: zhanggong-impact-blueprint
 entry: cig.py
 description: Repo-local impact analysis workflow for setup, analyze, finish, export, and status.
 recommended_commands:
@@ -6,4 +6,5 @@ recommended_commands:
   - analyze
   - finish
   - status
+
 

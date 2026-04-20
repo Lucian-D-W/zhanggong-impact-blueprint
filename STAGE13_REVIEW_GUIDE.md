@@ -8,7 +8,7 @@ entry point for the current repository state. For current product behavior, use:
 
 - `README.md`
 - `docs/README.md`
-- `.agents/skills/code-impact-guardian/SKILL.md`
+- `.agents/skills/zhanggong-impact-blueprint/SKILL.md`
 
 The repository has continued through Stage 14, Stage 15, and Stage 15.1. Those
 later stages add adaptive verification, flow scope governance, repair-loop
@@ -57,11 +57,11 @@ bundle, read the current root/docs entry points first.
 
 1. `tests/test_stage13_workflow.py`
 2. `tests/test_stage11_workflow.py`
-3. `.agents/skills/code-impact-guardian/scripts/parser_backends.py`
-4. `.agents/skills/code-impact-guardian/scripts/after_edit_update.py`
-5. `.agents/skills/code-impact-guardian/cig.py`
-6. `.agents/skills/code-impact-guardian/scripts/generate_report.py`
-7. `.agents/skills/code-impact-guardian/scripts/trust_policy.py`
+3. `.agents/skills/zhanggong-impact-blueprint/scripts/parser_backends.py`
+4. `.agents/skills/zhanggong-impact-blueprint/scripts/after_edit_update.py`
+5. `.agents/skills/zhanggong-impact-blueprint/cig.py`
+6. `.agents/skills/zhanggong-impact-blueprint/scripts/generate_report.py`
+7. `.agents/skills/zhanggong-impact-blueprint/scripts/trust_policy.py`
 
 ## Suggested Stage 13 validation commands
 
@@ -79,3 +79,4 @@ The Stage 13 review zip is supposed to be self-consistent and runnable:
 - `benchmark/` is intentionally included because Stage 9 benchmark-driven tests depend on it
 - Temporary runtime state such as `.ai/` and VCS metadata such as `.git/` are intentionally excluded
 - Fixture contents under `examples/` and `benchmark/` stay intact even when they contain folders like `dist/`, `build/`, or `.cache/`
+

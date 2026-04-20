@@ -7,8 +7,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import closing
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / ".agents" / "skills" / "code-impact-guardian" / "scripts"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / ".agents" / "skills" / "zhanggong-impact-blueprint" / "scripts"))
 
 from after_edit_update import parse_test_count
 from tests.test_stage7_workflow import copy_single_skill_folder, run_json, write_generic_repo, write_python_repo
@@ -20,7 +21,7 @@ def copy_example(repo_root: pathlib.Path, example_name: str) -> None:
 
 
 def config_path(repo_root: pathlib.Path) -> pathlib.Path:
-    return repo_root / ".code-impact-guardian" / "config.json"
+    return repo_root / ".zhanggong-impact-blueprint" / "config.json"
 
 
 def init_git_repo(repo_root: pathlib.Path) -> None:
@@ -160,7 +161,7 @@ def finish_repo(
 
 def edge_set(repo_root: pathlib.Path, edge_type: str) -> set[tuple[str, str]]:
     db_path = repo_root / ".ai" / "codegraph" / "codegraph.db"
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         rows = conn.execute(
             "SELECT src_id, dst_id FROM edges WHERE edge_type = ?",
             (edge_type,),
@@ -170,7 +171,7 @@ def edge_set(repo_root: pathlib.Path, edge_type: str) -> set[tuple[str, str]]:
 
 def rule_node_attrs(repo_root: pathlib.Path) -> dict:
     db_path = repo_root / ".ai" / "codegraph" / "codegraph.db"
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         row = conn.execute(
             "SELECT attrs_json FROM nodes WHERE kind = 'rule' ORDER BY node_id LIMIT 1"
         ).fetchone()
@@ -278,7 +279,7 @@ class Stage11WorkflowTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.repo_root = pathlib.Path(__file__).resolve().parents[1]
-        cls.cig_script = cls.repo_root / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
+        cls.cig_script = cls.repo_root / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py"
         cls.export_tmp = tempfile.TemporaryDirectory()
         cls.single_export = pathlib.Path(cls.export_tmp.name) / "single-folder-export"
         run_json(
@@ -570,9 +571,9 @@ class Stage11WorkflowTest(unittest.TestCase):
             self.assertEqual(
                 last_error["recovery_commands"],
                 [
-                    f"python .agents/skills/code-impact-guardian/cig.py analyze --workspace-root {quoted_workspace_root} --allow-fallback",
-                    f"python .agents/skills/code-impact-guardian/cig.py analyze --workspace-root {quoted_workspace_root} --changed-file <relative-path>",
-                    f"python .agents/skills/code-impact-guardian/cig.py analyze --workspace-root {quoted_workspace_root} --patch-file <patch-file>",
+                    f"python .agents/skills/zhanggong-impact-blueprint/cig.py analyze --workspace-root {quoted_workspace_root} --allow-fallback",
+                    f"python .agents/skills/zhanggong-impact-blueprint/cig.py analyze --workspace-root {quoted_workspace_root} --changed-file <relative-path>",
+                    f"python .agents/skills/zhanggong-impact-blueprint/cig.py analyze --workspace-root {quoted_workspace_root} --patch-file <patch-file>",
                     f'git -C {quoted_workspace_root} init',
                 ],
             )
@@ -657,23 +658,23 @@ class Stage11WorkflowTest(unittest.TestCase):
             self.assertEqual(
                 payload["fix_commands"],
                 [
-                    f"python .agents/skills/code-impact-guardian/cig.py setup --workspace-root {quoted_workspace_root} --project-root .",
-                    f"python .agents/skills/code-impact-guardian/cig.py build --workspace-root {quoted_workspace_root} --full-rebuild",
+                    f"python .agents/skills/zhanggong-impact-blueprint/cig.py setup --workspace-root {quoted_workspace_root} --project-root .",
+                    f"python .agents/skills/zhanggong-impact-blueprint/cig.py build --workspace-root {quoted_workspace_root} --full-rebuild",
                 ],
             )
             self.assertEqual(
                 payload["next_command"],
-                f"python .agents/skills/code-impact-guardian/cig.py setup --workspace-root {quoted_workspace_root} --project-root .",
+                f"python .agents/skills/zhanggong-impact-blueprint/cig.py setup --workspace-root {quoted_workspace_root} --project-root .",
             )
             self.assertEqual(payload["graph_trust"], "unknown")
             self.assertEqual(payload["dependency_fingerprint_status"], "unknown")
             self.assertEqual(payload["last_task_phase"], "none")
             self.assertFalse(payload["needs_finish"])
-            self.assertFalse((repo_root / ".code-impact-guardian" / "config.json").exists())
+            self.assertFalse((repo_root / ".zhanggong-impact-blueprint" / "config.json").exists())
             setup_result = run_emitted_command(payload["next_command"], cwd=repo_root)
             self.assertEqual(setup_result.returncode, 0, setup_result.stderr or setup_result.stdout)
-            self.assertTrue((repo_root / ".code-impact-guardian" / "config.json").exists())
-            self.assertFalse((repo_root.parent / ".code-impact-guardian" / "config.json").exists())
+            self.assertTrue((repo_root / ".zhanggong-impact-blueprint" / "config.json").exists())
+            self.assertFalse((repo_root.parent / ".zhanggong-impact-blueprint" / "config.json").exists())
 
     def test_build_lock_surfaces_recovery_commands(self):
         with controlled_stage11_tempdir() as tmp:
@@ -709,7 +710,7 @@ class Stage11WorkflowTest(unittest.TestCase):
             self.assertEqual(
                 last_error["recovery_commands"],
                 [
-                    f"python .agents/skills/code-impact-guardian/cig.py status --workspace-root {quoted_workspace_root}",
+                    f"python .agents/skills/zhanggong-impact-blueprint/cig.py status --workspace-root {quoted_workspace_root}",
                     f"rm {quoted_lock_path}",
                 ],
             )
@@ -720,3 +721,4 @@ class Stage11WorkflowTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -1,21 +1,21 @@
-# Code Impact Guardian Consumer Guide
+# ZG Impact Blueprint Consumer Guide
 
 This guide is for repos that copied only:
 
-`./.agents/skills/code-impact-guardian/`
+`./.agents/skills/zhanggong-impact-blueprint/`
 
 ## Fast path
 
 1. Run setup:
 
 ```bash
-python .agents/skills/code-impact-guardian/cig.py setup --project-root .
+python .agents/skills/zhanggong-impact-blueprint/cig.py setup --project-root .
 ```
 
 2. Generate a report for the file you plan to edit:
 
 ```bash
-python .agents/skills/code-impact-guardian/cig.py analyze
+python .agents/skills/zhanggong-impact-blueprint/cig.py analyze
 ```
 
 3. Edit the code.
@@ -23,7 +23,7 @@ python .agents/skills/code-impact-guardian/cig.py analyze
 4. Refresh graph, report, evidence, and tests:
 
 ```bash
-python .agents/skills/code-impact-guardian/cig.py finish
+python .agents/skills/zhanggong-impact-blueprint/cig.py finish
 ```
 
 What these commands try to do for you:
@@ -37,25 +37,25 @@ What these commands try to do for you:
 ## Python
 
 ```bash
-python .agents/skills/code-impact-guardian/cig.py setup --profile python-basic --project-root .
-python .agents/skills/code-impact-guardian/cig.py analyze
-python .agents/skills/code-impact-guardian/cig.py finish
+python .agents/skills/zhanggong-impact-blueprint/cig.py setup --profile python-basic --project-root .
+python .agents/skills/zhanggong-impact-blueprint/cig.py analyze
+python .agents/skills/zhanggong-impact-blueprint/cig.py finish
 ```
 
 ## TS/JS
 
 ```bash
-python .agents/skills/code-impact-guardian/cig.py setup --profile node-cli --project-root .
-python .agents/skills/code-impact-guardian/cig.py analyze
-python .agents/skills/code-impact-guardian/cig.py finish
+python .agents/skills/zhanggong-impact-blueprint/cig.py setup --profile node-cli --project-root .
+python .agents/skills/zhanggong-impact-blueprint/cig.py analyze
+python .agents/skills/zhanggong-impact-blueprint/cig.py finish
 ```
 
 ## TS/JS + PostgreSQL
 
 ```bash
-python .agents/skills/code-impact-guardian/cig.py setup --profile node-cli --with sql-postgres --project-root .
-python .agents/skills/code-impact-guardian/cig.py analyze
-python .agents/skills/code-impact-guardian/cig.py finish
+python .agents/skills/zhanggong-impact-blueprint/cig.py setup --profile node-cli --with sql-postgres --project-root .
+python .agents/skills/zhanggong-impact-blueprint/cig.py analyze
+python .agents/skills/zhanggong-impact-blueprint/cig.py finish
 ```
 
 ## Daily-use tips
@@ -93,8 +93,8 @@ candidates and ask you to be explicit.
 
 ## Where to look on failure
 
-- Status: run `python .agents/skills/code-impact-guardian/cig.py status`
-- Health: run `python .agents/skills/code-impact-guardian/cig.py health --workspace-root .`
+- Status: run `python .agents/skills/zhanggong-impact-blueprint/cig.py status`
+- Health: run `python .agents/skills/zhanggong-impact-blueprint/cig.py health --workspace-root .`
 - Handoff: `.ai/codegraph/handoff/latest.md`
 - Recent task: `.ai/codegraph/last-task.json`
 - Context inference: `.ai/codegraph/context-resolution.json`
@@ -110,3 +110,4 @@ candidates and ask you to be explicit.
 
 - Share the normal exported package with `export-skill` (consumer mode)
 - Share `--mode debug-bundle` only when someone needs logs, reports, handoff, or last-error details for troubleshooting
+

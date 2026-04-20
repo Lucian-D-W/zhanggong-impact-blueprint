@@ -22,7 +22,9 @@ import list_seeds  # noqa: E402
 import repair_escalation  # noqa: E402
 from adapters import SQL_POSTGRES_ADAPTER, configured_supplemental_adapters, detect_language_adapter, detect_project_profile_name, detect_supplemental_adapters  # noqa: E402
 from consumer_install import ensure_agents_md as ensure_consumer_agents_md, ensure_consumer_docs, ensure_gitignore as ensure_consumer_gitignore, export_single_folder  # noqa: E402
+from db_support import connect_db  # noqa: E402
 from doc_sources import doc_source_doctor_status  # noqa: E402
+from identity import DISPLAY_NAME, FORMAL_NAME, SKILL_DIR_FRAGMENT, SKILL_SLUG, STATE_CONFIG_RELATIVE_PATH, STATE_DIRNAME  # noqa: E402
 from profiles import AUTO_PROFILE, PROFILE_PRESETS, apply_profile_preset, detect_project_profile, package_json_data, profile_coverage_adapter, profile_test_command  # noqa: E402
 from recent_task import auto_task_id, latest_seed_candidates, read_last_task, utc_now as recent_task_utc_now, write_last_task  # noqa: E402
 from runtime_support import CIGUserError, ensure_runtime_dirs, error_payload_from_exception, event_payload, latest_success_timestamp, normalize_output_paths, read_json, read_jsonl, recent_command_status, relative_path_string, runtime_paths, shell_quote_path, write_error, write_event, write_handoff, write_json  # noqa: E402
@@ -139,6 +141,8 @@ DEFAULT_CONFIG = {
         },
     },
 }
+
+SKILL_DIRNAME = SKILL_SLUG
 
 
 DEFAULT_SCHEMA_TEXT = """PRAGMA foreign_keys = ON;
@@ -373,7 +377,7 @@ def copy_template(source_root: pathlib.Path, destination_root: pathlib.Path) -> 
 
     def ignore(current_dir: str, entries: list[str]) -> set[str]:
         ignored = set(base_ignore(current_dir, entries))
-        if pathlib.Path(current_dir).name == ".code-impact-guardian":
+        if pathlib.Path(current_dir).name == STATE_DIRNAME:
             ignored.add("config.json")
         return {entry for entry in entries if entry in ignored}
 
@@ -384,7 +388,7 @@ def copy_template(source_root: pathlib.Path, destination_root: pathlib.Path) -> 
 
 def init_git_repo(workspace_root: pathlib.Path) -> None:
     subprocess.run(["git", "init"], cwd=workspace_root, check=True, capture_output=True, text=True)
-    subprocess.run(["git", "config", "user.name", "Code Impact Guardian Demo"], cwd=workspace_root, check=True)
+    subprocess.run(["git", "config", "user.name", f"{DISPLAY_NAME} Demo"], cwd=workspace_root, check=True)
     subprocess.run(["git", "config", "user.email", "demo@example.invalid"], cwd=workspace_root, check=True)
     subprocess.run(["git", "config", "core.autocrlf", "false"], cwd=workspace_root, check=True)
     subprocess.run(["git", "add", "."], cwd=workspace_root, check=True)
@@ -400,11 +404,11 @@ def write_json(path: pathlib.Path, payload: dict) -> None:
 
 
 def config_path_for(workspace_root: pathlib.Path) -> pathlib.Path:
-    return workspace_root / ".code-impact-guardian" / "config.json"
+    return workspace_root / STATE_DIRNAME / "config.json"
 
 
 def schema_path_for(workspace_root: pathlib.Path) -> pathlib.Path:
-    return workspace_root / ".code-impact-guardian" / "schema.sql"
+    return workspace_root / STATE_DIRNAME / "schema.sql"
 
 
 def default_config_payload() -> dict:
@@ -412,7 +416,7 @@ def default_config_payload() -> dict:
 
 
 def default_schema_text() -> str:
-    source_schema = template_root() / ".code-impact-guardian" / "schema.sql"
+    source_schema = template_root() / STATE_DIRNAME / "schema.sql"
     if source_schema.exists():
         return source_schema.read_text(encoding="utf-8")
     return DEFAULT_SCHEMA_TEXT
@@ -435,7 +439,7 @@ def init_workspace(
     codegraph_dir = workspace_root / ".ai" / "codegraph"
     report_dir = codegraph_dir / "reports"
     doc_cache_dir = codegraph_dir / "doc-cache"
-    config_dir = workspace_root / ".code-impact-guardian"
+    config_dir = workspace_root / STATE_DIRNAME
     config_dir.mkdir(parents=True, exist_ok=True)
     codegraph_dir.mkdir(parents=True, exist_ok=True)
     report_dir.mkdir(parents=True, exist_ok=True)
@@ -776,10 +780,10 @@ def export_skill(*, workspace_root: pathlib.Path, out_dir: pathlib.Path, mode: s
     (out_dir / ".agents" / "skills").mkdir(parents=True, exist_ok=True)
     shutil.copytree(
         SKILL_DIR,
-        out_dir / ".agents" / "skills" / "code-impact-guardian",
+        out_dir / ".agents" / "skills" / SKILL_SLUG,
         ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".ai", ".git", "dist", "*.zip", "tests", "examples", "benchmark"),
     )
-    package_config_dir = out_dir / ".code-impact-guardian"
+    package_config_dir = out_dir / STATE_DIRNAME
     package_config_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(schema_path_for(workspace_root), package_config_dir / "schema.sql")
     (package_config_dir / "config.template.json").write_text(
@@ -800,10 +804,163 @@ def export_skill(*, workspace_root: pathlib.Path, out_dir: pathlib.Path, mode: s
             "QUICKSTART.md",
             "TROUBLESHOOTING.md",
             "CONSUMER_GUIDE.md",
-            ".code-impact-guardian/config.template.json",
-            ".code-impact-guardian/schema.sql",
-            ".agents/skills/code-impact-guardian/",
+            f"{STATE_DIRNAME}/config.template.json",
+            f"{STATE_DIRNAME}/schema.sql",
+            f"{SKILL_DIR_FRAGMENT}/",
         ],
+    }
+
+
+TEXT_LIKE_SUFFIXES = {
+    "",
+    ".md",
+    ".txt",
+    ".rst",
+    ".py",
+    ".json",
+    ".toml",
+    ".yaml",
+    ".yml",
+    ".ini",
+    ".cfg",
+    ".sql",
+    ".js",
+    ".jsx",
+    ".ts",
+    ".tsx",
+}
+
+
+def release_check_roots(workspace_root: pathlib.Path, *, workspace_wide: bool) -> pathlib.Path:
+    return workspace_root if workspace_wide else workspace_root / ".agents" / "skills" / SKILL_SLUG
+
+
+def append_release_issue(issues: list[dict], *, level: str, path: pathlib.Path, workspace_root: pathlib.Path, kind: str, excerpt: str) -> None:
+    issues.append(
+        {
+            "level": level,
+            "path": relative_path_string(workspace_root, path),
+            "kind": kind,
+            "excerpt": excerpt[:240],
+        }
+    )
+
+
+def looks_like_regex_snippet(text: str) -> bool:
+    return any(token in text for token in ("[^", "\\s", "\\w", "(?:", "[A-Z]", "[a-z]"))
+
+
+def release_check(*, workspace_root: pathlib.Path, skill_only: bool = True, workspace_wide: bool = False) -> dict:
+    if skill_only and workspace_wide:
+        raise CIGUserError(
+            "INVALID_RELEASE_CHECK_SCOPE",
+            "Choose either --skill-only or --workspace-wide, not both.",
+            retryable=True,
+            suggested_next_step="Run release-check with a single scope flag.",
+        )
+    scan_workspace_wide = workspace_wide and not skill_only
+    scan_root = release_check_roots(workspace_root, workspace_wide=scan_workspace_wide)
+    if not scan_root.exists():
+        raise CIGUserError(
+            "RELEASE_CHECK_ROOT_MISSING",
+            f"Release-check root does not exist: {scan_root}",
+            retryable=False,
+        suggested_next_step=f"Run the command inside a workspace that contains the {SKILL_SLUG} skill folder.",
+        )
+
+    issues: list[dict] = []
+    private_name_pattern = re.compile(r"(?i)\b(mainstone\.md|chaos-(?:notes|log)[^/\s]*\.md|private[-_ ]?(?:notes|log|diary)\.md)\b")
+    absolute_path_pattern = re.compile(r"(?i)(?:[A-Z]:\\Users\\[^\s'\"<>]+|/Users/[^\s'\"<>]+|/home/[^\s'\"<>]+|/mnt/data/[^\s'\"<>]+)")
+    temp_path_pattern = re.compile(r"(?i)(?:/tmp/tmp[^\s'\"<>]+|pytest(?:-|/)[^\s'\"<>]+|AppData\\Local\\Temp\\[^\s'\"<>]+)")
+    token_pattern = re.compile(r"(?i)(?:sk-[A-Za-z0-9]{12,}|(?:api[_-]?key|token|secret)[\"'\s:=]{1,4}[A-Za-z0-9_\-]{12,})")
+    stale_stage_pattern = re.compile(r"(?i)\b(?:Stage 13|STAGE13_|Stage 13\.zip|review-2026-04-19)\b")
+
+    for path in sorted(scan_root.rglob("*")):
+        normalized = path.as_posix()
+        if any(part in {"__pycache__", ".git"} for part in path.parts):
+            continue
+        if path.is_dir():
+            continue
+        if path.name == "config.local.json":
+            append_release_issue(
+                issues,
+                level="fail",
+                path=path,
+                workspace_root=workspace_root,
+                kind="private_config",
+                excerpt="config.local.json should not ship in the public skill folder.",
+            )
+        if "/.ai/codegraph/" in normalized or normalized.endswith(("loop-breaker-report.json", "next-action.json", "test-results.json")):
+            append_release_issue(
+                issues,
+                level="fail",
+                path=path,
+                workspace_root=workspace_root,
+                kind="runtime_artifact",
+                excerpt="Runtime .ai/codegraph artifacts must not be included in the published skill folder.",
+            )
+        if path.suffix.lower() not in TEXT_LIKE_SUFFIXES and path.name not in {"SKILL.md", "AGENTS.md", "README.md"}:
+            continue
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        for match in private_name_pattern.finditer(text):
+            if looks_like_regex_snippet(match.group(0)):
+                continue
+            append_release_issue(
+                issues,
+                level="fail",
+                path=path,
+                workspace_root=workspace_root,
+                kind="private_name_or_path",
+                excerpt=match.group(0),
+            )
+        for match in absolute_path_pattern.finditer(text):
+            if looks_like_regex_snippet(match.group(0)):
+                continue
+            append_release_issue(
+                issues,
+                level="fail",
+                path=path,
+                workspace_root=workspace_root,
+                kind="private_name_or_path",
+                excerpt=match.group(0),
+            )
+        for match in temp_path_pattern.finditer(text):
+            if looks_like_regex_snippet(match.group(0)):
+                continue
+            append_release_issue(
+                issues,
+                level="fail",
+                path=path,
+                workspace_root=workspace_root,
+                kind="absolute_temp_path",
+                excerpt=match.group(0),
+            )
+        for match in token_pattern.finditer(text):
+            append_release_issue(
+                issues,
+                level="fail",
+                path=path,
+                workspace_root=workspace_root,
+                kind="secret_like_token",
+                excerpt=match.group(0),
+            )
+        if path.name == "SKILL.md":
+            for match in stale_stage_pattern.finditer(text):
+                append_release_issue(
+                    issues,
+                    level="fail",
+                    path=path,
+                    workspace_root=workspace_root,
+                    kind="stale_stage_text",
+                    excerpt=match.group(0),
+                )
+
+    status = "pass" if not issues else "fail"
+    return {
+        "status": status,
+        "scanned_root": str(scan_root),
+        "issues": issues,
+        "safe_to_publish_skill_folder": status == "pass",
     }
 
 
@@ -998,7 +1155,7 @@ def status_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
         if db_path.exists():
             import sqlite3
 
-            with sqlite3.connect(db_path) as conn:
+            with connect_db(db_path) as conn:
                 function_count = conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'function'").fetchone()[0]
                 file_count = conn.execute("SELECT COUNT(*) FROM nodes WHERE kind = 'file'").fetchone()[0]
                 available_seed_count = function_count if function_count else file_count
@@ -1070,9 +1227,9 @@ def health_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
     if not config_exists:
         issues.append("config_missing")
         quoted_workspace_root = shell_quote_path(workspace_root)
-        fix_commands.append(f"python .agents/skills/code-impact-guardian/cig.py setup --workspace-root {quoted_workspace_root} --project-root .")
+        fix_commands.append(f"python .agents/skills/zhanggong-impact-blueprint/cig.py setup --workspace-root {quoted_workspace_root} --project-root .")
         issues.append("graph_stale")
-        fix_commands.append(f"python .agents/skills/code-impact-guardian/cig.py build --workspace-root {quoted_workspace_root} --full-rebuild")
+        fix_commands.append(f"python .agents/skills/zhanggong-impact-blueprint/cig.py build --workspace-root {quoted_workspace_root} --full-rebuild")
     else:
         config = build_graph.load_config(config_path)
         graph = build_graph.graph_paths(workspace_root, config)
@@ -1083,15 +1240,15 @@ def health_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
         if not graph["db_path"].exists() or graph_freshness != "fresh":
             issues.append("graph_stale")
             quoted_workspace_root = shell_quote_path(workspace_root)
-            fix_commands.append(f"python .agents/skills/code-impact-guardian/cig.py build --workspace-root {quoted_workspace_root} --full-rebuild")
+            fix_commands.append(f"python .agents/skills/zhanggong-impact-blueprint/cig.py build --workspace-root {quoted_workspace_root} --full-rebuild")
 
     last_task_phase = last_task.get("command", "none") if last_task else "none"
     needs_finish = last_task_phase in {"analyze", "report"} and (last_task.get("status") == "success")
     ready = not issues and not needs_finish
     if needs_finish:
         issues.append("finish_pending")
-        fix_commands.insert(0, f"python .agents/skills/code-impact-guardian/cig.py finish --workspace-root {shell_quote_path(workspace_root)} --test-scope targeted")
-    next_command = fix_commands[0] if fix_commands else f"python .agents/skills/code-impact-guardian/cig.py analyze --workspace-root {shell_quote_path(workspace_root)} --changed-file <relative-path>"
+        fix_commands.insert(0, f"python .agents/skills/zhanggong-impact-blueprint/cig.py finish --workspace-root {shell_quote_path(workspace_root)} --test-scope targeted")
+    next_command = fix_commands[0] if fix_commands else f"python .agents/skills/zhanggong-impact-blueprint/cig.py analyze --workspace-root {shell_quote_path(workspace_root)} --changed-file <relative-path>"
 
     return {
         "ready": ready,
@@ -1346,12 +1503,12 @@ def render_integration_block() -> str:
     return "\n".join(
         [
             CIG_MANAGED_BLOCK_START,
-            "## Code Impact Guardian Runtime Contract",
+            f"## {DISPLAY_NAME} Runtime Contract",
             "",
             "Adaptive Verification Orchestrator is active in this repo.",
             "",
-            "- Start with `python .agents/skills/code-impact-guardian/cig.py health`.",
-            "- Run `python .agents/skills/code-impact-guardian/cig.py analyze` before edits.",
+            "- Start with `python .agents/skills/zhanggong-impact-blueprint/cig.py health`.",
+            "- Run `python .agents/skills/zhanggong-impact-blueprint/cig.py analyze` before edits.",
             "- Read `.ai/codegraph/next-action.json` and follow its verification budget.",
             "- Use `finish --test-scope targeted` for low-risk edits, and add `--shadow-full` when you want calibration evidence.",
             "- Prefer this repo-local contract over runtime-private hook/config files.",
@@ -1416,6 +1573,23 @@ def install_integration_pack(*, workspace_root: pathlib.Path, config_path: pathl
     }
 
 
+def atlas_primary_contract_name(view: dict) -> str:
+    primary_contracts = view.get("primary_contracts") or []
+    if primary_contracts:
+        return primary_contracts[0].get("name") or "the linked contract surface"
+    read_first = view.get("read_first") or []
+    if read_first:
+        return read_first[0]
+    return "the linked contract surface"
+
+
+def first_atlas_view(atlas_views: list[dict], view_type: str) -> dict | None:
+    for view in atlas_views:
+        if view.get("view_type") == view_type:
+            return view
+    return None
+
+
 def next_action_payload(
     *,
     workspace_root: pathlib.Path,
@@ -1439,6 +1613,8 @@ def next_action_payload(
     definition = (report_payload or {}).get("definition") or (report_json.get("definition") or {})
     affected_contracts = list((report_payload or {}).get("affected_contracts") or report_json.get("affected_contracts") or [])
     architecture_chains = list((report_payload or {}).get("architecture_chains") or report_json.get("architecture_chains") or [])
+    raw_atlas_views = list((report_payload or {}).get("atlas_views") or report_json.get("atlas_views") or [])
+    atlas_summary = dict((report_payload or {}).get("atlas_summary") or report_json.get("atlas_summary") or {})
     changed_files = list(changed_files_override or (report_payload or {}).get("changed_files") or report_json.get("changed_files") or [])
     change_summary = change_classifier.classify_change(workspace_root, config, changed_files)
     if not changed_files and seed:
@@ -1450,6 +1626,7 @@ def next_action_payload(
         }
     effective_class = change_summary.get("effective_class") or change_summary.get("change_class") or "guarded"
     flow_level = change_summary.get("flow_level") or "full_guardian"
+    atlas_views = raw_atlas_views if effective_class not in {"bypass", "lightweight"} else []
     next_tests = report_brief.get("next_tests", [])
     test_signal = report_brief.get("test_signal", {})
     report_completeness = report_brief.get("report_completeness", {})
@@ -1606,29 +1783,59 @@ def next_action_payload(
         recommended_commands = []
     elif command_name == "analyze":
         recommended_commands.append(
-            f"python .agents/skills/code-impact-guardian/cig.py finish --workspace-root . --test-scope {recommended_test_scope}"
+            f"python .agents/skills/zhanggong-impact-blueprint/cig.py finish --workspace-root . --test-scope {recommended_test_scope}"
         )
         if recommended_test_scope == "targeted":
             recommended_commands.append(
-                "python .agents/skills/code-impact-guardian/cig.py finish --workspace-root . --test-scope configured"
+                "python .agents/skills/zhanggong-impact-blueprint/cig.py finish --workspace-root . --test-scope configured"
             )
         elif recommended_test_scope == "configured" and (dependency_status == "changed" or resolved_escalation_level == "L3"):
             recommended_commands.append(
-                "python .agents/skills/code-impact-guardian/cig.py finish --workspace-root . --test-scope full"
+                "python .agents/skills/zhanggong-impact-blueprint/cig.py finish --workspace-root . --test-scope full"
             )
 
     primary_contract = affected_contracts[0] if affected_contracts else {}
     primary_contract_name = primary_contract.get("name") or "the affected contract"
     primary_contract_kind = primary_contract.get("kind")
+    bilateral_view = first_atlas_view(atlas_views, "bilateral_contract")
+    page_flow_view = first_atlas_view(atlas_views, "page_flow")
+    data_flow_view = first_atlas_view(atlas_views, "data_flow")
+    config_surface_view = first_atlas_view(atlas_views, "config_surface")
+    uncertainty_view = first_atlas_view(atlas_views, "uncertainty")
     if effective_class == "bypass":
         user_message = (
             "This is a non-runtime documentation change. It does not affect the runtime graph, "
             "so you can edit it directly and you do not need the full guardian flow or tests afterward."
         )
-    elif primary_contract_kind == "ipc_channel":
+    elif loop_state.get("repeat_count", 0) >= 3 and bilateral_view:
         user_message = (
-            f"This change does not stop at function calls. It touches IPC channel `{primary_contract_name}`, "
-            "so review both the renderer send side and the main handle side before editing, then run at least configured tests."
+            f"Repeated failure is pointing back to `{atlas_primary_contract_name(bilateral_view)}`. "
+            "Stop local function-only patching, read both sides together in atlas_views, and only then retry."
+        )
+    elif loop_state.get("repeat_count", 0) >= 3 and data_flow_view:
+        user_message = (
+            f"Repeated failure is pointing back to `{atlas_primary_contract_name(data_flow_view)}`. "
+            "Read the full data-flow view before patching again, then use broader verification."
+        )
+    elif bilateral_view:
+        user_message = (
+            f"This change touches `{atlas_primary_contract_name(bilateral_view)}`. "
+            "Review both sides together in atlas_views before editing."
+        )
+    elif page_flow_view:
+        user_message = (
+            f"This change touches page flow `{atlas_primary_contract_name(page_flow_view)}`. "
+            "Review the route, component chain, and flow surface together before editing."
+        )
+    elif data_flow_view:
+        user_message = (
+            f"This change touches data flow `{atlas_primary_contract_name(data_flow_view)}`. "
+            "Review query, mutation, and schema-adjacent paths together before editing."
+        )
+    elif config_surface_view:
+        user_message = (
+            f"This change touches configuration surface `{atlas_primary_contract_name(config_surface_view)}`. "
+            "Check every reader path before editing and keep low-confidence hints separate from proof."
         )
     elif primary_contract_kind == "sql_table":
         user_message = (
@@ -1676,7 +1883,7 @@ def next_action_payload(
             f"This change centers on {', '.join(must_read_first[:2]) or seed}. "
             f"Use {recommended_test_scope} verification next and read the linked files before claiming confidence."
         )
-    if loop_state.get("repeat_count", 0) >= 2 and effective_class in {"guarded", "risk_sensitive"}:
+    if loop_state.get("repeat_count", 0) >= 2 and effective_class in {"guarded", "risk_sensitive"} and not user_message.startswith("This is not the first failed attempt"):
         user_message = "This is not the first failed attempt for this area. " + user_message
 
     if effective_class == "bypass":
@@ -1695,8 +1902,10 @@ def next_action_payload(
         )
         if affected_contracts:
             agent_instruction += " Do not treat function-only impact as complete. Review affected_contracts and architecture_chains before editing."
+        if uncertainty_view:
+            agent_instruction += " Treat uncertainty atlas_views and DEPENDS_ON edges as low-confidence hints, not proof."
         if loop_state.get("repeat_count", 0) >= 3:
-            agent_instruction += " Stop patching the same local area. Read the expanded chain first."
+            agent_instruction += " Stop patching the same local area. Read loop_atlas_views or atlas_views before patching again."
     trust_payload = dict(trust or build_decision.get("trust") or {})
     if resolved_escalation_level == "L3":
         for key, value in list(trust_payload.items()):
@@ -1723,6 +1932,8 @@ def next_action_payload(
         "risk_level": risk_level,
         "affected_contracts": affected_contracts,
         "architecture_chains": architecture_chains,
+        "atlas_views": atlas_views,
+        "atlas_summary": atlas_summary,
         "contract_risk": contract_risk,
         "contract_confidence": contract_confidence,
         "can_edit_now": can_edit_now,
@@ -1898,9 +2109,9 @@ def persist_last_task(
 def context_missing_recovery_commands(workspace_root: pathlib.Path) -> list[str]:
     quoted_workspace_root = shell_quote_path(workspace_root)
     return [
-        f"python .agents/skills/code-impact-guardian/cig.py analyze --workspace-root {quoted_workspace_root} --allow-fallback",
-        f"python .agents/skills/code-impact-guardian/cig.py analyze --workspace-root {quoted_workspace_root} --changed-file <relative-path>",
-        f"python .agents/skills/code-impact-guardian/cig.py analyze --workspace-root {quoted_workspace_root} --patch-file <patch-file>",
+        f"python .agents/skills/zhanggong-impact-blueprint/cig.py analyze --workspace-root {quoted_workspace_root} --allow-fallback",
+        f"python .agents/skills/zhanggong-impact-blueprint/cig.py analyze --workspace-root {quoted_workspace_root} --changed-file <relative-path>",
+        f"python .agents/skills/zhanggong-impact-blueprint/cig.py analyze --workspace-root {quoted_workspace_root} --patch-file <patch-file>",
         f"git -C {quoted_workspace_root} init",
     ]
 
@@ -2419,7 +2630,7 @@ def finalize_after_edit(
             ),
             verification_budget=next_action.get("verification_budget", "B2"),
         )
-        if repair_record["repeat_count"] >= 4:
+        if repair_record["repeat_count"] >= 2:
             repair_escalation.write_loop_breaker_report(
                 workspace_root=workspace_root,
                 changed_files=changed_files,
@@ -2638,6 +2849,7 @@ def success_next_step(command_name: str) -> str:
         "finish": "Review handoff/latest.md and start the next task when ready.",
         "demo": "Inspect the generated graph, report, logs, and handoff artifacts.",
         "export-skill": "Copy the exported package into a new repo and run `cig.py setup` there.",
+        "release-check": "Review any flagged issues before publishing the skill folder.",
         "status": "Inspect the latest error or continue from the suggested next command.",
     }
     return mapping.get(command_name, "Continue with the next workflow step.")
@@ -2731,7 +2943,7 @@ def output_paths_for_command(command_name: str, workspace_root: pathlib.Path, pa
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Unified Code Impact Guardian entry point")
+    parser = argparse.ArgumentParser(description=f"Unified {DISPLAY_NAME} entry point")
     parser.add_argument("--debug", action="store_true", help="Show traceback on failures")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -2753,27 +2965,27 @@ def main() -> int:
 
     doctor_parser = subparsers.add_parser("doctor", help="Run a lightweight workspace health check")
     doctor_parser.add_argument("--workspace-root", default=".")
-    doctor_parser.add_argument("--config", default=".code-impact-guardian/config.json")
+    doctor_parser.add_argument("--config", default=STATE_CONFIG_RELATIVE_PATH)
     doctor_parser.add_argument("--fix-safe", action="store_true")
 
     detect_parser = subparsers.add_parser("detect", help="Detect the active adapter")
     detect_parser.add_argument("--workspace-root", default=".")
-    detect_parser.add_argument("--config", default=".code-impact-guardian/config.json")
+    detect_parser.add_argument("--config", default=STATE_CONFIG_RELATIVE_PATH)
     detect_parser.add_argument("--allow-fallback", action="store_true")
 
     build_parser = subparsers.add_parser("build", help="Build or refresh the graph")
     build_parser.add_argument("--workspace-root", default=".")
-    build_parser.add_argument("--config", default=".code-impact-guardian/config.json")
+    build_parser.add_argument("--config", default=STATE_CONFIG_RELATIVE_PATH)
     build_parser.add_argument("--changed-file", action="append", default=[])
     build_parser.add_argument("--full-rebuild", action="store_true")
 
     seeds_parser = subparsers.add_parser("seeds", help="List current seeds")
     seeds_parser.add_argument("--workspace-root", default=".")
-    seeds_parser.add_argument("--config", default=".code-impact-guardian/config.json")
+    seeds_parser.add_argument("--config", default=STATE_CONFIG_RELATIVE_PATH)
 
     report_parser = subparsers.add_parser("report", help="Generate an impact report")
     report_parser.add_argument("--workspace-root", default=".")
-    report_parser.add_argument("--config", default=".code-impact-guardian/config.json")
+    report_parser.add_argument("--config", default=STATE_CONFIG_RELATIVE_PATH)
     report_parser.add_argument("--task-id", default=None)
     report_parser.add_argument("--seed", default=None)
     report_parser.add_argument("--changed-file", action="append", default=[])
@@ -2786,7 +2998,7 @@ def main() -> int:
 
     analyze_parser = subparsers.add_parser("analyze", help="High-level build + report command with automatic context")
     analyze_parser.add_argument("--workspace-root", default=".")
-    analyze_parser.add_argument("--config", default=".code-impact-guardian/config.json")
+    analyze_parser.add_argument("--config", default=STATE_CONFIG_RELATIVE_PATH)
     analyze_parser.add_argument("--task-id", default=None)
     analyze_parser.add_argument("--seed", default=None)
     analyze_parser.add_argument("--changed-file", action="append", default=[])
@@ -2800,36 +3012,41 @@ def main() -> int:
 
     recommend_tests_parser = subparsers.add_parser("recommend-tests", help="Map directly affected test seeds to executable commands")
     recommend_tests_parser.add_argument("--workspace-root", default=".")
-    recommend_tests_parser.add_argument("--config", default=".code-impact-guardian/config.json")
+    recommend_tests_parser.add_argument("--config", default=STATE_CONFIG_RELATIVE_PATH)
     recommend_tests_parser.add_argument("--task-id", required=True)
 
     classify_parser = subparsers.add_parser("classify-change", help="Classify changed files into flow governance buckets")
     classify_parser.add_argument("--workspace-root", default=".")
-    classify_parser.add_argument("--config", default=".code-impact-guardian/config.json")
+    classify_parser.add_argument("--config", default=STATE_CONFIG_RELATIVE_PATH)
     classify_parser.add_argument("--changed-file", action="append", default=[])
 
     mutation_parser = subparsers.add_parser("assess-mutation", help="Assess move/archive/delete risk for a path")
     mutation_parser.add_argument("--workspace-root", default=".")
-    mutation_parser.add_argument("--config", default=".code-impact-guardian/config.json")
+    mutation_parser.add_argument("--config", default=STATE_CONFIG_RELATIVE_PATH)
     mutation_parser.add_argument("--path", required=True)
     mutation_parser.add_argument("--action", choices=["edit", "move", "archive", "delete", "permanent_delete"], required=True)
 
     loop_status_parser = subparsers.add_parser("loop-status", help="Summarize the current repair loop state")
     loop_status_parser.add_argument("--workspace-root", default=".")
-    loop_status_parser.add_argument("--config", default=".code-impact-guardian/config.json")
+    loop_status_parser.add_argument("--config", default=STATE_CONFIG_RELATIVE_PATH)
 
     diagnose_loop_parser = subparsers.add_parser("diagnose-loop", help="Diagnose the active repair loop for specific files")
     diagnose_loop_parser.add_argument("--workspace-root", default=".")
-    diagnose_loop_parser.add_argument("--config", default=".code-impact-guardian/config.json")
+    diagnose_loop_parser.add_argument("--config", default=STATE_CONFIG_RELATIVE_PATH)
     diagnose_loop_parser.add_argument("--changed-file", action="append", default=[])
+
+    release_check_parser = subparsers.add_parser("release-check", help="Scan the public skill folder for publish-time leaks and runtime artifacts")
+    release_check_parser.add_argument("--workspace-root", default=".")
+    release_check_parser.add_argument("--skill-only", action="store_true")
+    release_check_parser.add_argument("--workspace-wide", action="store_true")
 
     integration_parser = subparsers.add_parser("install-integration-pack", help="Install repo-local runtime integration docs and AGENTS managed block")
     integration_parser.add_argument("--workspace-root", default=".")
-    integration_parser.add_argument("--config", default=".code-impact-guardian/config.json")
+    integration_parser.add_argument("--config", default=STATE_CONFIG_RELATIVE_PATH)
 
     after_parser = subparsers.add_parser("after-edit", help="Refresh graph, report, evidence, and tests after an edit")
     after_parser.add_argument("--workspace-root", default=".")
-    after_parser.add_argument("--config", default=".code-impact-guardian/config.json")
+    after_parser.add_argument("--config", default=STATE_CONFIG_RELATIVE_PATH)
     after_parser.add_argument("--task-id", default=None)
     after_parser.add_argument("--seed", default=None)
     after_parser.add_argument("--changed-file", action="append", default=[])
@@ -2839,7 +3056,7 @@ def main() -> int:
 
     finish_parser = subparsers.add_parser("finish", help="High-level after-edit command that reuses recent analyze context")
     finish_parser.add_argument("--workspace-root", default=".")
-    finish_parser.add_argument("--config", default=".code-impact-guardian/config.json")
+    finish_parser.add_argument("--config", default=STATE_CONFIG_RELATIVE_PATH)
     finish_parser.add_argument("--task-id", default=None)
     finish_parser.add_argument("--seed", default=None)
     finish_parser.add_argument("--changed-file", action="append", default=[])
@@ -2861,18 +3078,18 @@ def main() -> int:
 
     status_parser = subparsers.add_parser("status", help="Show current config, recent runs, and handoff state")
     status_parser.add_argument("--workspace-root", default=".")
-    status_parser.add_argument("--config", default=".code-impact-guardian/config.json")
+    status_parser.add_argument("--config", default=STATE_CONFIG_RELATIVE_PATH)
     status_parser.add_argument("--brief", action="store_true")
     status_parser.add_argument("--full", action="store_true")
 
     health_parser = subparsers.add_parser("health", help="Return a compact machine-readable readiness summary")
     health_parser.add_argument("--workspace-root", default=".")
-    health_parser.add_argument("--config", default=".code-impact-guardian/config.json")
+    health_parser.add_argument("--config", default=STATE_CONFIG_RELATIVE_PATH)
 
     args = parser.parse_args()
     workspace_root = pathlib.Path(getattr(args, "workspace_root", ".")).resolve()
     ensure_runtime_dirs(workspace_root)
-    config_path = pathlib.Path(getattr(args, "config", ".code-impact-guardian/config.json"))
+    config_path = pathlib.Path(getattr(args, "config", STATE_CONFIG_RELATIVE_PATH))
     if not config_path.is_absolute():
         config_path = (workspace_root / config_path).resolve()
 
@@ -3008,7 +3225,7 @@ def main() -> int:
 
         if args.command in {"report", "analyze", "recommend-tests", "after-edit", "finish", "install-integration-pack"}:
             auto_setup_if_missing(workspace_root, config_path)
-        if args.command not in {"status", "health"}:
+        if args.command not in {"status", "health", "release-check"}:
             ensure_config_exists(config_path)
             context = command_context(workspace_root, config_path)
         elif config_path.exists():
@@ -3150,6 +3367,12 @@ def main() -> int:
             payload = repair_escalation.diagnose_loop_payload(
                 workspace_root=workspace_root,
                 changed_files=args.changed_file,
+            )
+        elif args.command == "release-check":
+            payload = release_check(
+                workspace_root=workspace_root,
+                skill_only=bool(args.skill_only or not args.workspace_wide),
+                workspace_wide=bool(args.workspace_wide),
             )
         elif args.command == "install-integration-pack":
             payload = install_integration_pack(
@@ -3312,3 +3535,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

@@ -24,7 +24,7 @@ def copy_example(repo_root: pathlib.Path, example_name: str) -> None:
 class Stage10WorkflowTest(unittest.TestCase):
     def test_skill_structure_and_export_modes_are_normalized(self):
         repo_root = pathlib.Path(__file__).resolve().parents[1]
-        skill_root = repo_root / ".agents" / "skills" / "code-impact-guardian"
+        skill_root = repo_root / ".agents" / "skills" / "zhanggong-impact-blueprint"
         cig_script = skill_root / "cig.py"
 
         self.assertTrue((skill_root / "assets" / "templates" / "AGENTS.template.md").exists())
@@ -55,9 +55,9 @@ class Stage10WorkflowTest(unittest.TestCase):
                 cwd=repo_root,
             )
             self.assertEqual(consumer_payload["mode"], "consumer")
-            self.assertTrue((consumer_export / ".agents" / "skills" / "code-impact-guardian" / "SKILL.md").exists())
+            self.assertTrue((consumer_export / ".agents" / "skills" / "zhanggong-impact-blueprint" / "SKILL.md").exists())
             self.assertTrue((consumer_export / "AGENTS.template.md").exists())
-            self.assertTrue((consumer_export / ".code-impact-guardian" / "config.template.json").exists())
+            self.assertTrue((consumer_export / ".zhanggong-impact-blueprint" / "config.template.json").exists())
             self.assertFalse((consumer_export / ".ai").exists())
             self.assertFalse((consumer_export / "tests").exists())
             self.assertFalse((consumer_export / "examples").exists())
@@ -80,12 +80,12 @@ class Stage10WorkflowTest(unittest.TestCase):
                 cwd=repo_root,
             )
             self.assertEqual(debug_payload["mode"], "debug-bundle")
-            self.assertTrue((debug_export / ".agents" / "skills" / "code-impact-guardian" / "SKILL.md").exists())
+            self.assertTrue((debug_export / ".agents" / "skills" / "zhanggong-impact-blueprint" / "SKILL.md").exists())
             self.assertTrue((debug_export / "debug-bundle" / ".ai" / "codegraph").exists())
 
     def test_python_class_methods_are_seeded_reported_and_finished(self):
         repo_root = pathlib.Path(__file__).resolve().parents[1]
-        cig_script = repo_root / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
+        cig_script = repo_root / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py"
 
         with tempfile.TemporaryDirectory() as tmp:
             single_export = pathlib.Path(tmp) / "single-folder-export"
@@ -121,7 +121,7 @@ class Stage10WorkflowTest(unittest.TestCase):
                 ],
                 cwd=repo,
             )
-            self.assertTrue((repo / ".code-impact-guardian" / "config.json").exists())
+            self.assertTrue((repo / ".zhanggong-impact-blueprint" / "config.json").exists())
             self.assertEqual(analyze_payload["seed"], "fn:src/service.py:UserService.validate_token")
 
             seeds_payload = run_json(
@@ -132,7 +132,7 @@ class Stage10WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(repo),
                     "--config",
-                    str(repo / ".code-impact-guardian" / "config.json"),
+                    str(repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=repo,
             )
@@ -161,7 +161,7 @@ class Stage10WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(repo),
                     "--config",
-                    str(repo / ".code-impact-guardian" / "config.json"),
+                    str(repo / ".zhanggong-impact-blueprint" / "config.json"),
                     "--changed-file",
                     "src/service.py",
                 ],
@@ -172,7 +172,7 @@ class Stage10WorkflowTest(unittest.TestCase):
 
     def test_tsjs_brace_edge_cases_do_not_break_boundaries(self):
         repo_root = pathlib.Path(__file__).resolve().parents[1]
-        cig_script = repo_root / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
+        cig_script = repo_root / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py"
 
         with tempfile.TemporaryDirectory() as tmp:
             single_export = pathlib.Path(tmp) / "single-folder-export"
@@ -216,7 +216,7 @@ class Stage10WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(repo),
                     "--config",
-                    str(repo / ".code-impact-guardian" / "config.json"),
+                    str(repo / ".zhanggong-impact-blueprint" / "config.json"),
                     "--changed-file",
                     "src/brace.ts",
                     "--changed-line",
@@ -233,7 +233,7 @@ class Stage10WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(repo),
                     "--config",
-                    str(repo / ".code-impact-guardian" / "config.json"),
+                    str(repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=repo,
             )
@@ -249,7 +249,7 @@ class Stage10WorkflowTest(unittest.TestCase):
 
     def test_non_git_missing_context_errors_cleanly_and_auto_setup_runs(self):
         repo_root = pathlib.Path(__file__).resolve().parents[1]
-        cig_script = repo_root / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
+        cig_script = repo_root / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py"
 
         with tempfile.TemporaryDirectory() as tmp:
             single_export = pathlib.Path(tmp) / "single-folder-export"
@@ -286,7 +286,7 @@ class Stage10WorkflowTest(unittest.TestCase):
             )
             self.assertNotEqual(analyze_run.returncode, 0)
             self.assertIn("CONTEXT_MISSING", analyze_run.stderr)
-            self.assertTrue((repo / ".code-impact-guardian" / "config.json").exists())
+            self.assertTrue((repo / ".zhanggong-impact-blueprint" / "config.json").exists())
             self.assertTrue((repo / "AGENTS.md").exists())
 
             reports_dir = repo / ".ai" / "codegraph" / "reports"
@@ -302,7 +302,7 @@ class Stage10WorkflowTest(unittest.TestCase):
 
     def test_stale_trust_recent_task_bias_and_test_signal_warnings(self):
         repo_root = pathlib.Path(__file__).resolve().parents[1]
-        cig_script = repo_root / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
+        cig_script = repo_root / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py"
 
         with tempfile.TemporaryDirectory() as tmp:
             single_export = pathlib.Path(tmp) / "single-folder-export"
@@ -349,7 +349,7 @@ class Stage10WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(ambiguous_repo),
                     "--config",
-                    str(ambiguous_repo / ".code-impact-guardian" / "config.json"),
+                    str(ambiguous_repo / ".zhanggong-impact-blueprint" / "config.json"),
                     "--changed-file",
                     "src/auth.ts",
                     "--changed-line",
@@ -372,7 +372,7 @@ class Stage10WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(ambiguous_repo),
                     "--config",
-                    str(ambiguous_repo / ".code-impact-guardian" / "config.json"),
+                    str(ambiguous_repo / ".zhanggong-impact-blueprint" / "config.json"),
                     "--changed-file",
                     "src/session.ts",
                     "--changed-line",
@@ -399,7 +399,7 @@ class Stage10WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(ambiguous_repo),
                     "--config",
-                    str(ambiguous_repo / ".code-impact-guardian" / "config.json"),
+                    str(ambiguous_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=ambiguous_repo,
             )
@@ -421,7 +421,7 @@ class Stage10WorkflowTest(unittest.TestCase):
                 ],
                 cwd=generic_repo,
             )
-            config_path = generic_repo / ".code-impact-guardian" / "config.json"
+            config_path = generic_repo / ".zhanggong-impact-blueprint" / "config.json"
             config_payload = json.loads(config_path.read_text(encoding="utf-8"))
             config_payload["generic"]["test_command"] = [sys.executable, "-c", "print('generic ok')"]
             config_path.write_text(json.dumps(config_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -466,3 +466,4 @@ class Stage10WorkflowTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

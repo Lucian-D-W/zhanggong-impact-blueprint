@@ -14,11 +14,11 @@
 
 **Files:**
 - Read: `AGENTS.md`
-- Read: `.agents/skills/code-impact-guardian/SKILL.md`
-- Read: `.agents/skills/code-impact-guardian/cig.py`
-- Read: `.agents/skills/code-impact-guardian/scripts/runtime_support.py`
-- Read: `.agents/skills/code-impact-guardian/scripts/context_inference.py`
-- Read: `.agents/skills/code-impact-guardian/scripts/build_graph.py`
+- Read: `.agents/skills/zhanggong-impact-blueprint/SKILL.md`
+- Read: `.agents/skills/zhanggong-impact-blueprint/cig.py`
+- Read: `.agents/skills/zhanggong-impact-blueprint/scripts/runtime_support.py`
+- Read: `.agents/skills/zhanggong-impact-blueprint/scripts/context_inference.py`
+- Read: `.agents/skills/zhanggong-impact-blueprint/scripts/build_graph.py`
 - Modify later: runtime artifacts under `.ai/codegraph/`
 
 - [ ] **Step 1: Capture a clean pre-change baseline**
@@ -40,8 +40,8 @@ Expected:
 Run:
 
 ```powershell
-python .agents/skills/code-impact-guardian/scripts/build_graph.py --workspace-root . --config .code-impact-guardian/config.json
-python .agents/skills/code-impact-guardian/scripts/generate_report.py --workspace-root . --config .code-impact-guardian/config.json --task-id stage11-followup-plan --seed fn:src/app.py:login
+python .agents/skills/zhanggong-impact-blueprint/scripts/build_graph.py --workspace-root . --config .zhanggong-impact-blueprint/config.json
+python .agents/skills/zhanggong-impact-blueprint/scripts/generate_report.py --workspace-root . --config .zhanggong-impact-blueprint/config.json --task-id stage11-followup-plan --seed fn:src/app.py:login
 ```
 
 Expected:
@@ -154,9 +154,9 @@ Expected:
 ### Task 4: Implement Workspace-Aware Recovery Commands
 
 **Files:**
-- Modify: `.agents/skills/code-impact-guardian/cig.py`
-- Modify: `.agents/skills/code-impact-guardian/scripts/runtime_support.py`
-- Modify: `.agents/skills/code-impact-guardian/scripts/build_graph.py`
+- Modify: `.agents/skills/zhanggong-impact-blueprint/cig.py`
+- Modify: `.agents/skills/zhanggong-impact-blueprint/scripts/runtime_support.py`
+- Modify: `.agents/skills/zhanggong-impact-blueprint/scripts/build_graph.py`
 
 - [ ] **Step 1: Add one shared formatter for direct-execution recovery commands**
 
@@ -197,8 +197,8 @@ Expected:
 ### Task 5: Implement Delete-Aware Context Inference
 
 **Files:**
-- Modify: `.agents/skills/code-impact-guardian/scripts/context_inference.py`
-- Modify: `.agents/skills/code-impact-guardian/cig.py`
+- Modify: `.agents/skills/zhanggong-impact-blueprint/scripts/context_inference.py`
+- Modify: `.agents/skills/zhanggong-impact-blueprint/cig.py`
 
 - [ ] **Step 1: Extend unified-diff parsing to retain deleted paths**
 
@@ -262,7 +262,7 @@ Expected:
 Run:
 
 ```powershell
-python .agents/skills/code-impact-guardian/scripts/after_edit_update.py --workspace-root . --config .code-impact-guardian/config.json --task-id stage11-followup-plan --seed fn:src/app.py:login --changed-file .agents/skills/code-impact-guardian/cig.py
+python .agents/skills/zhanggong-impact-blueprint/scripts/after_edit_update.py --workspace-root . --config .zhanggong-impact-blueprint/config.json --task-id stage11-followup-plan --seed fn:src/app.py:login --changed-file .agents/skills/zhanggong-impact-blueprint/cig.py
 ```
 
 Expected:
@@ -276,3 +276,4 @@ Checklist:
 - delete-only diffs no longer collapse to `CONTEXT_MISSING`
 - no stage10/stage11 regression
 - no unrelated refactor slipped in
+

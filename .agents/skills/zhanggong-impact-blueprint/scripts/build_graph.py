@@ -23,6 +23,7 @@ from adapters import (
     rule_node_id,
 )
 from doc_sources import collect_rule_documents_from_sources
+from db_support import connect_db
 from incremental_refresh import load_manifest, refresh_plan, save_manifest
 from runtime_support import CIGUserError, shell_quote_path
 from trust_policy import apply_shadow_verification_result, build_decision
@@ -76,7 +77,7 @@ def load_config(config_path: pathlib.Path) -> dict:
 
 
 def schema_path_for(workspace_root: pathlib.Path) -> pathlib.Path:
-    return workspace_root / ".code-impact-guardian" / "schema.sql"
+    return workspace_root / ".zhanggong-impact-blueprint" / "schema.sql"
 
 
 def graph_paths(workspace_root: pathlib.Path, config: dict) -> dict:
@@ -122,7 +123,7 @@ def get_git_context(workspace_root: pathlib.Path) -> dict:
 def ensure_schema(db_path: pathlib.Path, schema_path: pathlib.Path) -> None:
     desired_schema_version = "4"
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(db_path) as conn:
+    with connect_db(db_path) as conn:
         needs_reset = False
         with contextlib.suppress(sqlite3.DatabaseError, sqlite3.OperationalError):
             row = conn.execute(
@@ -274,7 +275,7 @@ def build_lock(lock_path: pathlib.Path, workspace_root: pathlib.Path):
             retryable=True,
             suggested_next_step="Check the current build status and only remove the lock after confirming no active build process is running.",
             recovery_commands=[
-                f"python .agents/skills/code-impact-guardian/cig.py status --workspace-root {shell_quote_path(workspace_root)}",
+                f"python .agents/skills/zhanggong-impact-blueprint/cig.py status --workspace-root {shell_quote_path(workspace_root)}",
                 f"rm {shell_quote_path(lock_path)}",
             ],
         ) from exc
@@ -406,7 +407,7 @@ def record_task_run(
     attrs: dict | None = None,
 ) -> str:
     task_run_id = f"taskrun-{uuid.uuid4().hex[:12]}"
-    with sqlite3.connect(db_path) as conn:
+    with connect_db(db_path) as conn:
         conn.execute(
             """
             INSERT INTO task_runs (
@@ -520,7 +521,7 @@ def write_edit_round(
     summary: dict,
 ) -> str:
     edit_round_id = f"editround-{uuid.uuid4().hex[:12]}"
-    with sqlite3.connect(db_path) as conn:
+    with connect_db(db_path) as conn:
         round_index = next_edit_round_index(conn, task_id)
         conn.execute(
             """
@@ -545,7 +546,7 @@ def write_edit_round(
 
 
 def write_file_diffs(db_path: pathlib.Path, edit_round_id: str, file_diffs: list[dict]) -> None:
-    with sqlite3.connect(db_path) as conn:
+    with connect_db(db_path) as conn:
         conn.executemany(
             """
             INSERT INTO file_diffs (
@@ -569,7 +570,7 @@ def write_file_diffs(db_path: pathlib.Path, edit_round_id: str, file_diffs: list
 
 
 def write_symbol_diffs(db_path: pathlib.Path, edit_round_id: str, symbol_diffs: list[dict]) -> None:
-    with sqlite3.connect(db_path) as conn:
+    with connect_db(db_path) as conn:
         conn.executemany(
             """
             INSERT INTO symbol_diffs (
@@ -1198,7 +1199,7 @@ def _build_graph_unlocked(*, workspace_root: pathlib.Path, config_path: pathlib.
     build_decision_path.write_text(json.dumps(decision, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     if plan["build_mode"] == "reused" and paths["db_path"].exists():
-        with sqlite3.connect(paths["db_path"]) as conn:
+        with connect_db(paths["db_path"]) as conn:
             summary = summary_from_db(
                 conn=conn,
                 workspace_root=workspace_root,
@@ -1239,7 +1240,7 @@ def _build_graph_unlocked(*, workspace_root: pathlib.Path, config_path: pathlib.
             partial_nodes: dict[str, Node] = {}
             partial_edges: dict[tuple[str, str, str], Edge] = {}
             partial_evidence: dict[str, Evidence] = {}
-            with sqlite3.connect(paths["db_path"]) as conn:
+            with connect_db(paths["db_path"]) as conn:
                 if has_external_incoming_edges(conn, changed_files):
                     raise RuntimeError("external direct edges target the changed files")
                 existing_nodes = fetch_existing_nodes(conn)
@@ -1283,12 +1284,11 @@ def _build_graph_unlocked(*, workspace_root: pathlib.Path, config_path: pathlib.
             )
             partial_nodes = {node_id: node for node_id, node in combined_nodes.items() if node.path in set(changed_files)}
 
-            with sqlite3.connect(paths["db_path"]) as conn:
+            with connect_db(paths["db_path"]) as conn:
                 delete_paths_from_graph(conn, changed_files)
                 upsert_nodes(conn, list(partial_nodes.values()))
                 upsert_evidence(conn, list(partial_evidence.values()))
                 upsert_edges(conn, list(partial_edges.values()))
-                conn.commit()
                 summary = summary_from_db(
                     conn=conn,
                     workspace_root=workspace_root,
@@ -1315,7 +1315,7 @@ def _build_graph_unlocked(*, workspace_root: pathlib.Path, config_path: pathlib.
                     adapter_order=adapter_order,
                 )
                 current_signature = None
-                with sqlite3.connect(paths["db_path"]) as conn:
+                with connect_db(paths["db_path"]) as conn:
                     current_signature = {
                         "node_ids": sorted(row[0] for row in conn.execute("SELECT node_id FROM nodes").fetchall()),
                         "edges": sorted((row[0], row[1], row[2]) for row in conn.execute("SELECT src_id, edge_type, dst_id FROM edges").fetchall()),
@@ -1364,13 +1364,12 @@ def _build_graph_unlocked(*, workspace_root: pathlib.Path, config_path: pathlib.
     )
     warnings.extend(full_warnings)
 
-    with sqlite3.connect(paths["db_path"]) as conn:
+    with connect_db(paths["db_path"]) as conn:
         clear_graph_tables(conn)
         upsert_nodes(conn, list(all_nodes.values()))
         upsert_evidence(conn, list(all_evidence.values()))
         upsert_edges(conn, list(all_edges.values()))
         upsert_rule_documents(conn, rule_docs)
-        conn.commit()
         summary = summary_from_db(
             conn=conn,
             workspace_root=workspace_root,
@@ -1422,7 +1421,7 @@ def build_graph(*, workspace_root: pathlib.Path, config_path: pathlib.Path, chan
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build or refresh the direct-edge graph")
     parser.add_argument("--workspace-root", default=".", help="Workspace root")
-    parser.add_argument("--config", default=".code-impact-guardian/config.json", help="Config path")
+    parser.add_argument("--config", default=".zhanggong-impact-blueprint/config.json", help="Config path")
     args = parser.parse_args()
     workspace_root = pathlib.Path(args.workspace_root).resolve()
     config_path = pathlib.Path(args.config)
@@ -1435,3 +1434,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

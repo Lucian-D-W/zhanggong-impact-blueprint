@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 import build_graph
 import generate_report
 from adapters import adapter_coverage_adapter, adapter_test_command, detect_language_adapter
+from db_support import connect_db
 from parser_backends import v8_relative_path
 from runtime_support import append_jsonl, read_jsonl, runtime_paths
 
@@ -763,7 +764,7 @@ def record_test_run(*, workspace_root: pathlib.Path, config_path: pathlib.Path, 
     config = build_graph.load_config(config_path)
     paths = build_graph.graph_paths(workspace_root, config)
     run_id = f"testrun-{uuid.uuid4().hex[:12]}"
-    with sqlite3.connect(paths["db_path"]) as conn:
+    with connect_db(paths["db_path"]) as conn:
         conn.execute(
             """
             INSERT INTO test_runs (
@@ -794,7 +795,6 @@ def record_test_run(*, workspace_root: pathlib.Path, config_path: pathlib.Path, 
                 ),
             ),
         )
-        conn.commit()
     return run_id
 
 
@@ -804,7 +804,7 @@ def import_coverage(*, workspace_root: pathlib.Path, config_path: pathlib.Path, 
     config = build_graph.load_config(config_path)
     paths = build_graph.graph_paths(workspace_root, config)
     payload = json.loads((workspace_root / test_summary["coverage_path"]).read_text(encoding="utf-8"))
-    with sqlite3.connect(paths["db_path"]) as conn:
+    with connect_db(paths["db_path"]) as conn:
         file_entries = payload.get("files", {}) or payload.get("summary", {}).get("files", {})
         for file_path, raw_data in file_entries.items():
             node_id = build_graph.file_node_id(file_path)
@@ -822,7 +822,6 @@ def import_coverage(*, workspace_root: pathlib.Path, config_path: pathlib.Path, 
                     json.dumps(raw_data, ensure_ascii=False),
                 ),
             )
-        conn.commit()
 
 
 def relation_diff(before: dict | None, after: dict | None) -> dict:
@@ -1150,13 +1149,13 @@ def after_edit_update(
 
     before_snapshot = {"files": {}, "functions_by_file": {}, "relations": {}}
     if paths["db_path"].exists():
-        with sqlite3.connect(paths["db_path"]) as conn:
+        with connect_db(paths["db_path"]) as conn:
             before_snapshot = build_graph.snapshot_for_files(conn, changed_files)
             before_snapshot["relations"][seed] = build_graph.relation_snapshot(conn, seed)
 
     graph_summary = build_graph.build_graph(workspace_root=workspace_root, config_path=config_path, changed_files=changed_files)
 
-    with sqlite3.connect(paths["db_path"]) as conn:
+    with connect_db(paths["db_path"]) as conn:
         after_snapshot = build_graph.snapshot_for_files(conn, changed_files)
         after_snapshot["relations"][seed] = build_graph.relation_snapshot(conn, seed)
 
@@ -1272,7 +1271,7 @@ def after_edit_update(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Refresh graph and evidence after a code edit")
     parser.add_argument("--workspace-root", default=".", help="Workspace root")
-    parser.add_argument("--config", default=".code-impact-guardian/config.json", help="Config path")
+    parser.add_argument("--config", default=".zhanggong-impact-blueprint/config.json", help="Config path")
     parser.add_argument("--task-id", required=True, help="Task identifier")
     parser.add_argument("--seed", required=True, help="Seed node id")
     parser.add_argument("--changed-file", action="append", default=[], help="Changed file relative to the configured project root")
@@ -1296,3 +1295,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

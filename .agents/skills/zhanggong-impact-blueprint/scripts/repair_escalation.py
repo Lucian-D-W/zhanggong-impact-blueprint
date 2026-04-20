@@ -8,6 +8,8 @@ import re
 import sqlite3
 from typing import Any
 
+import generate_report
+from db_support import connect_db
 from runtime_support import append_jsonl, read_json, read_jsonl, runtime_paths, utc_now, write_json
 
 
@@ -202,7 +204,7 @@ def loop_status_payload(
         "last_failed_tests": loop["last_failed_tests"],
         "recommended_escalation": loop["recommended_escalation"],
         "recommended_command": (
-            "python .agents/skills/code-impact-guardian/cig.py analyze "
+            "python .agents/skills/zhanggong-impact-blueprint/cig.py analyze "
             f"--workspace-root . --changed-file {command_target} --escalation-level {loop['recommended_escalation']}"
         ),
     }
@@ -212,7 +214,7 @@ def _node_details_map(db_path: pathlib.Path, node_ids: set[str]) -> dict[str, di
     if not db_path.exists() or not node_ids:
         return {}
     placeholders = ",".join("?" for _ in node_ids)
-    with sqlite3.connect(db_path) as conn:
+    with connect_db(db_path) as conn:
         rows = conn.execute(
             f"SELECT node_id, kind, path, symbol FROM nodes WHERE node_id IN ({placeholders})",
             tuple(sorted(node_ids)),
@@ -514,6 +516,55 @@ def load_report_json(workspace_root: pathlib.Path, report_payload: dict | None =
     return {}
 
 
+def synthesize_uncertainty_view(report_json: dict | None) -> dict:
+    read_first = list((report_json or {}).get("key_evidence_paths") or [])
+    uncertainties = [
+        "Repeated failure means the local patch may still be missing wider contract context.",
+    ]
+    if ((report_json or {}).get("report_completeness") or {}).get("level") == "low":
+        uncertainties.append("Report completeness is low for this seed, so keep broader context in play before retrying.")
+    return {
+        "view_type": "uncertainty",
+        "title": "Uncertainty view",
+        "why_this_view": "Repeated failure means low-confidence hints and incomplete context should be reviewed before another patch.",
+        "confidence": "low",
+        "primary_contracts": [],
+        "read_first": read_first,
+        "supporting_edges": [],
+        "uncertainties": uncertainties,
+    }
+
+
+def loop_atlas_views_payload(report_json: dict | None, repeat_count: int) -> list[dict]:
+    report_json = report_json or {}
+    atlas_views = list(report_json.get("atlas_views") or [])
+    if not atlas_views:
+        atlas_views, _ = generate_report.summarize_contracts_for_agent(
+            list(report_json.get("affected_contracts") or []),
+            list(report_json.get("architecture_chains") or []),
+            report_completeness=report_json.get("report_completeness"),
+            full_contracts_path=report_json.get("json_report_path") or report_json.get("report_path") or ".ai/codegraph/reports",
+        )
+    selected: list[dict] = []
+    if repeat_count >= 2:
+        for view in atlas_views:
+            if view.get("view_type") == "uncertainty":
+                continue
+            selected.append(
+                {
+                    **view,
+                    "why_this_view": (
+                        "Repeated failure suggests a local patch is missing wider contract impact. "
+                        + view.get("why_this_view", "")
+                    ).strip(),
+                }
+            )
+    if repeat_count >= 3:
+        uncertainty_view = next((view for view in atlas_views if view.get("view_type") == "uncertainty"), None)
+        selected.append(uncertainty_view or synthesize_uncertainty_view(report_json))
+    return selected
+
+
 def write_loop_breaker_report(
     *,
     workspace_root: pathlib.Path,
@@ -531,6 +582,7 @@ def write_loop_breaker_report(
     )
     primary_path = changed_files[0] if changed_files else "<path>"
     architecture_chains = list((report_json or {}).get("architecture_chains") or [])
+    loop_atlas_views = loop_atlas_views_payload(report_json, repeat_count)
     payload = {
         "failure_signature": failure_signature_value,
         "repeat_count": repeat_count,
@@ -551,14 +603,19 @@ def write_loop_breaker_report(
         },
         "contract_chain": chain.get("structured_contract_chain", {}),
         "architecture_chains": architecture_chains if level == "L3" else [],
+        "loop_atlas_views": loop_atlas_views,
         "must_read_first": chain["must_read_first"],
         "recommended_commands": [
-            "python .agents/skills/code-impact-guardian/cig.py analyze "
+            "python .agents/skills/zhanggong-impact-blueprint/cig.py analyze "
             f"--workspace-root . --changed-file {primary_path} --escalation-level {level}",
-            "python .agents/skills/code-impact-guardian/cig.py finish --workspace-root . --test-scope full",
+            "python .agents/skills/zhanggong-impact-blueprint/cig.py finish --workspace-root . --test-scope full",
         ],
         "agent_instruction": "Do not continue local patching until the expanded chain is reviewed.",
     }
+    if repeat_count >= 4:
+        payload["stop_local_patching_reason"] = (
+            "same failure signature repeated; local function-only patching may be missing architecture contract impact"
+        )
     write_json(runtime_paths(workspace_root)["loop_breaker_report"], payload)
     return payload
 
@@ -586,3 +643,4 @@ def diagnose_loop_payload(
         "contract_chain": chain.get("structured_contract_chain", {}),
         "must_read_first": chain["must_read_first"],
     }
+

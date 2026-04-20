@@ -1,11 +1,11 @@
-# Code Impact Guardian Quickstart
+# ZG Impact Blueprint Quickstart
 
 ## Shortest path
 
 ```bash
-python .agents/skills/code-impact-guardian/cig.py setup --project-root .
-python .agents/skills/code-impact-guardian/cig.py analyze
-python .agents/skills/code-impact-guardian/cig.py finish
+python .agents/skills/zhanggong-impact-blueprint/cig.py setup --project-root .
+python .agents/skills/zhanggong-impact-blueprint/cig.py analyze
+python .agents/skills/zhanggong-impact-blueprint/cig.py finish
 ```
 
 If the repo has not been initialized yet, `analyze` will auto-run the minimal
@@ -16,8 +16,8 @@ These high-level commands automatically create:
 
 - `AGENTS.md`
 - `.gitignore`
-- `.code-impact-guardian/config.json`
-- `.code-impact-guardian/schema.sql`
+- `.zhanggong-impact-blueprint/config.json`
+- `.zhanggong-impact-blueprint/schema.sql`
 - `QUICKSTART.md`
 - `TROUBLESHOOTING.md`
 - `CONSUMER_GUIDE.md`
@@ -27,25 +27,25 @@ These high-level commands automatically create:
 Python:
 
 ```bash
-python .agents/skills/code-impact-guardian/cig.py setup --profile python-basic --project-root .
-python .agents/skills/code-impact-guardian/cig.py analyze
-python .agents/skills/code-impact-guardian/cig.py finish
+python .agents/skills/zhanggong-impact-blueprint/cig.py setup --profile python-basic --project-root .
+python .agents/skills/zhanggong-impact-blueprint/cig.py analyze
+python .agents/skills/zhanggong-impact-blueprint/cig.py finish
 ```
 
 TS/JS:
 
 ```bash
-python .agents/skills/code-impact-guardian/cig.py setup --profile node-cli --project-root .
-python .agents/skills/code-impact-guardian/cig.py analyze
-python .agents/skills/code-impact-guardian/cig.py finish
+python .agents/skills/zhanggong-impact-blueprint/cig.py setup --profile node-cli --project-root .
+python .agents/skills/zhanggong-impact-blueprint/cig.py analyze
+python .agents/skills/zhanggong-impact-blueprint/cig.py finish
 ```
 
 TS/JS + PostgreSQL:
 
 ```bash
-python .agents/skills/code-impact-guardian/cig.py setup --profile node-cli --with sql-postgres --project-root .
-python .agents/skills/code-impact-guardian/cig.py analyze
-python .agents/skills/code-impact-guardian/cig.py finish
+python .agents/skills/zhanggong-impact-blueprint/cig.py setup --profile node-cli --with sql-postgres --project-root .
+python .agents/skills/zhanggong-impact-blueprint/cig.py analyze
+python .agents/skills/zhanggong-impact-blueprint/cig.py finish
 ```
 
 ## Output modes
@@ -71,13 +71,13 @@ python .agents/skills/code-impact-guardian/cig.py finish
 Low-level commands remain available for advanced use:
 
 ```bash
-python .agents/skills/code-impact-guardian/cig.py init
-python .agents/skills/code-impact-guardian/cig.py doctor
-python .agents/skills/code-impact-guardian/cig.py detect
-python .agents/skills/code-impact-guardian/cig.py build
-python .agents/skills/code-impact-guardian/cig.py seeds
-python .agents/skills/code-impact-guardian/cig.py report --seed <seed>
-python .agents/skills/code-impact-guardian/cig.py after-edit --seed <seed> --changed-file <relative-path>
+python .agents/skills/zhanggong-impact-blueprint/cig.py init
+python .agents/skills/zhanggong-impact-blueprint/cig.py doctor
+python .agents/skills/zhanggong-impact-blueprint/cig.py detect
+python .agents/skills/zhanggong-impact-blueprint/cig.py build
+python .agents/skills/zhanggong-impact-blueprint/cig.py seeds
+python .agents/skills/zhanggong-impact-blueprint/cig.py report --seed <seed>
+python .agents/skills/zhanggong-impact-blueprint/cig.py after-edit --seed <seed> --changed-file <relative-path>
 ```
 
 `setup`, `health`, `analyze`, and `finish` remain the preferred daily-use path.
@@ -95,4 +95,5 @@ python .agents/skills/code-impact-guardian/cig.py after-edit --seed <seed> --cha
 - Next action: `.ai/codegraph/next-action.json`
 - Contract chains: read `affected_contracts` and `architecture_chains` inside
   the report JSON and `next-action.json`
-- Health: `python .agents/skills/code-impact-guardian/cig.py health --workspace-root .`
+- Health: `python .agents/skills/zhanggong-impact-blueprint/cig.py health --workspace-root .`
+

@@ -5,6 +5,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+from contextlib import closing
 
 from tests.test_stage11_workflow import build_repo, config_path, setup_repo, write_python_repo_with_dependencies, write_python_repo_with_two_tests, write_ts_repo
 from tests.test_stage13_workflow import analyze_repo, recommend_tests
@@ -93,10 +94,10 @@ class Stage14WorkflowTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.repo_root = pathlib.Path(__file__).resolve().parents[1]
-        cls.cig_script = cls.repo_root / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
+        cls.cig_script = cls.repo_root / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py"
         spec = importlib.util.spec_from_file_location("stage14_cig_module", cls.cig_script)
         if spec is None or spec.loader is None:
-            raise RuntimeError("Unable to load Code Impact Guardian module for Stage 14 tests")
+                raise RuntimeError("Unable to load ZG Impact Blueprint module for Stage 14 tests")
         cls.cig_module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(cls.cig_module)
         cls.export_tmp = tempfile.TemporaryDirectory()
@@ -326,7 +327,7 @@ class Stage14WorkflowTest(unittest.TestCase):
 
             build_repo(repo_cig, repo_root)
             db_path = repo_root / ".ai" / "codegraph" / "codegraph.db"
-            with sqlite3.connect(db_path) as conn:
+            with closing(sqlite3.connect(db_path)) as conn:
                 node_kinds = {row[0] for row in conn.execute("SELECT DISTINCT kind FROM nodes").fetchall()}
                 edge_types = {row[0] for row in conn.execute("SELECT DISTINCT edge_type FROM edges").fetchall()}
 
@@ -356,7 +357,7 @@ class Stage14WorkflowTest(unittest.TestCase):
             self.assertIn("budget_reason_codes", next_action)
 
     def test_skill_doc_mentions_verification_budget_shadow_full_and_runtime_integration_pack(self):
-        skill_path = pathlib.Path(__file__).resolve().parents[1] / ".agents" / "skills" / "code-impact-guardian" / "SKILL.md"
+        skill_path = pathlib.Path(__file__).resolve().parents[1] / ".agents" / "skills" / "zhanggong-impact-blueprint" / "SKILL.md"
         skill_text = skill_path.read_text(encoding="utf-8")
 
         self.assertIn("verification budget", skill_text.lower())
@@ -366,3 +367,4 @@ class Stage14WorkflowTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

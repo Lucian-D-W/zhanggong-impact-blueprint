@@ -16,7 +16,7 @@ def copy_benchmark(repo_root: pathlib.Path, benchmark_name: str) -> None:
 
 def git_baseline(repo_root: pathlib.Path) -> None:
     subprocess.run(["git", "init"], cwd=repo_root, check=True, capture_output=True, text=True)
-    subprocess.run(["git", "config", "user.name", "Code Impact Guardian"], cwd=repo_root, check=True)
+    subprocess.run(["git", "config", "user.name", "ZG Impact Blueprint"], cwd=repo_root, check=True)
     subprocess.run(["git", "config", "user.email", "cig@example.invalid"], cwd=repo_root, check=True)
     subprocess.run(["git", "config", "core.autocrlf", "false"], cwd=repo_root, check=True)
     subprocess.run(["git", "add", "."], cwd=repo_root, check=True)
@@ -26,7 +26,7 @@ def git_baseline(repo_root: pathlib.Path) -> None:
 class Stage9WorkflowTest(unittest.TestCase):
     def test_context_inference_and_finish_reduce_manual_inputs(self):
         repo_root = pathlib.Path(__file__).resolve().parents[1]
-        cig_script = repo_root / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
+        cig_script = repo_root / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py"
 
         with tempfile.TemporaryDirectory() as tmp:
             single_export = pathlib.Path(tmp) / "single-folder-export"
@@ -74,7 +74,7 @@ class Stage9WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(python_repo),
                     "--config",
-                    str(python_repo / ".code-impact-guardian" / "config.json"),
+                    str(python_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=python_repo,
             )
@@ -97,7 +97,7 @@ class Stage9WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(python_repo),
                     "--config",
-                    str(python_repo / ".code-impact-guardian" / "config.json"),
+                    str(python_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=python_repo,
             )
@@ -107,7 +107,7 @@ class Stage9WorkflowTest(unittest.TestCase):
 
     def test_benchmark_repos_cover_tsjs_react_sql_and_generated_noise(self):
         repo_root = pathlib.Path(__file__).resolve().parents[1]
-        cig_script = repo_root / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
+        cig_script = repo_root / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py"
 
         with tempfile.TemporaryDirectory() as tmp:
             single_export = pathlib.Path(tmp) / "single-folder-export"
@@ -154,7 +154,7 @@ class Stage9WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(tsjs_repo),
                     "--config",
-                    str(tsjs_repo / ".code-impact-guardian" / "config.json"),
+                    str(tsjs_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=tsjs_repo,
             )
@@ -192,7 +192,7 @@ class Stage9WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(react_sql_repo),
                     "--config",
-                    str(react_sql_repo / ".code-impact-guardian" / "config.json"),
+                    str(react_sql_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=react_sql_repo,
             )
@@ -232,7 +232,7 @@ class Stage9WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(noise_repo),
                     "--config",
-                    str(noise_repo / ".code-impact-guardian" / "config.json"),
+                    str(noise_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=noise_repo,
             )
@@ -241,7 +241,7 @@ class Stage9WorkflowTest(unittest.TestCase):
 
     def test_patch_file_ambiguity_surfaces_candidates_and_recovery_files(self):
         repo_root = pathlib.Path(__file__).resolve().parents[1]
-        cig_script = repo_root / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
+        cig_script = repo_root / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py"
 
         with tempfile.TemporaryDirectory() as tmp:
             single_export = pathlib.Path(tmp) / "single-folder-export"
@@ -295,7 +295,7 @@ class Stage9WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(repo),
                     "--config",
-                    str(repo / ".code-impact-guardian" / "config.json"),
+                    str(repo / ".zhanggong-impact-blueprint" / "config.json"),
                     "--patch-file",
                     str(patch_path),
                 ],
@@ -317,3 +317,4 @@ class Stage9WorkflowTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

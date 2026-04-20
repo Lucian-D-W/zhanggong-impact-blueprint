@@ -4,6 +4,7 @@ import pathlib
 import sqlite3
 
 from build_graph import graph_paths, load_config
+from db_support import connect_db
 from recent_task import read_last_task
 
 
@@ -152,7 +153,7 @@ def rank_seed_candidates(*, workspace_root: pathlib.Path, config_path: pathlib.P
     if not db_path.exists():
         return {"selected_seed": None, "top_candidates": [], "confidence": 0.0, "reason": "graph database missing"}
 
-    with sqlite3.connect(db_path) as conn:
+    with connect_db(db_path) as conn:
         candidates = function_candidates_for_files(conn, changed_files)
         if not candidates:
             candidates = file_candidates_for_files(conn, changed_files)

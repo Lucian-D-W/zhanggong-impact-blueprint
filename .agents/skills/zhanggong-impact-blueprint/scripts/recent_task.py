@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime, timezone
 
 from build_graph import graph_paths, load_config
+from db_support import connect_db
 
 
 def utc_now() -> str:
@@ -50,7 +51,7 @@ def seed_candidates_for_changed_files(workspace_root: pathlib.Path, config_path:
     if not normalized or not db_path.exists():
         return []
     placeholders = ",".join("?" for _ in normalized)
-    with sqlite3.connect(db_path) as conn:
+    with connect_db(db_path) as conn:
         function_rows = conn.execute(
             f"""
             SELECT node_id, kind, path, symbol, attrs_json
@@ -97,7 +98,7 @@ def latest_seed_candidates(workspace_root: pathlib.Path, config_path: pathlib.Pa
     db_path = graph_paths(workspace_root, config)["db_path"]
     if not db_path.exists():
         return []
-    with sqlite3.connect(db_path) as conn:
+    with connect_db(db_path) as conn:
         function_rows = conn.execute(
             """
             SELECT node_id, kind, path, symbol, attrs_json

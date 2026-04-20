@@ -1,13 +1,27 @@
 ---
-name: code-impact-guardian
+name: zhanggong-impact-blueprint
 description: Use before editing source files, before editing config/schema/tests, and before behavior changes. If the repo is not initialized, run setup automatically. Run analyze before edit. Run finish after edit. Do not edit if the impact report is missing or empty unless the user explicitly overrides.
 ---
 
-# Code Impact Guardian
+# ZG Impact Blueprint
 
-Use this skill as a MUST-run workflow guard for repo-local code changes, but do not force every file through the same heavyweight path.
+ZG Impact Blueprint is the final repo-local impact atlas plus verification guardrail for this repository.
 
-Stage 16 extends the guard from function-call impact into architecture contracts. The graph is no longer only about `CALLS`, `IMPORTS`, and direct test coverage; it also tracks lightweight repo-local contracts such as API endpoints, routes, components, props, events, env/config keys, SQL tables, IPC channels, Obsidian commands, and Playwright flows.
+It is not a platform. It does not use LSP, runtime trace or profiling, embedding or semantic search, or CI history learning. It stays repo-local, lightweight, explainable, and reversible.
+
+Its core job is:
+
+- show impact before editing
+- leave structured evidence after editing
+- help recovery when verification fails
+- widen the reading surface when the same failure repeats
+- present architecture contracts as part of the working atlas, not as an auto-planner
+
+The system only does three things:
+
+- make graph facts visible
+- mark uncertainty clearly
+- keep resources, logs, and release packaging clean
 
 ## Trigger
 
@@ -78,7 +92,7 @@ Use full guardian flow for:
 - command behavior
 - anything that can change runtime behavior or verification conclusions
 
-When reviewing full-flow output, do not stop at function callers/callees. Read `affected_contracts` and `architecture_chains` as part of the construction atlas for the change.
+For source, tests, config, schema, rules, dependency, API, route, event, IPC, SQL, env, or config surface changes, do not stop at function callers and callees. Read `affected_contracts`, `atlas_views`, and any `uncertainty` view as part of the construction atlas for the change.
 
 ## Mutation safety
 
@@ -100,11 +114,11 @@ Mutation rules:
 
 ## Required flow
 
-1. If `.code-impact-guardian/config.json` is missing, run `setup` automatically.
+1. If `.zhanggong-impact-blueprint/config.json` is missing, run `setup` automatically.
 2. Start with `health` when repo readiness is unclear.
 3. Before editing, run `analyze`, unless the change is bypass-class documentation.
 4. Read the brief impact result, `.ai/codegraph/next-action.json`, and the verification budget.
-5. Review `affected_contracts` and `architecture_chains` before assuming the impact is function-only.
+5. Review `affected_contracts` and `atlas_views` before assuming the impact is function-only.
 6. Only then edit code.
 7. After editing, run `finish` with the budget-driven scope from `next-action.json` for guarded or risk-sensitive changes.
 8. For bypass-class documentation, do not force `finish`; the change can stop after direct editing.
@@ -112,7 +126,7 @@ Mutation rules:
 10. If the budget is low-risk, prefer `finish --test-scope targeted`.
 11. If targeted mapping is unavailable, trust is low, or dependency/schema risk is elevated, escalate to configured or full tests before handoff.
 12. Use `--shadow-full` when you need to calibrate targeted selection against a configured/full shadow run.
-13. If the same bug keeps failing, stop local patching and follow the repair-loop escalation guidance.
+13. If the same bug keeps failing, stop local patching and read `loop_atlas_views` before patching again.
 
 ## Hard rules
 
@@ -128,7 +142,8 @@ Mutation rules:
 - MUST treat the verification budget as the default policy for choosing targeted/configured/full validation.
 - MUST treat architecture contracts as first-class impact evidence, not optional decoration.
 - MUST inspect `affected_contracts` when API, route, event, table, config, env, or IPC names or payloads change.
-- MUST use `DEPENDS_ON` only as a fallback for real dependency facts whose precise relationship is uncertain.
+- MUST inspect `atlas_views` for API, route, event, IPC, SQL, env, and config surface changes.
+- MUST use `DEPENDS_ON` only as a low-confidence fallback for real dependency facts whose precise relationship is uncertain.
 - MUST NOT describe low-confidence contract matches as high-confidence architectural truth.
 - MUST keep the contract graph repo-local and lightweight; do not introduce LSP, embedding, or runtime tracing assumptions.
 - MUST explain that `--shadow-full` calibrates targeted verification; it does not make targeted magically complete.
@@ -136,11 +151,12 @@ Mutation rules:
 - MUST record unavailable coverage honestly.
 - MUST NOT describe `coverage unavailable` as safety.
 - MUST NOT describe `tests passed` as safety.
+- MUST NOT describe `tests_passed` as fully safe.
 - MUST NOT default every small edit to a full suite.
 - MUST NOT claim high confidence when `graph_trust` is low or dependency state is unknown or changed.
 - MUST only say which tests passed, which tests were directly affected, and what remains uncovered.
 - MUST NOT keep patching the same local area after repeated failures.
-- MUST expand the chain when `repeat_count >= 3`.
+- MUST expand the reading surface when `repeat_count >= 3`.
 - MUST move to full-chain, `B4`, and full tests when `repeat_count >= 4`.
 - MUST move deletions to recycle bin or trash by default.
 - MUST NOT permanently delete without explicit, strict user approval.
@@ -150,14 +166,14 @@ Mutation rules:
 Use these high-level commands first:
 
 ```bash
-python .agents/skills/code-impact-guardian/cig.py setup --project-root .
-python .agents/skills/code-impact-guardian/cig.py health
-python .agents/skills/code-impact-guardian/cig.py classify-change --workspace-root . --changed-file path/to/file
-python .agents/skills/code-impact-guardian/cig.py assess-mutation --workspace-root . --path path/to/file --action move
-python .agents/skills/code-impact-guardian/cig.py analyze
-python .agents/skills/code-impact-guardian/cig.py install-integration-pack
-python .agents/skills/code-impact-guardian/cig.py finish --test-scope targeted
-python .agents/skills/code-impact-guardian/cig.py finish --test-scope targeted --shadow-full
+python .agents/skills/zhanggong-impact-blueprint/cig.py setup --project-root .
+python .agents/skills/zhanggong-impact-blueprint/cig.py health
+python .agents/skills/zhanggong-impact-blueprint/cig.py classify-change --workspace-root . --changed-file path/to/file
+python .agents/skills/zhanggong-impact-blueprint/cig.py assess-mutation --workspace-root . --path path/to/file --action move
+python .agents/skills/zhanggong-impact-blueprint/cig.py analyze
+python .agents/skills/zhanggong-impact-blueprint/cig.py install-integration-pack
+python .agents/skills/zhanggong-impact-blueprint/cig.py finish --test-scope targeted
+python .agents/skills/zhanggong-impact-blueprint/cig.py finish --test-scope targeted --shadow-full
 ```
 
 Use these when context needs help:
@@ -184,10 +200,34 @@ Use these when context needs help:
 - If the verification budget is `B3`, use configured tests even if targeted mapping exists.
 - If the verification budget is `B4`, prefer full tests plus dependency/schema review before claiming readiness.
 - If a contract match is low-confidence, acknowledge it as partial evidence and avoid strong declarations.
-- If an API, route, event, table, env/config key, or IPC channel changed, do not stop at function `CALLS`; review the contract chain too.
+- If an API, route, event, table, env/config key, or IPC channel changed, do not stop at function `CALLS`; review the relevant `atlas_views` too.
 - If targeted passes but the risk is still meaningful, use `--shadow-full` to compare targeted against configured/full and record calibration evidence.
-- If `repeat_count >= 3`, stop patching only the last touched file and read the expanded chain first.
+- If `repeat_count >= 3`, stop patching only the last touched file and read `loop_atlas_views` first.
 - If `repeat_count >= 4`, rerun `analyze --escalation-level L3` and use full tests.
+
+## Agent Atlas reading order
+
+Recommended reading order:
+
+1. read `change_class` and `verification_budget`
+2. read `affected_contracts`
+3. read `atlas_views`
+4. read the `uncertainty` view
+5. edit only after reviewing the relevant view
+6. finish with the recommended scope
+7. if repeated failure happens, read `loop_atlas_views` before patching again
+
+`affected_contracts` keeps the full fact list.
+
+`atlas_views` is the reading layer:
+
+- `bilateral_contract`: sender and handler, emit and handle, register and invoke, backend endpoint and frontend caller
+- `page_flow`: route to component to child component to prop or flow
+- `data_flow`: endpoint or function to query or mutation to table to migration or tests
+- `config_surface`: env var or config key to reader path to affected flow
+- `uncertainty`: fallback evidence such as `DEPENDS_ON`, dynamic names, low-confidence matches, or file-level fallback
+
+`atlas_views` does not decide for the agent. It only reorganizes existing graph facts into readable booklets.
 
 ## What to tell the user after analyze
 
@@ -201,6 +241,12 @@ Give a short 1-2 sentence summary:
 - any uncertainty
 
 If the report is incomplete, say so clearly and do not present it as safe to edit.
+
+If `atlas_views` contains a bilateral contract, tell the user to review both sides together.
+
+If `atlas_views` contains page or data flow views, tell the user to review the whole chain together.
+
+If `uncertainty` is present, say clearly that those entries are hints, not proof.
 
 ## Recovery references
 
@@ -223,6 +269,8 @@ After `analyze`, expect:
 - seed candidates
 - next-action.json
 - verification-policy.json
+- `atlas_views`
+- `atlas_summary`
 
 After `finish`, expect:
 
@@ -233,3 +281,5 @@ After `finish`, expect:
 - updated handoff
 - repair-attempt history when tests fail
 - loop-breaker report in repeated-failure full-chain mode
+- `loop_atlas_views` when repeated failures widen the reading surface
+

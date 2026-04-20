@@ -1,4 +1,4 @@
-# Code Impact Guardian Stage 2 Implementation Plan
+# ZG Impact Blueprint Stage 2 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -23,13 +23,13 @@
 ### Task 2: Add thin adapter support and unified CLI
 
 **Files:**
-- Create: `.agents/skills/code-impact-guardian/cig.py`
-- Create: `.agents/skills/code-impact-guardian/scripts/adapters.py`
-- Modify: `.agents/skills/code-impact-guardian/scripts/build_graph.py`
-- Modify: `.agents/skills/code-impact-guardian/scripts/list_seeds.py`
-- Modify: `.agents/skills/code-impact-guardian/scripts/generate_report.py`
-- Modify: `.agents/skills/code-impact-guardian/scripts/after_edit_update.py`
-- Modify: `.code-impact-guardian/config.json`
+- Create: `.agents/skills/zhanggong-impact-blueprint/cig.py`
+- Create: `.agents/skills/zhanggong-impact-blueprint/scripts/adapters.py`
+- Modify: `.agents/skills/zhanggong-impact-blueprint/scripts/build_graph.py`
+- Modify: `.agents/skills/zhanggong-impact-blueprint/scripts/list_seeds.py`
+- Modify: `.agents/skills/zhanggong-impact-blueprint/scripts/generate_report.py`
+- Modify: `.agents/skills/zhanggong-impact-blueprint/scripts/after_edit_update.py`
+- Modify: `.zhanggong-impact-blueprint/config.json`
 
 - [ ] **Step 1: Add adapter selection: auto/python/tsjs/generic**
 - [ ] **Step 2: Add generic file-level fallback**
@@ -58,3 +58,4 @@
 - [ ] **Step 2: Run stage2 workflow tests**
 - [ ] **Step 3: Run explicit TS/JS and generic demo commands**
 - [ ] **Step 4: Inspect resulting SQLite data and reports before claiming completion**
+

@@ -9,7 +9,7 @@ Use these first when you want the current behavior of the product:
 - `../README.md`
 - `../AGENTS.md`
 - `../mainstone.md`
-- `../.agents/skills/code-impact-guardian/SKILL.md`
+- `../.agents/skills/zhanggong-impact-blueprint/SKILL.md`
 - `../benchmark/README.md`
 - `demo/without-vs-with-skill.md`
 
@@ -41,3 +41,4 @@ entry points:
 Runtime files under `.ai/codegraph/` are machine state and evidence, not
 long-term product documentation. They are intentionally not indexed here as
 primary docs.
+

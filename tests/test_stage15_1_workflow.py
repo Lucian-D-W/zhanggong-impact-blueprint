@@ -68,7 +68,7 @@ class Stage151WorkflowTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.repo_root = pathlib.Path(__file__).resolve().parents[1]
-        cls.cig_script = cls.repo_root / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
+        cls.cig_script = cls.repo_root / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py"
         cls.export_tmp = tempfile.TemporaryDirectory()
         cls.single_export = pathlib.Path(cls.export_tmp.name) / "single-folder-export"
         run_json(
@@ -198,3 +198,4 @@ class Stage151WorkflowTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

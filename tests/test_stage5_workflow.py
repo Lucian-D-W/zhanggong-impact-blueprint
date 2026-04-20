@@ -22,7 +22,7 @@ def run_json(cmd: list[str], cwd: pathlib.Path) -> dict:
 class Stage5WorkflowTest(unittest.TestCase):
     def test_sql_postgres_minimal_runs_as_supplemental_adapter(self):
         repo_root = pathlib.Path(__file__).resolve().parents[1]
-        cig_script = repo_root / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
+        cig_script = repo_root / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py"
 
         with tempfile.TemporaryDirectory() as tmp:
             temp_repo = copy_repo(repo_root, pathlib.Path(tmp) / "stage5-sql-minimal")
@@ -51,7 +51,7 @@ class Stage5WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(temp_repo),
                     "--config",
-                    str(temp_repo / ".code-impact-guardian" / "config.json"),
+                    str(temp_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=temp_repo,
             )
@@ -67,7 +67,7 @@ class Stage5WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(temp_repo),
                     "--config",
-                    str(temp_repo / ".code-impact-guardian" / "config.json"),
+                    str(temp_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=temp_repo,
                 text=True,
@@ -82,7 +82,7 @@ class Stage5WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(temp_repo),
                     "--config",
-                    str(temp_repo / ".code-impact-guardian" / "config.json"),
+                    str(temp_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=temp_repo,
             )
@@ -95,7 +95,7 @@ class Stage5WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(temp_repo),
                     "--config",
-                    str(temp_repo / ".code-impact-guardian" / "config.json"),
+                    str(temp_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=temp_repo,
             )
@@ -113,7 +113,7 @@ class Stage5WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(temp_repo),
                     "--config",
-                    str(temp_repo / ".code-impact-guardian" / "config.json"),
+                    str(temp_repo / ".zhanggong-impact-blueprint" / "config.json"),
                     "--task-id",
                     "stage5-sql-minimal",
                     "--seed",
@@ -142,7 +142,7 @@ class Stage5WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(temp_repo),
                     "--config",
-                    str(temp_repo / ".code-impact-guardian" / "config.json"),
+                    str(temp_repo / ".zhanggong-impact-blueprint" / "config.json"),
                     "--task-id",
                     "stage5-sql-minimal",
                     "--seed",
@@ -169,7 +169,7 @@ class Stage5WorkflowTest(unittest.TestCase):
 
     def test_tsjs_sql_compound_merges_primary_and_supplemental_graph(self):
         repo_root = pathlib.Path(__file__).resolve().parents[1]
-        cig_script = repo_root / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
+        cig_script = repo_root / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py"
 
         with tempfile.TemporaryDirectory() as tmp:
             temp_repo = copy_repo(repo_root, pathlib.Path(tmp) / "stage5-tsjs-sql")
@@ -201,7 +201,7 @@ class Stage5WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(temp_repo),
                     "--config",
-                    str(temp_repo / ".code-impact-guardian" / "config.json"),
+                    str(temp_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=temp_repo,
             )
@@ -217,7 +217,7 @@ class Stage5WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(temp_repo),
                     "--config",
-                    str(temp_repo / ".code-impact-guardian" / "config.json"),
+                    str(temp_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=temp_repo,
             )
@@ -232,7 +232,7 @@ class Stage5WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(temp_repo),
                     "--config",
-                    str(temp_repo / ".code-impact-guardian" / "config.json"),
+                    str(temp_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=temp_repo,
             )
@@ -248,7 +248,7 @@ class Stage5WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(temp_repo),
                     "--config",
-                    str(temp_repo / ".code-impact-guardian" / "config.json"),
+                    str(temp_repo / ".zhanggong-impact-blueprint" / "config.json"),
                     "--task-id",
                     "stage5-tsjs-sql",
                     "--seed",
@@ -276,7 +276,7 @@ class Stage5WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(temp_repo),
                     "--config",
-                    str(temp_repo / ".code-impact-guardian" / "config.json"),
+                    str(temp_repo / ".zhanggong-impact-blueprint" / "config.json"),
                     "--task-id",
                     "stage5-tsjs-sql",
                     "--seed",
@@ -306,3 +306,4 @@ class Stage5WorkflowTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

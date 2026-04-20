@@ -181,7 +181,7 @@ def write_handoff(
     selected_reason = (last_task.get("seed_selection") or {}).get("reason") or "none"
     retry_step = recent_failure.get("command") if recent_failure else command
     lines = [
-        "# Code Impact Guardian Handoff",
+        "# ZG Impact Blueprint Handoff",
         "",
         f"- Timestamp: {utc_now()}",
         f"- Current task: {task_id or 'none'}",

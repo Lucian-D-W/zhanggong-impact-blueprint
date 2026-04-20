@@ -102,7 +102,7 @@ def write_minimal_tsjs_repo(repo_root: pathlib.Path) -> None:
 class Stage6WorkflowTest(unittest.TestCase):
     def test_export_skill_and_skill_only_python_tsjs_repos_work(self):
         repo_root = pathlib.Path(__file__).resolve().parents[1]
-        cig_script = repo_root / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
+        cig_script = repo_root / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py"
 
         with tempfile.TemporaryDirectory() as tmp:
             export_root = pathlib.Path(tmp) / "exported-skill"
@@ -121,9 +121,9 @@ class Stage6WorkflowTest(unittest.TestCase):
             self.assertTrue((export_root / "AGENTS.template.md").exists())
             self.assertTrue((export_root / "QUICKSTART.md").exists())
             self.assertTrue((export_root / "TROUBLESHOOTING.md").exists())
-            self.assertTrue((export_root / ".code-impact-guardian" / "config.template.json").exists())
-            self.assertTrue((export_root / ".code-impact-guardian" / "schema.sql").exists())
-            self.assertTrue((export_root / ".agents" / "skills" / "code-impact-guardian" / "cig.py").exists())
+            self.assertTrue((export_root / ".zhanggong-impact-blueprint" / "config.template.json").exists())
+            self.assertTrue((export_root / ".zhanggong-impact-blueprint" / "schema.sql").exists())
+            self.assertTrue((export_root / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py").exists())
             for forbidden in (".git", ".ai", "tests", "examples", "dist", "__pycache__"):
                 self.assertFalse((export_root / forbidden).exists(), f"{forbidden} must not be exported")
             self.assertEqual(export_payload["status"], "exported")
@@ -131,7 +131,7 @@ class Stage6WorkflowTest(unittest.TestCase):
             python_repo = pathlib.Path(tmp) / "python-skill-only"
             copy_package_contents(export_root, python_repo)
             write_minimal_python_repo(python_repo)
-            python_cig = python_repo / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
+            python_cig = python_repo / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py"
 
             init_payload = run_json(
                 [
@@ -161,7 +161,7 @@ class Stage6WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(python_repo),
                     "--config",
-                    str(python_repo / ".code-impact-guardian" / "config.json"),
+                    str(python_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=python_repo,
                 check=True,
@@ -174,7 +174,7 @@ class Stage6WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(python_repo),
                     "--config",
-                    str(python_repo / ".code-impact-guardian" / "config.json"),
+                    str(python_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=python_repo,
             )
@@ -187,7 +187,7 @@ class Stage6WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(python_repo),
                     "--config",
-                    str(python_repo / ".code-impact-guardian" / "config.json"),
+                    str(python_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=python_repo,
             )
@@ -199,7 +199,7 @@ class Stage6WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(python_repo),
                     "--config",
-                    str(python_repo / ".code-impact-guardian" / "config.json"),
+                    str(python_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=python_repo,
             )
@@ -212,7 +212,7 @@ class Stage6WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(python_repo),
                     "--config",
-                    str(python_repo / ".code-impact-guardian" / "config.json"),
+                    str(python_repo / ".zhanggong-impact-blueprint" / "config.json"),
                     "--task-id",
                     "stage6-python",
                     "--seed",
@@ -230,7 +230,7 @@ class Stage6WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(python_repo),
                     "--config",
-                    str(python_repo / ".code-impact-guardian" / "config.json"),
+                    str(python_repo / ".zhanggong-impact-blueprint" / "config.json"),
                     "--task-id",
                     "stage6-python",
                     "--seed",
@@ -248,7 +248,7 @@ class Stage6WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(python_repo),
                     "--config",
-                    str(python_repo / ".code-impact-guardian" / "config.json"),
+                    str(python_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=python_repo,
             )
@@ -260,7 +260,7 @@ class Stage6WorkflowTest(unittest.TestCase):
             tsjs_repo = pathlib.Path(tmp) / "tsjs-skill-only"
             copy_package_contents(export_root, tsjs_repo)
             write_minimal_tsjs_repo(tsjs_repo)
-            tsjs_cig = tsjs_repo / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
+            tsjs_cig = tsjs_repo / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py"
 
             init_payload = run_json(
                 [
@@ -287,7 +287,7 @@ class Stage6WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(tsjs_repo),
                     "--config",
-                    str(tsjs_repo / ".code-impact-guardian" / "config.json"),
+                    str(tsjs_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=tsjs_repo,
                 check=True,
@@ -300,7 +300,7 @@ class Stage6WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(tsjs_repo),
                     "--config",
-                    str(tsjs_repo / ".code-impact-guardian" / "config.json"),
+                    str(tsjs_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=tsjs_repo,
             )
@@ -313,7 +313,7 @@ class Stage6WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(tsjs_repo),
                     "--config",
-                    str(tsjs_repo / ".code-impact-guardian" / "config.json"),
+                    str(tsjs_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=tsjs_repo,
             )
@@ -325,7 +325,7 @@ class Stage6WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(tsjs_repo),
                     "--config",
-                    str(tsjs_repo / ".code-impact-guardian" / "config.json"),
+                    str(tsjs_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=tsjs_repo,
             )
@@ -338,7 +338,7 @@ class Stage6WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(tsjs_repo),
                     "--config",
-                    str(tsjs_repo / ".code-impact-guardian" / "config.json"),
+                    str(tsjs_repo / ".zhanggong-impact-blueprint" / "config.json"),
                     "--task-id",
                     "stage6-tsjs",
                     "--seed",
@@ -359,7 +359,7 @@ class Stage6WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(tsjs_repo),
                     "--config",
-                    str(tsjs_repo / ".code-impact-guardian" / "config.json"),
+                    str(tsjs_repo / ".zhanggong-impact-blueprint" / "config.json"),
                     "--task-id",
                     "stage6-tsjs",
                     "--seed",
@@ -377,7 +377,7 @@ class Stage6WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(tsjs_repo),
                     "--config",
-                    str(tsjs_repo / ".code-impact-guardian" / "config.json"),
+                    str(tsjs_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=tsjs_repo,
             )
@@ -387,7 +387,7 @@ class Stage6WorkflowTest(unittest.TestCase):
 
     def test_structured_error_logging_status_and_recovery_artifacts(self):
         repo_root = pathlib.Path(__file__).resolve().parents[1]
-        cig_script = repo_root / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
+        cig_script = repo_root / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py"
 
         with tempfile.TemporaryDirectory() as tmp:
             export_root = pathlib.Path(tmp) / "exported-skill"
@@ -406,7 +406,7 @@ class Stage6WorkflowTest(unittest.TestCase):
 
             missing_config_repo = pathlib.Path(tmp) / "missing-config"
             copy_package_contents(export_root, missing_config_repo)
-            missing_cig = missing_config_repo / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
+            missing_cig = missing_config_repo / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py"
             build_run = subprocess.run(
                 [
                     sys.executable,
@@ -415,7 +415,7 @@ class Stage6WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(missing_config_repo),
                     "--config",
-                    str(missing_config_repo / ".code-impact-guardian" / "config.json"),
+                    str(missing_config_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=missing_config_repo,
                 text=True,
@@ -428,7 +428,7 @@ class Stage6WorkflowTest(unittest.TestCase):
 
             invalid_profile_repo = pathlib.Path(tmp) / "invalid-profile"
             copy_package_contents(export_root, invalid_profile_repo)
-            invalid_cig = invalid_profile_repo / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
+            invalid_cig = invalid_profile_repo / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py"
             init_run = subprocess.run(
                 [
                     sys.executable,
@@ -450,7 +450,7 @@ class Stage6WorkflowTest(unittest.TestCase):
             sql_missing_repo = pathlib.Path(tmp) / "sql-missing"
             copy_package_contents(export_root, sql_missing_repo)
             write_minimal_tsjs_repo(sql_missing_repo)
-            sql_missing_cig = sql_missing_repo / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
+            sql_missing_cig = sql_missing_repo / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py"
             run_json(
                 [
                     sys.executable,
@@ -475,7 +475,7 @@ class Stage6WorkflowTest(unittest.TestCase):
                     "--workspace-root",
                     str(sql_missing_repo),
                     "--config",
-                    str(sql_missing_repo / ".code-impact-guardian" / "config.json"),
+                    str(sql_missing_repo / ".zhanggong-impact-blueprint" / "config.json"),
                 ],
                 cwd=sql_missing_repo,
                 text=True,
@@ -488,7 +488,7 @@ class Stage6WorkflowTest(unittest.TestCase):
             bad_test_repo = pathlib.Path(tmp) / "bad-test"
             copy_package_contents(export_root, bad_test_repo)
             write_minimal_python_repo(bad_test_repo)
-            bad_test_cig = bad_test_repo / ".agents" / "skills" / "code-impact-guardian" / "cig.py"
+            bad_test_cig = bad_test_repo / ".agents" / "skills" / "zhanggong-impact-blueprint" / "cig.py"
             run_json(
                 [
                     sys.executable,
@@ -503,7 +503,7 @@ class Stage6WorkflowTest(unittest.TestCase):
                 ],
                 cwd=bad_test_repo,
             )
-            config_path = bad_test_repo / ".code-impact-guardian" / "config.json"
+            config_path = bad_test_repo / ".zhanggong-impact-blueprint" / "config.json"
             config_payload = json.loads(config_path.read_text(encoding="utf-8"))
             config_payload["python"]["test_command"] = ["python", "-c", "import sys; sys.exit(3)"]
             config_path.write_text(json.dumps(config_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -599,3 +599,4 @@ class Stage6WorkflowTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

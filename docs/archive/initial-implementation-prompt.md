@@ -5,17 +5,17 @@
 请实现以下能力：
 
 1. 在仓库内增加一个 repo-scoped skill：
-   - 路径：`.agents/skills/code-impact-guardian/`
+   - 路径：`.agents/skills/zhanggong-impact-blueprint/`
    - 读取其中的 `SKILL.md`
    - 工作流要求：**先生成 impact report，再改代码**
 
 2. 在仓库根目录增加或更新 `AGENTS.md`：
-   - 规定任何代码改动任务都必须先使用 code-impact-guardian
+   - 规定任何代码改动任务都必须先使用 zhanggong-impact-blueprint
    - 没有 `.ai/codegraph/reports/impact-<task-id>.md` 时，不允许编辑源码
 
 3. 使用 **SQLite** 作为事实层：
    - 数据库路径：`.ai/codegraph/codegraph.db`
-   - schema 参考：`.agents/skills/code-impact-guardian/references/schema.sql`
+   - schema 参考：`.agents/skills/zhanggong-impact-blueprint/references/schema.sql`
 
 4. 第一版只需要支持四类节点和五类直接边：
    - 节点：`file` `function` `test` `rule`
@@ -41,15 +41,15 @@
 请优先实现并保证这些文件可用：
 
 - `AGENTS.md`
-- `.agents/skills/code-impact-guardian/SKILL.md`
-- `.agents/skills/code-impact-guardian/agents/openai.yaml`
-- `.agents/skills/code-impact-guardian/assets/codegraph-config.yaml`
-- `.agents/skills/code-impact-guardian/assets/impact-report-template.md`
-- `.agents/skills/code-impact-guardian/references/schema.sql`
-- `.agents/skills/code-impact-guardian/scripts/init_db.py`
-- `.agents/skills/code-impact-guardian/scripts/build_graph.py`
-- `.agents/skills/code-impact-guardian/scripts/generate_report.py`
-- `.agents/skills/code-impact-guardian/scripts/update_after_edit.py`
+- `.agents/skills/zhanggong-impact-blueprint/SKILL.md`
+- `.agents/skills/zhanggong-impact-blueprint/agents/openai.yaml`
+- `.agents/skills/zhanggong-impact-blueprint/assets/codegraph-config.yaml`
+- `.agents/skills/zhanggong-impact-blueprint/assets/impact-report-template.md`
+- `.agents/skills/zhanggong-impact-blueprint/references/schema.sql`
+- `.agents/skills/zhanggong-impact-blueprint/scripts/init_db.py`
+- `.agents/skills/zhanggong-impact-blueprint/scripts/build_graph.py`
+- `.agents/skills/zhanggong-impact-blueprint/scripts/generate_report.py`
+- `.agents/skills/zhanggong-impact-blueprint/scripts/update_after_edit.py`
 
 # build_graph.py 的要求
 
@@ -132,3 +132,4 @@
 4. 当前已完成能力
 5. 当前未完成能力
 6. 下一步建议
+

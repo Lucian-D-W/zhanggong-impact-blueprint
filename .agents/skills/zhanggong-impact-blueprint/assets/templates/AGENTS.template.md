@@ -1,10 +1,10 @@
-# Code Impact Guardian Working Agreement
+# ZG Impact Blueprint Working Agreement
 
-This repository uses Code Impact Guardian as a repo-local workflow template.
+This repository uses ZG Impact Blueprint as a repo-local workflow template.
 
 Whenever a task changes code, behavior, configuration, schema, or tests:
 
-1. Run `cig.py setup` automatically if `.code-impact-guardian/config.json` is missing
+1. Run `cig.py setup` automatically if `.zhanggong-impact-blueprint/config.json` is missing
 2. Run `cig.py analyze`
 3. Read the impact report
 4. Only then allow code edits
@@ -25,3 +25,4 @@ Whenever a task changes code, behavior, configuration, schema, or tests:
 - If `analyze` says the report is incomplete, do not treat that as edit-safe context unless the user explicitly overrides it.
 - Local markdown rules remain the default rule source.
 - If a command fails, check `.ai/codegraph/logs/` and `TROUBLESHOOTING.md` before retrying.
+

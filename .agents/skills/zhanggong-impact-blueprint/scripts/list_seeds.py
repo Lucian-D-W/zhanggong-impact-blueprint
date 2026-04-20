@@ -6,6 +6,7 @@ import sqlite3
 
 from adapters import detect_language_adapter, detect_supplemental_adapters
 from build_graph import graph_paths, load_config, project_root_for
+from db_support import connect_db
 from profiles import detect_project_profile
 
 
@@ -34,7 +35,7 @@ def list_seeds(*, workspace_root: pathlib.Path, config_path: pathlib.Path) -> di
     adapter_name = detect_language_adapter(project_root, config)
     profile_name, _, _ = detect_project_profile(project_root, config, adapter_name)
     supplemental_detected = detect_supplemental_adapters(project_root, config)
-    with sqlite3.connect(paths["db_path"]) as conn:
+    with connect_db(paths["db_path"]) as conn:
         file_nodes = [row[0] for row in conn.execute("SELECT node_id FROM nodes WHERE kind = 'file' ORDER BY node_id").fetchall()]
         function_nodes = [row[0] for row in conn.execute("SELECT node_id FROM nodes WHERE kind = 'function' ORDER BY node_id").fetchall()]
         test_nodes = [row[0] for row in conn.execute("SELECT node_id FROM nodes WHERE kind = 'test' ORDER BY node_id").fetchall()]
@@ -62,7 +63,7 @@ def list_seeds(*, workspace_root: pathlib.Path, config_path: pathlib.Path) -> di
 def main() -> int:
     parser = argparse.ArgumentParser(description="List seed candidates from the current graph")
     parser.add_argument("--workspace-root", default=".", help="Workspace root")
-    parser.add_argument("--config", default=".code-impact-guardian/config.json", help="Config path")
+    parser.add_argument("--config", default=".zhanggong-impact-blueprint/config.json", help="Config path")
     args = parser.parse_args()
     workspace_root = pathlib.Path(args.workspace_root).resolve()
     config_path = pathlib.Path(args.config)
@@ -75,3 +76,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

@@ -12,10 +12,10 @@
 
 ## When setup is auto-run
 
-If `.code-impact-guardian/config.json` is missing, agents should run:
+If `.zhanggong-impact-blueprint/config.json` is missing, agents should run:
 
 ```bash
-python .agents/skills/code-impact-guardian/cig.py setup --project-root .
+python .agents/skills/zhanggong-impact-blueprint/cig.py setup --project-root .
 ```
 
 before asking the user anything.
@@ -40,3 +40,4 @@ reach beyond function `CALLS`.
 `finish` is the mandatory post-edit checkpoint. It refreshes
 graph/report/evidence, runs the budget-appropriate test scope, updates
 handoff, and records warnings honestly.
+

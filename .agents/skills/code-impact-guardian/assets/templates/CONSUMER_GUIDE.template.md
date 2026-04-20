@@ -30,6 +30,8 @@ What these commands try to do for you:
 
 - `setup` writes the minimum repo-local files and checks the environment
 - `analyze` tries to infer the changed scope before you edit
+- `analyze` can also surface `affected_contracts` and `architecture_chains`
+  when the change reaches beyond function-level impact
 - `finish` refreshes the graph/report and records the test signal honestly
 
 ## Python
@@ -62,6 +64,10 @@ python .agents/skills/code-impact-guardian/cig.py finish
 - Add `--changed-line <path:line>` only when the inferred top candidates are still too broad.
 - Add `--patch-file <path>` when your editor or agent already has a patch artifact.
 - Default output is `brief`; add `--full` only when you need more.
+- Read `affected_contracts` and `architecture_chains` before treating API,
+  route, event, table, config/env, or IPC changes as function-only edits.
+- Treat `DEPENDS_ON` as bounded fallback evidence when the precise relationship
+  type is uncertain.
 - Check `.ai/codegraph/reports/impact-<task-id>.json` when another agent needs machine-readable context.
 - Read `.ai/codegraph/build-decision.json` when you need to understand why the run trusted incremental vs full rebuild.
 - `tests passed` does not mean the change is proven safe; always read `report_completeness`, `graph_trust`, and `test_signal` together.
@@ -94,6 +100,8 @@ candidates and ask you to be explicit.
 - Context inference: `.ai/codegraph/context-resolution.json`
 - Seed candidates: `.ai/codegraph/seed-candidates.json`
 - Next action: `.ai/codegraph/next-action.json`
+- Contract-aware risk: inspect `affected_contracts` and `architecture_chains`
+  in the JSON report and next action payload
 - Structured logs: `.ai/codegraph/logs/`
 - Reports: `.ai/codegraph/reports/`
 - Recovery steps: `TROUBLESHOOTING.md`

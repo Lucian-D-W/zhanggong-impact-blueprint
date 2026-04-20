@@ -120,7 +120,7 @@ def get_git_context(workspace_root: pathlib.Path) -> dict:
 
 
 def ensure_schema(db_path: pathlib.Path, schema_path: pathlib.Path) -> None:
-    desired_schema_version = "3"
+    desired_schema_version = "4"
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(db_path) as conn:
         needs_reset = False
@@ -842,6 +842,13 @@ def adapter_graph_to_rows(
     for record in adapter_graph.extra_edges:
         if record["src_id"] not in known_nodes or record["dst_id"] not in known_nodes:
             continue
+        edge_attrs = dict(record.get("attrs", {}))
+        edge_attrs.setdefault("extractor", record["extractor"])
+        if record["edge_type"] == "DEPENDS_ON":
+            edge_attrs.setdefault("dependency_kind", "unknown_dependency")
+            edge_attrs.setdefault("confidence_reason", "relationship type could not be stabilized")
+            if float(record.get("confidence", 0.0)) > 0.65:
+                raise ValueError(f"DEPENDS_ON edge confidence must be <= 0.65: {record['src_id']} -> {record['dst_id']}")
         evidence = make_evidence(
             workspace_root=workspace_root,
             git=git,
@@ -849,7 +856,12 @@ def adapter_graph_to_rows(
             relative_path=record["relative_path"],
             start_line=record["start_line"],
             end_line=record["end_line"],
-            attrs={"edge_type": record["edge_type"], "source": record["src_id"], "target": record["dst_id"]},
+            attrs={
+                "edge_type": record["edge_type"],
+                "source": record["src_id"],
+                "target": record["dst_id"],
+                **edge_attrs,
+            },
             confidence=record.get("confidence", 0.8),
         )
         evidence_rows.append(evidence)
@@ -860,6 +872,7 @@ def adapter_graph_to_rows(
                 record["dst_id"],
                 evidence.evidence_id,
                 confidence=record.get("confidence", 0.8),
+                attrs_json=json.dumps(edge_attrs, ensure_ascii=False, sort_keys=True),
             )
         )
 

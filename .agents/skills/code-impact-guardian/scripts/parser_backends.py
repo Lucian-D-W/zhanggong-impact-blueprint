@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
+from contract_extractors import build_contract_artifacts
+
 
 @dataclass
 class AdapterGraph:
@@ -200,82 +202,24 @@ SQL_INSERT_TABLE_RE = re.compile(r"(?is)\binsert\s+into\s+([a-z_][a-z0-9_\.]*)")
 SQL_UPDATE_TABLE_RE = re.compile(r"(?is)\bupdate\s+([a-z_][a-z0-9_\.]*)")
 
 
-def contract_node_id(kind: str, value: str) -> str:
-    return f"{kind}:{value}"
-
-
 def append_contract_artifacts(
     adapter_graph: AdapterGraph,
     *,
     relative_path: str,
     source_text: str,
     language: str,
+    function_records: list[dict] | None = None,
+    test_records: list[dict] | None = None,
 ) -> None:
-    file_id = file_node_id(relative_path)
-    seen_nodes: set[tuple[str, str]] = set()
-    seen_edges: set[tuple[str, str, str]] = set()
-
-    def add_contract(kind: str, value: str, edge_type: str, *, extractor: str, confidence: float = 0.8) -> None:
-        if not value:
-            return
-        node_key = (kind, value)
-        node_id = contract_node_id(kind, value)
-        if node_key not in seen_nodes:
-            seen_nodes.add(node_key)
-            adapter_graph.extra_nodes.append(
-                {
-                    "node_id": node_id,
-                    "kind": kind,
-                    "name": value,
-                    "path": relative_path,
-                    "symbol": value,
-                    "start_line": 1,
-                    "end_line": 1,
-                    "attrs": {
-                        "language": language,
-                        "contract_value": value,
-                        "definition_kind": "runtime_contract",
-                    },
-                }
-            )
-        edge_key = (file_id, edge_type, node_id)
-        if edge_key in seen_edges:
-            return
-        seen_edges.add(edge_key)
-        adapter_graph.extra_edges.append(
-            {
-                "src_id": file_id,
-                "dst_id": node_id,
-                "edge_type": edge_type,
-                "relative_path": relative_path,
-                "start_line": 1,
-                "end_line": 1,
-                "extractor": extractor,
-                "confidence": confidence,
-            }
-        )
-
-    for env_name in sorted(set(CONTRACT_ENV_RE.findall(source_text))):
-        add_contract("env_var", env_name, "READS_ENV", extractor="contract_env_scan")
-    for config_key in sorted(set(CONTRACT_CONFIG_GET_RE.findall(source_text)) | set(CONTRACT_SETTINGS_RE.findall(source_text))):
-        add_contract("config_key", config_key, "READS_CONFIG", extractor="contract_config_scan")
-    for endpoint in sorted(set(CONTRACT_FETCH_RE.findall(source_text))):
-        add_contract("endpoint", endpoint, "ROUTES_TO", extractor="contract_endpoint_scan")
-    for channel in sorted(set(CONTRACT_IPC_SEND_RE.findall(source_text))):
-        add_contract("ipc_channel", channel, "IPC_SENDS", extractor="contract_ipc_send_scan")
-    for channel in sorted(set(CONTRACT_IPC_HANDLE_RE.findall(source_text))):
-        add_contract("ipc_channel", channel, "IPC_HANDLES", extractor="contract_ipc_handle_scan")
-    for command_id in sorted(set(CONTRACT_OBSIDIAN_COMMAND_RE.findall(source_text))):
-        add_contract("obsidian_command", command_id, "REGISTER_COMMAND", extractor="contract_obsidian_command_scan")
-    for flow_name in sorted(set(CONTRACT_PLAYWRIGHT_RE.findall(source_text))):
-        add_contract("playwright_flow", flow_name, "ROUTES_TO", extractor="contract_playwright_flow_scan", confidence=0.7)
-
-    query_tables = sorted(set(SQL_SELECT_TABLE_RE.findall(source_text)) | set(SQL_DELETE_TABLE_RE.findall(source_text)))
-    mutation_tables = sorted(set(SQL_INSERT_TABLE_RE.findall(source_text)) | set(SQL_UPDATE_TABLE_RE.findall(source_text)))
-    for table_name in query_tables:
-        add_contract("sql_table", table_name.split(".")[-1], "QUERIES_TABLE", extractor="contract_sql_query_scan")
-    for table_name in mutation_tables:
-        add_contract("sql_table", table_name.split(".")[-1], "MUTATES_TABLE", extractor="contract_sql_mutation_scan")
+    del language
+    artifact = build_contract_artifacts(
+        relative_path=relative_path,
+        source_text=source_text,
+        function_records=function_records or [],
+        test_records=test_records or [],
+    )
+    adapter_graph.extra_nodes.extend(artifact["nodes"])
+    adapter_graph.extra_edges.extend(artifact["edges"])
 
 
 def resolve_python_module(module_name: str, project_root: pathlib.Path) -> str | None:
@@ -387,12 +331,6 @@ def parse_python_backend(project_root: pathlib.Path, config: dict, include_files
                 "parser_backend": "python_ast",
             },
         }
-        append_contract_artifacts(
-            adapter_graph,
-            relative_path=relative,
-            source_text=source_text,
-            language="python",
-        )
         import_file_targets: list[tuple[str, int]] = []
         imported_function_map: dict[str, str] = {}
         imported_module_map: dict[str, str] = {}
@@ -550,6 +488,15 @@ def parse_python_backend(project_root: pathlib.Path, config: dict, include_files
                     },
                 }
             )
+
+        append_contract_artifacts(
+            adapter_graph,
+            relative_path=relative,
+            source_text=source_text,
+            language="python",
+            function_records=[item for item in adapter_graph.functions if item["path"] == relative],
+            test_records=[item for item in adapter_graph.tests if item["path"] == relative],
+        )
 
         for target_file, line_no in import_file_targets:
             adapter_graph.imports.append(
@@ -1371,13 +1318,6 @@ def parse_tsjs_backend(project_root: pathlib.Path, config: dict, include_files: 
                 "attrs": file_attrs,
             }
         )
-        append_contract_artifacts(
-            adapter_graph,
-            relative_path=relative,
-            source_text=text,
-            language="tsjs",
-        )
-
         imported_function_map: dict[str, str] = {}
         imported_module_map: dict[str, str] = {}
         local_function_ids: dict[str, str] = {}
@@ -1723,6 +1663,80 @@ def parse_tsjs_backend(project_root: pathlib.Path, config: dict, include_files: 
 
         file_attrs["exports"] = sorted(set(file_attrs["exports"]))
         file_attrs["reexports"] = sorted(set(file_attrs["reexports"]))
+        for fallback_index, fallback_line in enumerate(lines):
+            fallback_function_match = JS_FUNCTION_RE.match(fallback_line)
+            if not fallback_function_match:
+                continue
+            fallback_name = fallback_function_match.group(1)
+            fallback_node_id = function_node_id(relative, fallback_name)
+            if fallback_node_id in known_function_ids:
+                continue
+            fallback_scan = scan_js_block(lines, fallback_index, kind="function")
+            fallback_end_line = fallback_scan["end_line"]
+            if fallback_end_line <= fallback_index + 1:
+                boundary = len(lines)
+                for probe_index in range(fallback_index + 1, len(lines)):
+                    probe_line = lines[probe_index]
+                    if JS_FUNCTION_RE.match(probe_line) or JS_ARROW_RE.match(probe_line) or JS_CLASS_RE.match(probe_line):
+                        boundary = probe_index
+                        break
+                fallback_end_line = max(boundary, fallback_index + 1)
+            fallback_text = "\n".join(lines[fallback_index:fallback_end_line])
+            fallback_body = js_body_text(lines, fallback_scan)
+            if not fallback_body and fallback_end_line > fallback_index + 1:
+                fallback_body = "\n".join(lines[fallback_index + 1:fallback_end_line])
+            fallback_export_names = export_names_by_symbol.get(fallback_name, [])
+            fallback_exported = fallback_line.strip().startswith("export ") or bool(fallback_export_names)
+            fallback_kind, fallback_is_component, fallback_is_hook = tsjs_definition_kind(fallback_name, relative, fallback_exported)
+            known_function_ids.add(fallback_node_id)
+            local_function_ids[fallback_name] = fallback_node_id
+            adapter_graph.functions.append(
+                {
+                    "node_id": fallback_node_id,
+                    "path": relative,
+                    "name": fallback_name,
+                    "symbol": fallback_name,
+                    "start_line": fallback_index + 1,
+                    "end_line": fallback_end_line,
+                    "language": "tsjs",
+                    "body_hash": sha1_text(fallback_text),
+                    "attrs": {
+                        "definition_kind": fallback_kind,
+                        "exported": fallback_exported,
+                        "is_component": fallback_is_component,
+                        "is_hook": fallback_is_hook,
+                        "parser_confidence": max(float(fallback_scan["parser_confidence"]), 0.75),
+                        "parser_warning": fallback_scan["parser_warning"],
+                        "sql_query_hints": extract_sql_query_hints(fallback_body),
+                        "reference_hints": {
+                            "imports": sorted(list(imported_function_map.keys()) + list(imported_module_map.keys())),
+                            "exports": sorted(fallback_export_names),
+                            "references": [],
+                            "resolved_call_targets": [],
+                        },
+                    },
+                }
+            )
+            function_contexts.append(
+                {
+                    "node_id": fallback_node_id,
+                    "relative_path": relative,
+                    "start_line": fallback_index + 1,
+                    "body_text": fallback_body,
+                    "local_function_ids": local_function_ids,
+                    "imported_function_map": imported_function_map,
+                    "imported_module_map": imported_module_map,
+                    "class_method_map": {},
+                }
+            )
+        append_contract_artifacts(
+            adapter_graph,
+            relative_path=relative,
+            source_text=text,
+            language="tsjs",
+            function_records=[item for item in adapter_graph.functions if item["path"] == relative],
+            test_records=[item for item in adapter_graph.tests if item["path"] == relative],
+        )
 
     function_attrs_by_id = {item["node_id"]: item["attrs"] for item in adapter_graph.functions}
     for context in function_contexts:
@@ -1811,6 +1825,8 @@ def parse_generic_backend(project_root: pathlib.Path, config: dict, include_file
             relative_path=relative,
             source_text=path.read_text(encoding="utf-8"),
             language="generic",
+            function_records=[],
+            test_records=[],
         )
     return adapter_graph
 
@@ -1876,13 +1892,6 @@ def parse_sql_postgres_backend(project_root: pathlib.Path, config: dict, include
                 },
             }
         )
-        append_contract_artifacts(
-            adapter_graph,
-            relative_path=relative,
-            source_text=text,
-            language="sql_postgres",
-        )
-
         if is_test_file:
             test_name = pathlib.PurePosixPath(relative).stem
             test_contexts.append(
@@ -1908,6 +1917,14 @@ def parse_sql_postgres_backend(project_root: pathlib.Path, config: dict, include
                         "sql_query_hints": extract_sql_query_hints(text),
                     },
                 }
+            )
+            append_contract_artifacts(
+                adapter_graph,
+                relative_path=relative,
+                source_text=text,
+                language="sql_postgres",
+                function_records=[],
+                test_records=[item for item in adapter_graph.tests if item["path"] == relative],
             )
             continue
 
@@ -1957,6 +1974,15 @@ def parse_sql_postgres_backend(project_root: pathlib.Path, config: dict, include
             )
             for key in {qualified_name, sql_basename(qualified_name)}:
                 sql_targets.setdefault(key, []).append(node_id)
+
+        append_contract_artifacts(
+            adapter_graph,
+            relative_path=relative,
+            source_text=text,
+            language="sql_postgres",
+            function_records=[item for item in adapter_graph.functions if item["path"] == relative],
+            test_records=[],
+        )
 
     function_attrs = {item["node_id"]: item["attrs"] for item in adapter_graph.functions}
     for context in routine_contexts:

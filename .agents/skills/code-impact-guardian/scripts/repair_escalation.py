@@ -18,6 +18,11 @@ CONTRACT_KINDS = {
     "ipc_channel",
     "endpoint",
     "route",
+    "component",
+    "event",
+    "obsidian_command",
+    "playwright_flow",
+    "prop",
 }
 
 PROJECT_FRAME_HINTS = ("src/", "tests/", "docs/", ".agents/", "scripts/", "migrations/", "schema/")
@@ -255,6 +260,74 @@ def _path_nodes(paths: list[str], depth_limit: int | None = None) -> list[str]:
     return node_ids
 
 
+def _unique_contract_names(values: list[str]) -> list[str]:
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered
+
+
+def structured_contract_chain(report_json: dict | None, node_details: dict[str, dict[str, Any]]) -> dict[str, list[str]]:
+    report_json = report_json or {}
+    affected_contracts = list(report_json.get("affected_contracts") or [])
+    architecture_chains = list(report_json.get("architecture_chains") or [])
+    payload = {
+        "env_vars": [],
+        "config_keys": [],
+        "endpoints": [],
+        "routes": [],
+        "components": [],
+        "events": [],
+        "ipc_channels": [],
+        "sql_tables": [],
+        "obsidian_commands": [],
+        "playwright_flows": [],
+    }
+    kind_map = {
+        "env_var": "env_vars",
+        "config_key": "config_keys",
+        "endpoint": "endpoints",
+        "route": "routes",
+        "component": "components",
+        "prop": "components",
+        "event": "events",
+        "ipc_channel": "ipc_channels",
+        "sql_table": "sql_tables",
+        "obsidian_command": "obsidian_commands",
+        "playwright_flow": "playwright_flows",
+    }
+    for item in affected_contracts:
+        bucket = kind_map.get(item.get("kind"))
+        if not bucket:
+            continue
+        payload[bucket].append(item.get("name") or item.get("node_id"))
+    for chain in architecture_chains:
+        for node in chain.get("nodes", []):
+            bucket = kind_map.get(node.get("kind"))
+            if not bucket:
+                continue
+            payload[bucket].append(node.get("name") or node.get("node_id"))
+    for detail in node_details.values():
+        bucket = kind_map.get(detail.get("kind"))
+        if not bucket:
+            continue
+        payload[bucket].append(detail.get("symbol") or detail.get("node_id"))
+    for key, values in payload.items():
+        payload[key] = _unique_contract_names(values)
+    return payload
+
+
+def flat_contract_chain(structured: dict[str, list[str]]) -> list[str]:
+    flattened: list[str] = []
+    for values in structured.values():
+        flattened.extend(values)
+    return _unique_contract_names(flattened)
+
+
 def expanded_chain(
     *,
     workspace_root: pathlib.Path,
@@ -319,13 +392,8 @@ def expanded_chain(
 
     test_chain = sorted({_node_id_path(node_details, node_id) for node_id in test_nodes})
     rule_chain = sorted({_node_id_path(node_details, node_id) for node_id in rule_nodes})
-    contract_chain = sorted(
-        {
-            detail["path"]
-            for detail in node_details.values()
-            if detail.get("kind") in CONTRACT_KINDS and detail.get("path")
-        }
-    )
+    structured_chain = structured_contract_chain(report_json, node_details)
+    contract_chain = flat_contract_chain(structured_chain)
 
     changed_paths = [item.replace("\\", "/") for item in changed_files]
     seed_path = ((report_json.get("definition") or {}).get("path")) or None
@@ -348,6 +416,7 @@ def expanded_chain(
         "test_chain": test_chain,
         "rule_chain": rule_chain,
         "contract_chain": contract_chain,
+        "structured_contract_chain": structured_chain,
         "must_read_first": must_read_first,
         "summary": {
             "calls": len(call_chain),
@@ -461,6 +530,7 @@ def write_loop_breaker_report(
         level=level,
     )
     primary_path = changed_files[0] if changed_files else "<path>"
+    architecture_chains = list((report_json or {}).get("architecture_chains") or [])
     payload = {
         "failure_signature": failure_signature_value,
         "repeat_count": repeat_count,
@@ -479,6 +549,8 @@ def write_loop_breaker_report(
             "rule_chain": chain["rule_chain"],
             "contract_chain": chain["contract_chain"],
         },
+        "contract_chain": chain.get("structured_contract_chain", {}),
+        "architecture_chains": architecture_chains if level == "L3" else [],
         "must_read_first": chain["must_read_first"],
         "recommended_commands": [
             "python .agents/skills/code-impact-guardian/cig.py analyze "
@@ -511,5 +583,6 @@ def diagnose_loop_payload(
         "chain_reveal_level": loop["chain_reveal_level"],
         "recommended_escalation": loop["recommended_escalation"],
         "expanded_chain_summary": chain["summary"],
+        "contract_chain": chain.get("structured_contract_chain", {}),
         "must_read_first": chain["must_read_first"],
     }

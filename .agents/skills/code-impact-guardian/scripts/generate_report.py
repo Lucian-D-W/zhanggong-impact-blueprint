@@ -9,6 +9,36 @@ from adapters import detect_project_profile_name
 from build_graph import get_git_context, graph_paths, load_config, project_root_for, record_task_run, resolved_language_adapter
 
 TRUST_ORDER = {"low": 0, "medium": 1, "high": 2}
+CONTRACT_NODE_KINDS = {
+    "endpoint",
+    "route",
+    "component",
+    "prop",
+    "event",
+    "config_key",
+    "env_var",
+    "sql_table",
+    "ipc_channel",
+    "obsidian_command",
+    "playwright_flow",
+}
+CONTRACT_EDGE_TYPES = {
+    "READS_CONFIG",
+    "READS_ENV",
+    "EMITS_EVENT",
+    "HANDLES_EVENT",
+    "QUERIES_TABLE",
+    "MUTATES_TABLE",
+    "ROUTES_TO",
+    "RENDERS_COMPONENT",
+    "USES_PROP",
+    "REGISTER_COMMAND",
+    "IPC_SENDS",
+    "IPC_HANDLES",
+    "DEPENDS_ON",
+    "EXPOSES_ENDPOINT",
+    "USES_ENDPOINT",
+}
 
 
 def utc_now() -> str:
@@ -34,6 +64,360 @@ def node_details(conn: sqlite3.Connection, node_id: str) -> dict | None:
         "symbol": row[4],
         "attrs": json.loads(row[5] or "{}"),
     }
+
+
+def unique_strings(values: list[str]) -> list[str]:
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered
+
+
+def contract_node_ref(node_id: str, kind: str, name: str, path: str) -> dict:
+    return {
+        "node_id": node_id,
+        "kind": kind,
+        "name": name,
+        "path": path,
+    }
+
+
+def contract_edge_payload(edge: dict) -> dict:
+    return {
+        "src": edge["src_id"],
+        "src_kind": edge["src_kind"],
+        "src_name": edge["src_name"],
+        "src_path": edge["src_path"],
+        "edge_type": edge["edge_type"],
+        "dst": edge["dst_id"],
+        "dst_kind": edge["dst_kind"],
+        "dst_name": edge["dst_name"],
+        "dst_path": edge["dst_path"],
+        "confidence": edge["confidence"],
+        "attrs": edge["attrs"],
+    }
+
+
+def contract_context_edges(conn: sqlite3.Connection, *, seed: str, sections: dict, changed_files: list[str]) -> list[dict]:
+    relevant_ids: set[str] = {seed}
+    for bucket in (
+        sections["owning_files"],
+        sections["direct_upstream"],
+        sections["direct_downstream"],
+        sections["direct_tests"],
+        sections["direct_rules"],
+        sections["direct_imports"],
+    ):
+        for src_id, _, dst_id in bucket:
+            relevant_ids.add(src_id)
+            relevant_ids.add(dst_id)
+
+    if changed_files:
+        placeholders = ",".join("?" for _ in changed_files)
+        rows = conn.execute(
+            f"SELECT node_id FROM nodes WHERE path IN ({placeholders})",
+            tuple(changed_files),
+        ).fetchall()
+        relevant_ids.update(row[0] for row in rows)
+
+    if not relevant_ids and not changed_files:
+        return []
+
+    filters: list[str] = []
+    params: list[str] = []
+    if relevant_ids:
+        placeholders = ",".join("?" for _ in relevant_ids)
+        filters.extend(
+            [
+                f"e.src_id IN ({placeholders})",
+                f"e.dst_id IN ({placeholders})",
+            ]
+        )
+        params.extend(sorted(relevant_ids))
+        params.extend(sorted(relevant_ids))
+    if changed_files:
+        placeholders = ",".join("?" for _ in changed_files)
+        filters.extend(
+            [
+                f"src.path IN ({placeholders})",
+                f"dst.path IN ({placeholders})",
+            ]
+        )
+        params.extend(changed_files)
+        params.extend(changed_files)
+
+    sql = f"""
+        SELECT
+            e.src_id,
+            e.edge_type,
+            e.dst_id,
+            e.confidence,
+            e.attrs_json,
+            src.kind,
+            src.name,
+            src.path,
+            dst.kind,
+            dst.name,
+            dst.path
+        FROM edges e
+        JOIN nodes src ON src.node_id = e.src_id
+        JOIN nodes dst ON dst.node_id = e.dst_id
+        WHERE {" OR ".join(filters)}
+        ORDER BY e.edge_type, e.src_id, e.dst_id
+    """
+    rows = conn.execute(sql, tuple(params)).fetchall()
+    payload: list[dict] = []
+    for row in rows:
+        edge = {
+            "src_id": row[0],
+            "edge_type": row[1],
+            "dst_id": row[2],
+            "confidence": row[3],
+            "attrs": json.loads(row[4] or "{}"),
+            "src_kind": row[5],
+            "src_name": row[6],
+            "src_path": row[7],
+            "dst_kind": row[8],
+            "dst_name": row[9],
+            "dst_path": row[10],
+        }
+        if (
+            edge["edge_type"] in CONTRACT_EDGE_TYPES
+            or edge["src_kind"] in CONTRACT_NODE_KINDS
+            or edge["dst_kind"] in CONTRACT_NODE_KINDS
+        ):
+            payload.append(edge)
+    return payload
+
+
+def affected_contracts_payload(contract_edges: list[dict]) -> list[dict]:
+    entries: dict[tuple[str, str], dict] = {}
+    for edge in contract_edges:
+        contract_sides = []
+        if edge["src_kind"] in CONTRACT_NODE_KINDS:
+            contract_sides.append(("src", edge["src_id"], edge["src_kind"], edge["src_name"], edge["src_path"]))
+        if edge["dst_kind"] in CONTRACT_NODE_KINDS:
+            contract_sides.append(("dst", edge["dst_id"], edge["dst_kind"], edge["dst_name"], edge["dst_path"]))
+        for _, node_id, kind, name, path in contract_sides:
+            key = (node_id, edge["edge_type"])
+            entry = entries.setdefault(
+                key,
+                {
+                    "node_id": node_id,
+                    "kind": kind,
+                    "name": name,
+                    "relationship": edge["edge_type"],
+                    "confidence": edge["confidence"],
+                    "files": [],
+                },
+            )
+            entry["confidence"] = max(entry["confidence"], edge["confidence"])
+            entry["files"] = unique_strings(entry["files"] + [path, edge["src_path"], edge["dst_path"]])
+    return sorted(entries.values(), key=lambda item: (item["kind"], item["name"], item["relationship"]))
+
+
+def _append_chain(chains: list[dict], *, chain_type: str, summary: str, nodes: list[dict], edges: list[dict]) -> None:
+    node_refs = unique_strings([node["node_id"] for node in nodes])
+    ordered_nodes = [node for node in nodes if node["node_id"] in node_refs]
+    dedup_nodes: list[dict] = []
+    seen_nodes: set[str] = set()
+    for node in ordered_nodes:
+        if node["node_id"] in seen_nodes:
+            continue
+        seen_nodes.add(node["node_id"])
+        dedup_nodes.append(node)
+    dedup_edges: list[dict] = []
+    seen_edges: set[tuple[str, str, str]] = set()
+    for edge in edges:
+        key = (edge["src"], edge["edge_type"], edge["dst"])
+        if key in seen_edges:
+            continue
+        seen_edges.add(key)
+        dedup_edges.append(edge)
+    chains.append(
+        {
+            "chain_type": chain_type,
+            "summary": summary,
+            "nodes": dedup_nodes,
+            "edges": dedup_edges,
+        }
+    )
+
+
+def architecture_chains_payload(contract_edges: list[dict]) -> list[dict]:
+    chains: list[dict] = []
+    route_edges = [edge for edge in contract_edges if edge["edge_type"] == "ROUTES_TO" and edge["src_kind"] == "route" and edge["dst_kind"] == "component"]
+    render_edges = [edge for edge in contract_edges if edge["edge_type"] == "RENDERS_COMPONENT" and edge["src_kind"] == "component" and edge["dst_kind"] == "component"]
+    prop_edges = [edge for edge in contract_edges if edge["edge_type"] == "USES_PROP" and edge["src_kind"] == "component" and edge["dst_kind"] == "prop"]
+    for route_edge in route_edges:
+        reachable_components = {route_edge["dst_id"]}
+        chain_edges = [contract_edge_payload(route_edge)]
+        frontier = {route_edge["dst_id"]}
+        for _ in range(3):
+            next_frontier: set[str] = set()
+            for render_edge in render_edges:
+                if render_edge["src_id"] in frontier and render_edge["dst_id"] not in reachable_components:
+                    reachable_components.add(render_edge["dst_id"])
+                    next_frontier.add(render_edge["dst_id"])
+                    chain_edges.append(contract_edge_payload(render_edge))
+            frontier = next_frontier
+            if not frontier:
+                break
+        reachable_prop_edges = [edge for edge in prop_edges if edge["src_id"] in reachable_components]
+        if not reachable_prop_edges:
+            continue
+        chain_edges.extend(contract_edge_payload(edge) for edge in reachable_prop_edges)
+        prop_names = ", ".join(unique_strings([edge["dst_name"] for edge in reachable_prop_edges]))
+        component_names = ", ".join(unique_strings([route_edge["dst_name"]] + [edge["dst_name"] for edge in render_edges if edge["dst_id"] in reachable_components]))
+        nodes: list[dict] = [
+            contract_node_ref(route_edge["src_id"], route_edge["src_kind"], route_edge["src_name"], route_edge["src_path"]),
+            contract_node_ref(route_edge["dst_id"], route_edge["dst_kind"], route_edge["dst_name"], route_edge["dst_path"]),
+        ]
+        for edge in render_edges:
+            if edge["src_id"] in reachable_components or edge["dst_id"] in reachable_components:
+                nodes.append(contract_node_ref(edge["src_id"], edge["src_kind"], edge["src_name"], edge["src_path"]))
+                nodes.append(contract_node_ref(edge["dst_id"], edge["dst_kind"], edge["dst_name"], edge["dst_path"]))
+        for edge in reachable_prop_edges:
+            nodes.append(contract_node_ref(edge["dst_id"], edge["dst_kind"], edge["dst_name"], edge["dst_path"]))
+        _append_chain(
+            chains,
+            chain_type="route_component_prop",
+            summary=f"route {route_edge['src_name']} reaches component {component_names} and prop {prop_names}",
+            nodes=nodes,
+            edges=chain_edges,
+        )
+
+    def grouped_contract_chains(chain_type: str, send_type: str, handle_type: str, kind: str, send_label: str, handle_label: str) -> None:
+        sends = [edge for edge in contract_edges if edge["edge_type"] == send_type and edge["dst_kind"] == kind]
+        handles = [edge for edge in contract_edges if edge["edge_type"] == handle_type and edge["dst_kind"] == kind]
+        for node_id in sorted({edge["dst_id"] for edge in sends} & {edge["dst_id"] for edge in handles}):
+            send_edge = next(edge for edge in sends if edge["dst_id"] == node_id)
+            handle_edge = next(edge for edge in handles if edge["dst_id"] == node_id)
+            contract = contract_node_ref(send_edge["dst_id"], send_edge["dst_kind"], send_edge["dst_name"], send_edge["dst_path"])
+            _append_chain(
+                chains,
+                chain_type=chain_type,
+                summary=f"{send_edge['src_name']} {send_label} {send_edge['dst_name']}; {handle_edge['src_name']} {handle_label} {handle_edge['dst_name']}",
+                nodes=[
+                    contract_node_ref(send_edge["src_id"], send_edge["src_kind"], send_edge["src_name"], send_edge["src_path"]),
+                    contract,
+                    contract_node_ref(handle_edge["src_id"], handle_edge["src_kind"], handle_edge["src_name"], handle_edge["src_path"]),
+                ],
+                edges=[contract_edge_payload(send_edge), contract_edge_payload(handle_edge)],
+            )
+
+    grouped_contract_chains("event", "EMITS_EVENT", "HANDLES_EVENT", "event", "emits", "handles")
+    grouped_contract_chains("ipc", "IPC_SENDS", "IPC_HANDLES", "ipc_channel", "sends", "handles")
+
+    sql_groups: dict[str, list[dict]] = {}
+    for edge in contract_edges:
+        if edge["edge_type"] not in {"QUERIES_TABLE", "MUTATES_TABLE", "DEPENDS_ON"} or edge["dst_kind"] != "sql_table":
+            continue
+        sql_groups.setdefault(edge["dst_id"], []).append(edge)
+    for table_id, edges in sorted(sql_groups.items()):
+        query_edges = [edge for edge in edges if edge["edge_type"] == "QUERIES_TABLE"]
+        mutation_edges = [edge for edge in edges if edge["edge_type"] == "MUTATES_TABLE"]
+        if not query_edges and not mutation_edges:
+            continue
+        table_edge = (query_edges or mutation_edges)[0]
+        summary_parts = []
+        if query_edges:
+            summary_parts.append("queries")
+        if mutation_edges:
+            summary_parts.append("mutations")
+        _append_chain(
+            chains,
+            chain_type="sql",
+            summary=f"table {table_edge['dst_name']} links to {' and '.join(summary_parts)} in {', '.join(unique_strings([edge['src_name'] for edge in edges]))}",
+            nodes=[contract_node_ref(table_id, "sql_table", table_edge["dst_name"], table_edge["dst_path"])]
+            + [contract_node_ref(edge["src_id"], edge["src_kind"], edge["src_name"], edge["src_path"]) for edge in edges],
+            edges=[contract_edge_payload(edge) for edge in edges],
+        )
+
+    env_config_groups: dict[str, list[dict]] = {}
+    for edge in contract_edges:
+        if edge["edge_type"] not in {"READS_ENV", "READS_CONFIG", "DEPENDS_ON"}:
+            continue
+        if edge["dst_kind"] not in {"env_var", "config_key"}:
+            continue
+        env_config_groups.setdefault(edge["dst_id"], []).append(edge)
+    for contract_id, edges in sorted(env_config_groups.items()):
+        first = edges[0]
+        chain_type = "env" if first["dst_kind"] == "env_var" else "config"
+        summary = f"{first['dst_kind']} {first['dst_name']} is read by {', '.join(unique_strings([edge['src_name'] for edge in edges]))}"
+        _append_chain(
+            chains,
+            chain_type=chain_type,
+            summary=summary,
+            nodes=[contract_node_ref(contract_id, first["dst_kind"], first["dst_name"], first["dst_path"])]
+            + [contract_node_ref(edge["src_id"], edge["src_kind"], edge["src_name"], edge["src_path"]) for edge in edges],
+            edges=[contract_edge_payload(edge) for edge in edges],
+        )
+
+    command_groups: dict[str, list[dict]] = {}
+    for edge in contract_edges:
+        if edge["dst_kind"] != "obsidian_command":
+            continue
+        if edge["edge_type"] not in {"REGISTER_COMMAND", "DEPENDS_ON"}:
+            continue
+        command_groups.setdefault(edge["dst_id"], []).append(edge)
+    for command_id, edges in sorted(command_groups.items()):
+        if len(edges) < 2:
+            continue
+        first = edges[0]
+        _append_chain(
+            chains,
+            chain_type="obsidian_command",
+            summary=f"command {first['dst_name']} is registered and invoked across {', '.join(unique_strings([edge['src_name'] for edge in edges]))}",
+            nodes=[contract_node_ref(command_id, "obsidian_command", first["dst_name"], first["dst_path"])]
+            + [contract_node_ref(edge["src_id"], edge["src_kind"], edge["src_name"], edge["src_path"]) for edge in edges],
+            edges=[contract_edge_payload(edge) for edge in edges],
+        )
+
+    flow_routes = [edge for edge in contract_edges if edge["edge_type"] == "ROUTES_TO" and edge["src_kind"] == "playwright_flow" and edge["dst_kind"] == "route"]
+    flow_endpoints = [edge for edge in contract_edges if edge["edge_type"] == "USES_ENDPOINT" and edge["src_kind"] == "playwright_flow" and edge["dst_kind"] == "endpoint"]
+    for flow_id in sorted({edge["src_id"] for edge in flow_routes} | {edge["src_id"] for edge in flow_endpoints}):
+        related_routes = [edge for edge in flow_routes if edge["src_id"] == flow_id]
+        related_endpoints = [edge for edge in flow_endpoints if edge["src_id"] == flow_id]
+        if not related_routes and not related_endpoints:
+            continue
+        flow_edge = (related_routes or related_endpoints)[0]
+        route_names = ", ".join(unique_strings([edge["dst_name"] for edge in related_routes])) or "none"
+        endpoint_names = ", ".join(unique_strings([edge["dst_name"] for edge in related_endpoints])) or "none"
+        _append_chain(
+            chains,
+            chain_type="endpoint_route_flow",
+            summary=f"playwright flow {flow_edge['src_name']} visits {route_names} and calls {endpoint_names}",
+            nodes=[contract_node_ref(flow_id, "playwright_flow", flow_edge["src_name"], flow_edge["src_path"])]
+            + [contract_node_ref(edge["dst_id"], edge["dst_kind"], edge["dst_name"], edge["dst_path"]) for edge in related_routes + related_endpoints],
+            edges=[contract_edge_payload(edge) for edge in related_routes + related_endpoints],
+        )
+
+    endpoint_groups: dict[str, list[dict]] = {}
+    for edge in contract_edges:
+        if edge["dst_kind"] != "endpoint" or edge["edge_type"] not in {"USES_ENDPOINT", "EXPOSES_ENDPOINT"}:
+            continue
+        endpoint_groups.setdefault(edge["dst_id"], []).append(edge)
+    for endpoint_id, edges in sorted(endpoint_groups.items()):
+        uses = [edge for edge in edges if edge["edge_type"] == "USES_ENDPOINT"]
+        exposes = [edge for edge in edges if edge["edge_type"] == "EXPOSES_ENDPOINT"]
+        if not uses and not exposes:
+            continue
+        first = (uses or exposes)[0]
+        _append_chain(
+            chains,
+            chain_type="endpoint",
+            summary=f"endpoint {first['dst_name']} is exposed by {', '.join(unique_strings([edge['src_name'] for edge in exposes])) or 'unknown'} and used by {', '.join(unique_strings([edge['src_name'] for edge in uses])) or 'unknown'}",
+            nodes=[contract_node_ref(endpoint_id, "endpoint", first["dst_name"], first["dst_path"])]
+            + [contract_node_ref(edge["src_id"], edge["src_kind"], edge["src_name"], edge["src_path"]) for edge in edges],
+            edges=[contract_edge_payload(edge) for edge in edges],
+        )
+
+    return chains
 
 
 def recursive_paths(conn: sqlite3.Connection, seed: str, edge_type: str, max_depth: int, reverse: bool = False) -> list[str]:
@@ -739,6 +1123,14 @@ def generate_report(
             conn,
             sections["owning_files"] + sections["direct_upstream"] + sections["direct_downstream"] + sections["direct_tests"] + sections["direct_rules"] + sections["direct_imports"],
         )
+        contract_edges = contract_context_edges(
+            conn,
+            seed=seed,
+            sections=sections,
+            changed_files=changed_files,
+        )
+        affected_contracts = affected_contracts_payload(contract_edges)
+        architecture_chains = architecture_chains_payload(contract_edges)
 
     risk_api = "high" if sections["direct_upstream"] else "low"
     risk_state = "high" if sections["direct_rules"] or sections["direct_downstream"] else "medium"
@@ -820,6 +1212,8 @@ def generate_report(
         "next_tests": next_tests,
         "key_evidence_paths": key_evidence_paths,
         "relationships": relationships,
+        "affected_contracts": affected_contracts,
+        "architecture_chains": architecture_chains,
         "brief": brief,
         "trust": trust,
         "seed_selection": seed_selection or {},
@@ -923,6 +1317,8 @@ def generate_report(
         "changed_files": changed_files,
         "definition": seed_detail or {"node_id": seed, "kind": sections["seed_kind"]},
         "direct": json_payload["direct"],
+        "affected_contracts": affected_contracts,
+        "architecture_chains": architecture_chains,
         "report_completeness": report_completeness,
         "test_signal": test_signal,
         "trust": trust,

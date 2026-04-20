@@ -29,3 +29,19 @@ Setup-ready profiles:
 
 `generic` is file-level only. It is valid, but lower completeness than symbol-level modes.
 
+## Architecture-contract surfaces
+
+Stage 16 adds lightweight repo-local support for contract nodes and edges such
+as:
+
+- endpoints and routes
+- components and props
+- events
+- env vars and config keys
+- SQL tables
+- IPC channels
+- Obsidian commands
+- Playwright flows
+
+When a dependency is real but the exact edge type is uncertain, the graph may
+fall back to `DEPENDS_ON` with reduced confidence.

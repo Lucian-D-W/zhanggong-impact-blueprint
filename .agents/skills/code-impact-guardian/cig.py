@@ -76,8 +76,16 @@ DEFAULT_CONFIG = {
         "coverage_adapter": "coveragepy",
     },
     "tsjs": {
-        "source_globs": ["src/*.js", "src/**/*.js", "src/*.ts", "src/**/*.ts", "src/*.jsx", "src/**/*.jsx", "src/*.tsx", "src/**/*.tsx"],
-        "test_globs": ["tests/*.js", "tests/**/*.js", "tests/*.ts", "tests/**/*.ts", "tests/*.jsx", "tests/**/*.jsx", "tests/*.tsx", "tests/**/*.tsx"],
+        "source_globs": [
+            "src/*.js", "src/**/*.js", "src/*.ts", "src/**/*.ts", "src/*.jsx", "src/**/*.jsx", "src/*.tsx", "src/**/*.tsx",
+            "app/*.js", "app/**/*.js", "app/*.ts", "app/**/*.ts", "app/*.jsx", "app/**/*.jsx", "app/*.tsx", "app/**/*.tsx",
+            "pages/*.js", "pages/**/*.js", "pages/*.ts", "pages/**/*.ts", "pages/*.jsx", "pages/**/*.jsx", "pages/*.tsx", "pages/**/*.tsx"
+        ],
+        "test_globs": [
+            "tests/*.js", "tests/**/*.js", "tests/*.ts", "tests/**/*.ts", "tests/*.jsx", "tests/**/*.jsx", "tests/*.tsx", "tests/**/*.tsx",
+            "app/**/*.spec.js", "app/**/*.spec.ts", "app/**/*.spec.tsx",
+            "pages/**/*.spec.js", "pages/**/*.spec.ts", "pages/**/*.spec.tsx"
+        ],
         "test_command": ["node", "--test"],
         "coverage_adapter": "v8_family",
     },
@@ -118,6 +126,8 @@ DEFAULT_CONFIG = {
     },
     "impact": {"max_depth": 3},
     "flow_policy": change_classifier.default_flow_policy(),
+    "doc_roles": change_classifier.default_doc_roles(),
+    "mutation_guard": change_classifier.default_mutation_guard(),
     "verification_policy": {
         "default_budget": "B2",
         "budgets": {
@@ -179,7 +189,8 @@ CREATE TABLE IF NOT EXISTS edges (
     'DEFINES', 'CALLS', 'IMPORTS', 'COVERS', 'GOVERNS',
     'READS_CONFIG', 'READS_ENV', 'EMITS_EVENT', 'HANDLES_EVENT',
     'QUERIES_TABLE', 'MUTATES_TABLE', 'ROUTES_TO', 'RENDERS_COMPONENT',
-    'USES_PROP', 'REGISTER_COMMAND', 'IPC_SENDS', 'IPC_HANDLES'
+    'USES_PROP', 'REGISTER_COMMAND', 'IPC_SENDS', 'IPC_HANDLES',
+    'DEPENDS_ON', 'EXPOSES_ENDPOINT', 'USES_ENDPOINT'
   )),
   dst_id TEXT NOT NULL REFERENCES nodes(node_id) ON DELETE CASCADE,
   is_direct INTEGER NOT NULL DEFAULT 1 CHECK(is_direct IN (0, 1)),
@@ -289,7 +300,7 @@ CREATE INDEX IF NOT EXISTS idx_file_diffs_round ON file_diffs(edit_round_id);
 CREATE INDEX IF NOT EXISTS idx_symbol_diffs_round ON symbol_diffs(edit_round_id);
 
 INSERT INTO repo_meta(meta_key, meta_value) VALUES
-  ('schema_version', '3'),
+  ('schema_version', '4'),
   ('graph_mode', 'direct-edges-only')
 ON CONFLICT(meta_key) DO UPDATE SET meta_value = excluded.meta_value;
 """
@@ -1426,6 +1437,8 @@ def next_action_payload(
     report_json = read_report_json_payload(report_payload)
     direct_payload = (report_payload or {}).get("direct") or (report_json.get("direct") or {})
     definition = (report_payload or {}).get("definition") or (report_json.get("definition") or {})
+    affected_contracts = list((report_payload or {}).get("affected_contracts") or report_json.get("affected_contracts") or [])
+    architecture_chains = list((report_payload or {}).get("architecture_chains") or report_json.get("architecture_chains") or [])
     changed_files = list(changed_files_override or (report_payload or {}).get("changed_files") or report_json.get("changed_files") or [])
     change_summary = change_classifier.classify_change(workspace_root, config, changed_files)
     if not changed_files and seed:
@@ -1459,6 +1472,18 @@ def next_action_payload(
     definition_attrs = definition.get("attrs", {})
     parser_confidence = definition_attrs.get("parser_confidence")
     parser_warning = definition_attrs.get("parser_warning")
+    contract_confidence = "low"
+    if affected_contracts:
+        lowest_contract_confidence = min(float(item.get("confidence") or 0.0) for item in affected_contracts)
+        if lowest_contract_confidence >= 0.85:
+            contract_confidence = "high"
+        elif lowest_contract_confidence >= 0.65:
+            contract_confidence = "medium"
+    contract_risk = "low"
+    if any(item.get("kind") in {"ipc_channel", "sql_table", "endpoint", "event"} for item in affected_contracts):
+        contract_risk = "high"
+    elif affected_contracts or architecture_chains:
+        contract_risk = "medium"
     suggestion = success_next_step(command_name)
     recommended_action = "edit_code"
     loop_state = {
@@ -1592,10 +1617,33 @@ def next_action_payload(
                 "python .agents/skills/code-impact-guardian/cig.py finish --workspace-root . --test-scope full"
             )
 
+    primary_contract = affected_contracts[0] if affected_contracts else {}
+    primary_contract_name = primary_contract.get("name") or "the affected contract"
+    primary_contract_kind = primary_contract.get("kind")
     if effective_class == "bypass":
         user_message = (
             "This is a non-runtime documentation change. It does not affect the runtime graph, "
             "so you can edit it directly and you do not need the full guardian flow or tests afterward."
+        )
+    elif primary_contract_kind == "ipc_channel":
+        user_message = (
+            f"This change does not stop at function calls. It touches IPC channel `{primary_contract_name}`, "
+            "so review both the renderer send side and the main handle side before editing, then run at least configured tests."
+        )
+    elif primary_contract_kind == "sql_table":
+        user_message = (
+            f"This change touches SQL table `{primary_contract_name}`, so check both query and mutation paths before editing. "
+            "Treat schema or migration updates as high-risk and prefer configured or full verification."
+        )
+    elif primary_contract_kind == "endpoint":
+        user_message = (
+            f"This change touches API endpoint `{primary_contract_name}`. Do not treat function-only impact as complete; "
+            "also review route and flow usage before calling the edit ready."
+        )
+    elif primary_contract_kind in {"env_var", "config_key"}:
+        user_message = (
+            f"This change touches {primary_contract_kind.replace('_', ' ')} `{primary_contract_name}`. "
+            "Check every reader path before editing and do not overstate confidence when the contract match is partial."
         )
     elif effective_class == "lightweight":
         user_message = (
@@ -1645,6 +1693,8 @@ def next_action_payload(
             "Read the key files first, run the recommended scope, and if targeted mapping fails fall back to configured tests. "
             "If dependency state is changed or unknown, do not make a high-confidence safety claim without broader verification."
         )
+        if affected_contracts:
+            agent_instruction += " Do not treat function-only impact as complete. Review affected_contracts and architecture_chains before editing."
         if loop_state.get("repeat_count", 0) >= 3:
             agent_instruction += " Stop patching the same local area. Read the expanded chain first."
     trust_payload = dict(trust or build_decision.get("trust") or {})
@@ -1671,6 +1721,10 @@ def next_action_payload(
         "recommended_test_commands": list(recommend_payload.get("recommended_tests") or []),
         "recommended_commands": recommended_commands,
         "risk_level": risk_level,
+        "affected_contracts": affected_contracts,
+        "architecture_chains": architecture_chains,
+        "contract_risk": contract_risk,
+        "contract_confidence": contract_confidence,
         "can_edit_now": can_edit_now,
         "must_read_first": must_read_first,
         "repair_loop": {
@@ -2754,6 +2808,12 @@ def main() -> int:
     classify_parser.add_argument("--config", default=".code-impact-guardian/config.json")
     classify_parser.add_argument("--changed-file", action="append", default=[])
 
+    mutation_parser = subparsers.add_parser("assess-mutation", help="Assess move/archive/delete risk for a path")
+    mutation_parser.add_argument("--workspace-root", default=".")
+    mutation_parser.add_argument("--config", default=".code-impact-guardian/config.json")
+    mutation_parser.add_argument("--path", required=True)
+    mutation_parser.add_argument("--action", choices=["edit", "move", "archive", "delete", "permanent_delete"], required=True)
+
     loop_status_parser = subparsers.add_parser("loop-status", help="Summarize the current repair loop state")
     loop_status_parser.add_argument("--workspace-root", default=".")
     loop_status_parser.add_argument("--config", default=".code-impact-guardian/config.json")
@@ -3076,6 +3136,14 @@ def main() -> int:
         elif args.command == "classify-change":
             config = build_graph.load_config(config_path)
             payload = change_classifier.classify_change(workspace_root, config, args.changed_file)
+        elif args.command == "assess-mutation":
+            config = build_graph.load_config(config_path)
+            payload = change_classifier.assess_mutation(
+                workspace_root,
+                config,
+                args.path,
+                args.action,
+            )
         elif args.command == "loop-status":
             payload = repair_escalation.loop_status_payload(workspace_root=workspace_root)
         elif args.command == "diagnose-loop":

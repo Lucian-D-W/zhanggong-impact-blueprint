@@ -4,9 +4,11 @@
 
 1. `setup`
 2. `analyze`
-3. edit code
-4. `finish`
-5. `status`
+3. read `.ai/codegraph/next-action.json`
+4. if present, read `affected_contracts` and `architecture_chains`
+5. edit code
+6. `finish`
+7. `status`
 
 ## When setup is auto-run
 
@@ -20,9 +22,21 @@ before asking the user anything.
 
 ## What analyze means
 
-`analyze` is the mandatory pre-edit checkpoint. It resolves context, selects or recommends a seed, builds or refreshes the graph, and writes the brief report plus machine-readable artifacts.
+`analyze` is the mandatory pre-edit checkpoint. It resolves context, selects or
+recommends a seed, builds or refreshes the graph, and writes the brief report
+plus machine-readable artifacts such as `next-action.json`.
+
+For Stage 16-style work, those artifacts can include contract-oriented surfaces
+such as:
+
+- `affected_contracts`
+- `architecture_chains`
+
+Use them when API, route, event, table, config/env key, or IPC changes might
+reach beyond function `CALLS`.
 
 ## What finish means
 
-`finish` is the mandatory post-edit checkpoint. It refreshes graph/report/evidence, runs tests, updates handoff, and records warnings honestly.
-
+`finish` is the mandatory post-edit checkpoint. It refreshes
+graph/report/evidence, runs the budget-appropriate test scope, updates
+handoff, and records warnings honestly.

@@ -15,6 +15,8 @@
 3. Read the brief:
    - selected seed
    - direct impact
+   - affected contracts
+   - architecture chains
    - recommended tests
    - uncertainty/trust
 4. Edit code with that scope in mind.
@@ -22,10 +24,12 @@
 6. Review:
    - affected tests found or not
    - coverage available or unavailable
+   - contract links that still need human judgment
    - remaining risk is explicit rather than implied away
 
 ## Product value
 
 - Before edit: impact becomes visible.
+- Before edit: contract-level blast radius becomes visible too.
 - After edit: tests and coverage are reported honestly.
 - Remaining uncertainty is shown instead of being disguised as safety.

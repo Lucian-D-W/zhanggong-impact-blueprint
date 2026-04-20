@@ -119,6 +119,20 @@
 
 补了一条删除安全规则到仓库级与全局级 agent 约定：删除动作默认只能移入回收站或 trash，不得直接永久删除；任何永久删除都必须先获得用户明确且严格的审批。这条规则已写入仓库 `AGENTS.md`、consumer 生成模板，以及全局 Codex `AGENTS.md`。
 
+## Stage 15.1
+
+时间：2026-04-19
+
+把“流程轻重”和“危险动作保护”从同一套判断里拆开。Stage 15.1 的目标不是推翻 Stage 15，而是把 working note / 活跃工作记录这类文档放回轻流程，同时把 move/archive/delete/permanent delete 的风险单独治理，避免再出现“因为关键词误升重才碰巧挡住误操作”的假保护。
+
+## Stage 15.1 重要节点
+
+- 2026-04-19：给 change classifier 增加 `doc_roles`。系统现在除了看路径和扩展名，也会看文档角色；`working_note`、`guide_doc`、`archive_note`、`rule_doc` 会影响 flow 判断。`mainstone.md` 已通过 repo-local config 明确声明为 `working_note + protected_doc`。
+- 2026-04-19：working note 不再因为写了 `verification budget`、`finish --test-scope` 这类关键词就自动被抬成 guarded。对于活跃工作记录，guardian 现在优先理解“这是工作记录”，而不是只看命令词。
+- 2026-04-19：新增 `assess-mutation` CLI，用来单独判断 `edit / move / archive / delete / permanent_delete` 的动作风险。现在系统会把“这次改动要不要走 full guardian”与“这个动作会不会伤到用户文件”分开处理。
+- 2026-04-19：把删除保护落成默认机制。普通删除默认只能 `recycle_only`，永久删除会落到 `never_delete_without_approval`，需要用户明确且严格审批；受保护工作文档在 move/archive 时也会要求先确认。
+- 2026-04-19：新增 `tests/test_stage15_1_workflow.py`，覆盖 declared working note、heuristic working note、rule doc override、move/archive/delete/permanent delete 的 mutation guard 行为。Stage15.1 单测通过，同时 Stage15 与 Stage13/14/15/15.1 组合回归通过，确保没有把原 Stage 15 行为打坏。
+
 ## 当前状态
 
-截至 2026-04-19，Code Impact Guardian 已推进到 Stage15，具备 repo-local、可复制、可分发、可恢复、支持 Python / TSJS / React / SQL / generic fallback 的完整主流程，并已经形成 verification budget、shadow calibration、contract graph、flow scope governance 与 repair loop escalation 的组合能力。产品边界也更明确：它首先是给 agents 用的工程图册与验证护栏，而不是平台型重智能系统。
+截至 2026-04-19，Code Impact Guardian 已推进到 Stage15.1，具备 repo-local、可复制、可分发、可恢复、支持 Python / TSJS / React / SQL / generic fallback 的完整主流程，并已经形成 verification budget、shadow calibration、contract graph、flow scope governance、repair loop escalation、doc-role-aware working-note handling 与 mutation safety 的组合能力。产品边界也更明确：它首先是给 agents 用的工程图册与验证护栏，而不是平台型重智能系统。

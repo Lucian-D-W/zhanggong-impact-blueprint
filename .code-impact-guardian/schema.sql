@@ -46,7 +46,8 @@ CREATE TABLE IF NOT EXISTS edges (
     'DEFINES', 'CALLS', 'IMPORTS', 'COVERS', 'GOVERNS',
     'READS_CONFIG', 'READS_ENV', 'EMITS_EVENT', 'HANDLES_EVENT',
     'QUERIES_TABLE', 'MUTATES_TABLE', 'ROUTES_TO', 'RENDERS_COMPONENT',
-    'USES_PROP', 'REGISTER_COMMAND', 'IPC_SENDS', 'IPC_HANDLES'
+    'USES_PROP', 'REGISTER_COMMAND', 'IPC_SENDS', 'IPC_HANDLES',
+    'DEPENDS_ON', 'EXPOSES_ENDPOINT', 'USES_ENDPOINT'
   )),
   dst_id TEXT NOT NULL REFERENCES nodes(node_id) ON DELETE CASCADE,
   is_direct INTEGER NOT NULL DEFAULT 1 CHECK(is_direct IN (0, 1)),
@@ -156,6 +157,6 @@ CREATE INDEX IF NOT EXISTS idx_file_diffs_round ON file_diffs(edit_round_id);
 CREATE INDEX IF NOT EXISTS idx_symbol_diffs_round ON symbol_diffs(edit_round_id);
 
 INSERT INTO repo_meta(meta_key, meta_value) VALUES
-  ('schema_version', '3'),
+  ('schema_version', '4'),
   ('graph_mode', 'direct-edges-only')
 ON CONFLICT(meta_key) DO UPDATE SET meta_value = excluded.meta_value;

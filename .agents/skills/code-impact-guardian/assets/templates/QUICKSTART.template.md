@@ -54,6 +54,9 @@ python .agents/skills/code-impact-guardian/cig.py finish
 - use `--full` when you need more detail
 - each report writes both `.md` and `.json`
 - `brief` is the daily-use mode; it is intentionally short
+- read `affected_contracts` and `architecture_chains` when API, route, event,
+  table, config/env, or IPC changes may be involved
+- treat low-confidence `DEPENDS_ON` as fallback evidence, not parser certainty
 - use `--patch-file <path>` when your editor or agent already has a diff file
 - use `--changed-line <path:line>` only when auto context inference still needs help
 - if `analyze` cannot infer enough context, it will tell you to pass `--changed-file`, `--patch-file`, initialize git, or use `--allow-fallback`
@@ -77,6 +80,8 @@ python .agents/skills/code-impact-guardian/cig.py report --seed <seed>
 python .agents/skills/code-impact-guardian/cig.py after-edit --seed <seed> --changed-file <relative-path>
 ```
 
+`setup`, `health`, `analyze`, and `finish` remain the preferred daily-use path.
+
 ## Runtime artifacts
 
 - Graph DB: `.ai/codegraph/codegraph.db`
@@ -88,4 +93,6 @@ python .agents/skills/code-impact-guardian/cig.py after-edit --seed <seed> --cha
 - Context inference: `.ai/codegraph/context-resolution.json`
 - Seed candidates: `.ai/codegraph/seed-candidates.json`
 - Next action: `.ai/codegraph/next-action.json`
+- Contract chains: read `affected_contracts` and `architecture_chains` inside
+  the report JSON and `next-action.json`
 - Health: `python .agents/skills/code-impact-guardian/cig.py health --workspace-root .`

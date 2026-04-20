@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import fnmatch
 import pathlib
+import re
 
 
 TEXT_DOC_SUFFIXES = {".md", ".txt", ".rst"}
@@ -15,6 +16,37 @@ CLASS_PRIORITY = {
     "risk_sensitive": 3,
 }
 LEVEL_PRIORITY = {"L0": 0, "L1": 1, "L2": 2, "L3": 3}
+WORKING_NOTE_NAME_HINTS = {
+    "chaos",
+    "journal",
+    "log",
+    "milestone",
+    "note",
+    "notes",
+    "progress",
+    "record",
+    "status",
+    "tracker",
+    "worklog",
+    "working",
+}
+WORKING_NOTE_STRONG_PATTERNS = [
+    "working notes",
+    "working note",
+    "current status",
+    "next steps",
+    "in progress",
+    "blocked",
+]
+WORKING_NOTE_SOFT_PATTERNS = [
+    "handoff",
+    "milestone",
+    "plan",
+    "progress",
+    "stage ",
+    "status",
+    "todo",
+]
 
 
 DEFAULT_FLOW_POLICY = {
@@ -76,6 +108,22 @@ DEFAULT_FLOW_POLICY = {
     ],
 }
 
+DEFAULT_DOC_ROLES = {
+    "working_note_globs": [],
+    "protected_doc_globs": [
+        "README.md",
+        "AGENTS.md",
+        ".agents/skills/code-impact-guardian/SKILL.md",
+    ],
+}
+
+DEFAULT_MUTATION_GUARD = {
+    "confirm_move_for_protected_docs": True,
+    "confirm_archive_for_protected_docs": True,
+    "delete_mode": "recycle_only",
+    "require_strict_approval_for_permanent_delete": True,
+}
+
 
 def normalize_path(path: str | pathlib.Path, workspace_root: pathlib.Path | None = None) -> str:
     candidate = pathlib.Path(path)
@@ -123,13 +171,35 @@ def default_flow_policy() -> dict:
     return copy.deepcopy(DEFAULT_FLOW_POLICY)
 
 
-def merged_flow_policy(config: dict | None) -> dict:
-    flow_policy = (config or {}).get("flow_policy") or {}
-    merged = default_flow_policy()
-    for key, default_values in DEFAULT_FLOW_POLICY.items():
-        user_values = list(flow_policy.get(key) or [])
-        merged[key] = [*user_values, *[item for item in default_values if item not in user_values]]
+def default_doc_roles() -> dict:
+    return copy.deepcopy(DEFAULT_DOC_ROLES)
+
+
+def default_mutation_guard() -> dict:
+    return copy.deepcopy(DEFAULT_MUTATION_GUARD)
+
+
+def _merge_glob_policy(defaults: dict, configured: dict | None) -> dict:
+    merged = copy.deepcopy(defaults)
+    for key, default_values in defaults.items():
+        if isinstance(default_values, list):
+            user_values = list((configured or {}).get(key) or [])
+            merged[key] = [*user_values, *[item for item in default_values if item not in user_values]]
+        else:
+            merged[key] = (configured or {}).get(key, default_values)
     return merged
+
+
+def merged_flow_policy(config: dict | None) -> dict:
+    return _merge_glob_policy(DEFAULT_FLOW_POLICY, (config or {}).get("flow_policy") or {})
+
+
+def merged_doc_roles(config: dict | None) -> dict:
+    return _merge_glob_policy(DEFAULT_DOC_ROLES, (config or {}).get("doc_roles") or {})
+
+
+def merged_mutation_guard(config: dict | None) -> dict:
+    return _merge_glob_policy(DEFAULT_MUTATION_GUARD, (config or {}).get("mutation_guard") or {})
 
 
 def _pattern_variants(pattern: str) -> list[str]:
@@ -176,9 +246,115 @@ def matching_guard_pattern(workspace_root: pathlib.Path, path: str, patterns: li
     return None
 
 
+def _tokenize_name(path: str) -> set[str]:
+    name = pathlib.PurePosixPath(path).stem.lower()
+    return {token for token in re.split(r"[^a-z0-9]+", name) if token}
+
+
+def looks_like_working_note(workspace_root: pathlib.Path, path: str) -> bool:
+    normalized = path.lower()
+    if not is_text_document(normalized):
+        return False
+    if normalized.startswith(("docs/archive/", "docs/demo/", "docs/rules/")):
+        return False
+    if is_review_or_runtime_doc(normalized):
+        return False
+    content = read_text_if_available(workspace_root, path).lower()
+    if not content:
+        return False
+    strong_hits = sum(1 for pattern in WORKING_NOTE_STRONG_PATTERNS if pattern in content)
+    soft_hits = sum(1 for pattern in WORKING_NOTE_SOFT_PATTERNS if pattern in content)
+    bullet_lines = sum(
+        1
+        for line in content.splitlines()
+        if line.lstrip().startswith(("- ", "* ", "1. ", "2. ", "3. "))
+    )
+    name_tokens = _tokenize_name(path)
+    name_hint = bool(name_tokens & WORKING_NOTE_NAME_HINTS)
+    if strong_hits >= 2:
+        return True
+    if strong_hits >= 1 and (name_hint or soft_hits >= 1 or bullet_lines >= 2):
+        return True
+    if name_hint and (soft_hits >= 2 or bullet_lines >= 2):
+        return True
+    return False
+
+
+def doc_role_for_file(workspace_root: pathlib.Path, config: dict, changed_file: str) -> dict:
+    path = normalize_path(changed_file, workspace_root)
+    normalized = path.lower()
+    doc_roles = merged_doc_roles(config)
+    declared_protected_pattern = first_matching_pattern(path, doc_roles["protected_doc_globs"])
+    if not is_text_document(path):
+        return {
+            "path": path,
+            "doc_role": "non_doc",
+            "role_source": "special_case",
+            "declared_pattern": None,
+            "protected_doc": bool(declared_protected_pattern),
+            "protection_source": f"protected_doc_globs:{declared_protected_pattern}" if declared_protected_pattern else None,
+        }
+    if normalized.startswith("docs/rules/"):
+        return {
+            "path": path,
+            "doc_role": "rule_doc",
+            "role_source": "special_case",
+            "declared_pattern": None,
+            "protected_doc": True,
+            "protection_source": "special_case:rule_doc",
+        }
+    declared_working_note_pattern = first_matching_pattern(path, doc_roles["working_note_globs"])
+    if declared_working_note_pattern:
+        return {
+            "path": path,
+            "doc_role": "working_note",
+            "role_source": "declared",
+            "declared_pattern": f"working_note_globs:{declared_working_note_pattern}",
+            "protected_doc": bool(declared_protected_pattern),
+            "protection_source": f"protected_doc_globs:{declared_protected_pattern}" if declared_protected_pattern else None,
+        }
+    if is_review_or_runtime_doc(path):
+        protection_source = f"protected_doc_globs:{declared_protected_pattern}" if declared_protected_pattern else None
+        return {
+            "path": path,
+            "doc_role": "guide_doc",
+            "role_source": "special_case",
+            "declared_pattern": None,
+            "protected_doc": bool(declared_protected_pattern),
+            "protection_source": protection_source,
+        }
+    if normalized.startswith(("docs/archive/", "docs/demo/")):
+        return {
+            "path": path,
+            "doc_role": "archive_note",
+            "role_source": "special_case",
+            "declared_pattern": None,
+            "protected_doc": bool(declared_protected_pattern),
+            "protection_source": f"protected_doc_globs:{declared_protected_pattern}" if declared_protected_pattern else None,
+        }
+    if looks_like_working_note(workspace_root, path):
+        return {
+            "path": path,
+            "doc_role": "working_note",
+            "role_source": "heuristic",
+            "declared_pattern": None,
+            "protected_doc": bool(declared_protected_pattern),
+            "protection_source": f"protected_doc_globs:{declared_protected_pattern}" if declared_protected_pattern else None,
+        }
+    return {
+        "path": path,
+        "doc_role": "generic_doc",
+        "role_source": "default",
+        "declared_pattern": None,
+        "protected_doc": bool(declared_protected_pattern),
+        "protection_source": f"protected_doc_globs:{declared_protected_pattern}" if declared_protected_pattern else None,
+    }
+
+
 def file_classification(workspace_root: pathlib.Path, config: dict, changed_file: str) -> dict:
     path = normalize_path(changed_file, workspace_root)
     flow_policy = merged_flow_policy(config)
+    role_info = doc_role_for_file(workspace_root, config, path)
     matched: list[tuple[int, str, str]] = []
 
     risk_pattern = first_matching_pattern(path, flow_policy["risk_sensitive_globs"])
@@ -197,13 +373,16 @@ def file_classification(workspace_root: pathlib.Path, config: dict, changed_file
     if bypass_pattern:
         matched.append((CLASS_PRIORITY["bypass"], "bypass", f"bypass_globs:{bypass_pattern}"))
 
-    if path.lower().startswith("docs/rules/"):
-        matched.append((CLASS_PRIORITY["guarded"], "guarded", "special_case:docs_rules"))
-
-    if is_review_or_runtime_doc(path):
-        matched.append((CLASS_PRIORITY["lightweight"], "lightweight", "special_case:runtime_or_review_doc"))
-
-    if plain_doc_bypass_candidate(path):
+    doc_role = role_info["doc_role"]
+    if doc_role == "rule_doc":
+        matched.append((CLASS_PRIORITY["guarded"], "guarded", "special_case:rule_doc"))
+    elif doc_role == "guide_doc":
+        matched.append((CLASS_PRIORITY["lightweight"], "lightweight", "special_case:guide_doc"))
+    elif doc_role == "working_note":
+        matched.append((CLASS_PRIORITY["lightweight"], "lightweight", "special_case:working_note"))
+    elif doc_role == "archive_note":
+        matched.append((CLASS_PRIORITY["bypass"], "bypass", "special_case:archive_note"))
+    elif plain_doc_bypass_candidate(path):
         matched.append((CLASS_PRIORITY["bypass"], "bypass", "special_case:plain_doc"))
 
     if pathlib.PurePosixPath(path).suffix.lower() in IMAGE_SUFFIXES:
@@ -215,7 +394,8 @@ def file_classification(workspace_root: pathlib.Path, config: dict, changed_file
 
     winner = max(matched, key=lambda item: item[0])
     guard_pattern = matching_guard_pattern(workspace_root, path, flow_policy["markdown_guard_patterns"])
-    if guard_pattern and winner[1] in {"bypass", "lightweight"}:
+    suppress_guard_promotion = doc_role in {"working_note", "archive_note"}
+    if guard_pattern and winner[1] in {"bypass", "lightweight"} and not suppress_guard_promotion:
         winner = (
             CLASS_PRIORITY["guarded"],
             "guarded",
@@ -228,6 +408,11 @@ def file_classification(workspace_root: pathlib.Path, config: dict, changed_file
         "matched_rule": winner[2],
         "contains_guard_pattern": bool(guard_pattern),
         "guard_pattern": guard_pattern,
+        "doc_role": doc_role,
+        "role_source": role_info["role_source"],
+        "declared_pattern": role_info["declared_pattern"],
+        "protected_doc": role_info["protected_doc"],
+        "protection_source": role_info["protection_source"],
     }
 
 
@@ -300,6 +485,8 @@ def classify_change(workspace_root: pathlib.Path, config: dict, changed_files: l
 
     current_effective_class = effective_class(change_class, file_entries)
     reason_codes = sorted({entry["class"] for entry in file_entries})
+    role_codes = sorted({entry["doc_role"] for entry in file_entries if entry.get("doc_role") not in {None, "non_doc"}})
+    reason_codes.extend(f"doc_role:{role}" for role in role_codes)
     if change_class == "mixed":
         reason_codes.append("mixed_change")
     if any(entry.get("contains_guard_pattern") for entry in file_entries):
@@ -313,6 +500,91 @@ def classify_change(workspace_root: pathlib.Path, config: dict, changed_files: l
         "recommended_test_scope": recommended_scope_for_class(current_effective_class),
         "reason_codes": reason_codes,
         "files": file_entries,
+    }
+
+
+def assess_mutation(workspace_root: pathlib.Path, config: dict, target_path: str, action: str) -> dict:
+    path = normalize_path(target_path, workspace_root)
+    classification = file_classification(workspace_root, config, path)
+    mutation_guard = merged_mutation_guard(config)
+    protected_doc = classification.get("protected_doc", False)
+    doc_role = classification.get("doc_role")
+
+    guard_level = "safe_edit"
+    requires_user_confirmation = False
+    requires_strict_user_approval = False
+    allowed_without_approval = True
+    delete_mode = "none"
+    permanent_delete_allowed = True
+    reason_codes: list[str] = []
+
+    if action == "move":
+        if protected_doc and mutation_guard.get("confirm_move_for_protected_docs", True):
+            guard_level = "confirm_before_move"
+            requires_user_confirmation = True
+            allowed_without_approval = False
+            reason_codes.append("protected_doc_move")
+        else:
+            reason_codes.append("move_allowed")
+    elif action == "archive":
+        if protected_doc and mutation_guard.get("confirm_archive_for_protected_docs", True):
+            guard_level = "confirm_before_archive"
+            requires_user_confirmation = True
+            allowed_without_approval = False
+            reason_codes.append("protected_doc_archive")
+        else:
+            reason_codes.append("archive_allowed")
+    elif action == "delete":
+        delete_mode = mutation_guard.get("delete_mode", "recycle_only")
+        permanent_delete_allowed = False
+        if delete_mode == "recycle_only":
+            guard_level = "recycle_only_delete"
+            reason_codes.append("recycle_only_delete")
+        else:
+            guard_level = "confirm_before_delete"
+            requires_user_confirmation = True
+            allowed_without_approval = False
+            reason_codes.append("delete_requires_confirmation")
+        if protected_doc:
+            requires_user_confirmation = True
+            allowed_without_approval = False
+            reason_codes.append("protected_doc_delete")
+    elif action == "permanent_delete":
+        delete_mode = "permanent"
+        permanent_delete_allowed = False
+        guard_level = "never_delete_without_approval"
+        requires_strict_user_approval = mutation_guard.get("require_strict_approval_for_permanent_delete", True)
+        allowed_without_approval = False
+        reason_codes.append("strict_approval_required")
+    else:
+        reason_codes.append("edit_allowed")
+
+    if action == "edit":
+        user_message = "This is a normal edit. Mutation protection does not block editing this file."
+    elif guard_level == "confirm_before_move":
+        user_message = "This document is protected. Confirm with the user before moving it."
+    elif guard_level == "confirm_before_archive":
+        user_message = "This document is protected. Confirm with the user before archiving it."
+    elif guard_level == "recycle_only_delete":
+        user_message = "Delete operations must go to the recycle bin or trash by default."
+    else:
+        user_message = "Permanent deletion requires explicit, strict user approval."
+
+    return {
+        "path": path,
+        "action": action,
+        "doc_role": doc_role,
+        "role_source": classification.get("role_source"),
+        "change_class": classification.get("class"),
+        "guard_level": guard_level,
+        "protected_doc": protected_doc,
+        "requires_user_confirmation": requires_user_confirmation,
+        "requires_strict_user_approval": requires_strict_user_approval,
+        "allowed_without_approval": allowed_without_approval,
+        "delete_mode": delete_mode,
+        "permanent_delete_allowed": permanent_delete_allowed,
+        "reason_codes": reason_codes,
+        "user_message": user_message,
     }
 
 

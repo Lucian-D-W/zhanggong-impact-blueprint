@@ -193,6 +193,23 @@
       "graph_trust"
     ]
   },
+  "doc_roles": {
+    "working_note_globs": [
+      "mainstone.md"
+    ],
+    "protected_doc_globs": [
+      "mainstone.md",
+      "README.md",
+      "AGENTS.md",
+      ".agents/skills/code-impact-guardian/SKILL.md"
+    ]
+  },
+  "mutation_guard": {
+    "confirm_move_for_protected_docs": true,
+    "confirm_archive_for_protected_docs": true,
+    "delete_mode": "recycle_only",
+    "require_strict_approval_for_permanent_delete": true
+  },
   "verification_policy": {
     "default_budget": "B2",
     "budgets": {

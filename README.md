@@ -20,15 +20,27 @@ and used by agents as part of the normal edit loop.
 
 ## Current focus
 
-The repository is now in the Stage 15 shape.
+The repository is now in the Stage 16 shape.
 
-That means the repo keeps the Stage 13 and Stage 14 verification/intelligence
-work, and adds two newer controls:
+That means the repo keeps the Stage 13 through Stage 15 workflow and trust
+work, and adds the architecture contract atlas on top of the function/test
+graph:
 
 - flow scope governance so docs, rules, tests, configs, and code do not all go
   through the same weight of workflow
+- doc-role-aware handling so working notes are not forced through the same path
+  as rule docs just because they mention verification vocabulary
 - repair loop escalation so repeated failures widen the visible chain instead
   of encouraging local patching forever
+- mutation safety so move/archive/delete risk is evaluated separately from
+  verification flow weight
+- architecture-contract extraction for endpoints, routes, components, props,
+  events, env/config keys, SQL tables, IPC channels, Obsidian commands, and
+  Playwright flows
+- report surfaces such as `affected_contracts` and `architecture_chains` so
+  agents do not stop at function callers/callees
+- low-confidence fallback edges via `DEPENDS_ON` when dependency facts are real
+  but the exact relationship type is not stable enough to overclaim
 
 The current operating model includes:
 
@@ -37,11 +49,17 @@ The current operating model includes:
 - `targeted`, `configured`, and `full` test scopes
 - `recommend-tests` for executable affected-test commands
 - `--shadow-full` calibration for targeted verification
-- `classify-change`, `loop-status`, and `diagnose-loop`
+- `classify-change`, `assess-mutation`, `loop-status`, and `diagnose-loop`
 - runtime integration pack files under `.ai/codegraph/runtime/`
 - multidimensional trust instead of a single trust flag
-- lightweight runtime-contract graph support for env/config/ipc/sql-style edges
+- lightweight architecture-contract graph support that reaches beyond
+  functions into API, UI, event, config, SQL, and IPC surfaces
+- `affected_contracts` and `architecture_chains` in report and next-action
+  outputs
+- `DEPENDS_ON` fallback edges with bounded confidence instead of fabricated
+  precision
 - repair-loop reveal levels `L0` through `L3`
+- configurable `doc_roles` for working notes and protected documents
 
 The repository root is intentionally kept lean:
 
@@ -62,12 +80,19 @@ The workflow is no longer one single path for every edit:
 2. if the change is `bypass`, edit directly and skip the full guardian flow
 3. if the change is `lightweight`, use health/analyze guidance only and avoid
    unnecessary full verification
-4. if the change is `guarded` or `risk_sensitive`, read the brief report and
+4. if the file is a working note, keep the flow lightweight unless it is really
+   changing commands, rules, tests, config, or schema behavior
+5. if the action is move/archive/delete/permanent delete, run `assess-mutation`
+   because mutation safety is stricter than normal text editing
+6. if the change is `guarded` or `risk_sensitive`, read the brief report and
    `.ai/codegraph/next-action.json` before editing
-5. run `finish` with the budget-driven scope when the change is runtime- or
+7. if the change touches API, route, event, SQL, env/config, or IPC contracts,
+   read `affected_contracts` and `architecture_chains` before treating the
+   problem as function-only
+8. run `finish` with the budget-driven scope when the change is runtime- or
    verification-relevant
-6. use `--shadow-full` when targeted verification needs calibration
-7. if the same failure keeps repeating, rerun `analyze` with escalation and
+9. use `--shadow-full` when targeted verification needs calibration
+10. if the same failure keeps repeating, rerun `analyze` with escalation and
    read the expanded chain before patching again
 
 For agents, the canonical operational instructions live in:
@@ -106,15 +131,28 @@ For agents, the canonical operational instructions live in:
 - high-confidence SQL test `COVERS`
 - honest no-coverage behavior when runtime coverage is not available
 
-### Runtime-contract graph
+### Architecture contract atlas
 
 The graph still centers on `file`, `function`, `test`, and `rule`, but the
 repo now also has lightweight support for identifying higher-level contracts
-such as env vars, config keys, endpoints, routes, ipc channels, SQL table
-references, and Playwright-style flow hints.
+such as env vars, config keys, endpoints, routes, components, props, events,
+IPC channels, SQL tables, Obsidian commands, and Playwright flows.
 
-These contract nodes are intentionally lightweight and should not be treated as
-fully exhaustive parser truth.
+These contract nodes are intentionally lightweight and repo-local. They are
+meant to widen the visible change surface, not to pretend the system is a full
+language server or runtime tracer.
+
+When the extractor can confirm a dependency but cannot safely label the exact
+relationship type, it records `DEPENDS_ON` with reduced confidence instead of
+overstating precision.
+
+The main user-facing contract surfaces are:
+
+- `affected_contracts`
+- `architecture_chains`
+
+Agents should read those before concluding that a change is only about function
+`CALLS`.
 
 ## Development repo vs consumer install
 
@@ -164,7 +202,9 @@ Compatibility review docs:
 Archived process/history docs:
 
 - `docs/archive/README.md`
-- `docs/archive/stage-history-through-stage15.md`
+- `docs/archive/initial-implementation-prompt.md`
+- `docs/archive/project-background.md`
+- `docs/archive/review-2026-04-19.txt`
 
 ## Exporting the skill
 
@@ -208,6 +248,7 @@ These are the main user-facing commands now:
 python .agents/skills/code-impact-guardian/cig.py setup --project-root .
 python .agents/skills/code-impact-guardian/cig.py health
 python .agents/skills/code-impact-guardian/cig.py classify-change --workspace-root . --changed-file path/to/file
+python .agents/skills/code-impact-guardian/cig.py assess-mutation --workspace-root . --path path/to/file --action move
 python .agents/skills/code-impact-guardian/cig.py analyze
 python .agents/skills/code-impact-guardian/cig.py analyze --workspace-root . --changed-file path/to/file --escalation-level auto
 python .agents/skills/code-impact-guardian/cig.py recommend-tests --workspace-root . --task-id <task-id>
@@ -367,13 +408,15 @@ Focused validation:
 ```bash
 python -m unittest tests.test_stage11_workflow tests.test_stage13_workflow -v
 python -m unittest tests.test_stage14_workflow -v
+python -m unittest tests.test_stage15_1_workflow -v
 python -m unittest tests.test_stage15_workflow -v
+python -m unittest tests.test_stage16_workflow -v
 ```
 
 Broader regression:
 
 ```bash
-python -m unittest tests.test_stage9_workflow tests.test_stage10_workflow tests.test_stage11_workflow tests.test_stage13_workflow tests.test_stage14_workflow tests.test_stage15_workflow -v
+python -m unittest tests.test_stage9_workflow tests.test_stage10_workflow tests.test_stage11_workflow tests.test_stage13_workflow tests.test_stage14_workflow tests.test_stage15_1_workflow tests.test_stage15_workflow tests.test_stage16_workflow -v
 ```
 
 Full current workflow matrix:

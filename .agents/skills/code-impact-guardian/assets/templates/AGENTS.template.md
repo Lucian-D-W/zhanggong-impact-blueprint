@@ -15,6 +15,10 @@ Whenever a task changes code, behavior, configuration, schema, or tests:
 - Persist only direct edges.
 - Never persist indirect or transitive impact as durable graph truth.
 - Compute transitive impact only while generating the report.
+- Read `affected_contracts` and `architecture_chains` before assuming a change
+  is function-only.
+- Treat low-confidence `DEPENDS_ON` edges as bounded evidence, not architectural
+  proof.
 - If coverage is unavailable, record that fact. Never fabricate coverage-backed results.
 - Delete actions must move items to the recycle bin or trash by default. Permanent deletion requires explicit, strict user approval first.
 - Tests passed is not the same thing as safe.

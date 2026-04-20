@@ -7,7 +7,7 @@ This file defines the recovery protocol for agents and humans.
 1. Read `.ai/codegraph/logs/last-error.json`
 2. If the error is config-related, run `setup` again with the right profile and project root.
 3. If the error is supplemental-adapter-related, either add the expected files or remove that supplemental adapter from config.
-4. Re-run `doctor`, or try `doctor --fix-safe` for safe repairs only
+4. Start with `health` for the compact readiness summary, then re-run `doctor`, or try `doctor --fix-safe` for safe repairs only
 
 ## Detect is uncertain
 
@@ -41,6 +41,7 @@ This file defines the recovery protocol for agents and humans.
 4. If needed, start from a file seed before returning to a function/routine seed
 5. If multiple candidates were found, use one of the top suggested seeds from the structured error
 6. If the error is `CONTEXT_MISSING`, do not trust an empty-looking report; provide context first or explicitly allow fallback
+7. If the task is documentation-only, use `classify-change` to decide whether a lightweight or bypass flow is the safer path instead of forcing a fake code seed
 
 ## After-edit test failed
 
@@ -51,6 +52,13 @@ This file defines the recovery protocol for agents and humans.
 5. Read `.ai/codegraph/next-action.json` for the most specific retry recommendation
 6. Fix the test command or the code under test
 7. Re-run `finish` or `after-edit`
+
+## Contract context looks wrong
+
+1. Read `.ai/codegraph/next-action.json`
+2. Confirm the current task was not pulled toward a stale recent code seed
+3. Inspect `affected_contracts` and `architecture_chains` when contract-level blast radius is part of the problem
+4. If the task is documentation-only, do not overfit the edit to irrelevant runtime context
 
 ## Coverage unavailable
 

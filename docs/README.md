@@ -13,8 +13,10 @@ Use these first when you want the current behavior of the product:
 - `../benchmark/README.md`
 - `demo/without-vs-with-skill.md`
 
-These documents describe the current Stage 15 operating shape, including flow
-scope governance and repair-loop escalation.
+These documents describe the current Stage 16 operating shape, including flow
+scope governance, repair-loop escalation, and the architecture contract atlas
+(`affected_contracts`, `architecture_chains`, and low-confidence
+`DEPENDS_ON` fallback edges).
 
 ## Compatibility review docs
 
@@ -30,6 +32,8 @@ These are useful for project history, but they are not the current product
 entry points:
 
 - `archive/README.md`
+- `archive/initial-implementation-prompt.md`
+- `archive/project-background.md`
 - `superpowers/plans/`
 
 ## Runtime outputs

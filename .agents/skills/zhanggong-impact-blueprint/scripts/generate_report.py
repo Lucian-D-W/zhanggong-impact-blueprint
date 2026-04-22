@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from adapters import detect_project_profile_name
 from build_graph import get_git_context, graph_paths, load_config, project_root_for, record_task_run, resolved_language_adapter
 from db_support import connect_db
+from trust_policy import trust_lowering_reasons
 
 TRUST_ORDER = {"low": 0, "medium": 1, "high": 2}
 CONTRACT_NODE_KINDS = {
@@ -1011,12 +1012,15 @@ def context_trust_level(value: str) -> str:
 def multidimensional_trust_payload(
     *,
     build_decision: dict | None,
-    seed_detail: dict | None,
-    report_completeness: dict,
-    test_signal: dict,
-    context_resolution: dict | None,
+    seed_detail: dict | None = None,
+    report_completeness: dict | None = None,
+    test_signal: dict | None = None,
+    context_resolution: dict | None = None,
+    **_ignored,
 ) -> dict:
     build_decision = build_decision or {}
+    report_completeness = report_completeness or {}
+    test_signal = test_signal or {}
     baseline = build_decision.get("trust") or {}
     graph = build_decision.get("graph_trust", build_decision.get("trust_level", baseline.get("graph", "unknown")))
     parser = parser_trust_payload(seed_detail, report_completeness)
@@ -1033,6 +1037,51 @@ def multidimensional_trust_payload(
         coverage_trust_level(coverage),
         context_trust_level(context),
     )
+    baseline_axes = build_decision.get("trust_axes") or baseline.get("trust_axes") or {}
+    graph_freshness = build_decision.get("graph_freshness", baseline_axes.get("graph_freshness", "unknown"))
+    workspace_noise = baseline_axes.get("workspace_noise", "high" if build_decision.get("generated_noise") else "low")
+    dependency_confidence = {
+        "unchanged": "high",
+        "not_applicable": "high",
+        "changed": "low",
+        "unknown": "low",
+    }.get(raw_dependency, "unknown")
+    context_confidence = {
+        "explicit": "explicit",
+        "partial": "inferred",
+        "fallback": "fallback",
+    }.get(context, "missing" if context == "missing" else "inferred")
+    adapter_confidence = build_decision.get("adapter_confidence", baseline_axes.get("adapter_confidence", "medium"))
+    test_signal_axis = {
+        "covered": "direct",
+        "not-run": "none",
+        "direct": "direct",
+        "mapped": "direct",
+        "configured": "configured",
+        "full": "full",
+        "unknown": "unknown",
+    }.get(test_signal_value, "configured" if test_signal.get("full_suite") else "unknown")
+    trust_axes = {
+        "graph_freshness": graph_freshness,
+        "workspace_noise": workspace_noise,
+        "dependency_confidence": dependency_confidence,
+        "context_confidence": context_confidence,
+        "adapter_confidence": adapter_confidence,
+        "test_signal": test_signal_axis,
+        "overall_trust": overall,
+    }
+    trust_explanation: list[str] = []
+    lowering_reasons = trust_lowering_reasons(
+        workspace_noise=workspace_noise,
+        dependency_confidence=dependency_confidence,
+        context_confidence=context_confidence,
+        adapter_confidence=adapter_confidence,
+        test_signal=test_signal_axis,
+    )
+    if graph_freshness == "fresh" and overall in {"medium", "low"} and lowering_reasons:
+        trust_explanation.append(f"Graph is fresh, but overall trust is {overall} because " + ", ".join(lowering_reasons[:2]) + ".")
+    if dependency_confidence in {"low", "unknown"} and not any("Dependency confidence" in item for item in trust_explanation):
+        trust_explanation.append(f"Dependency confidence is {dependency_confidence}, which lowers overall trust without marking the graph stale.")
     return {
         "graph": graph,
         "parser": parser,
@@ -1041,6 +1090,8 @@ def multidimensional_trust_payload(
         "coverage": coverage,
         "context": context,
         "overall": overall,
+        "trust_axes": trust_axes,
+        "trust_explanation": trust_explanation,
     }
 
 
@@ -1091,6 +1142,8 @@ def key_evidence_paths_payload(seed_detail: dict | None, evidence_lines: list[st
 def brief_payload(
     *,
     seed: str,
+    secondary_seeds: list[str],
+    seed_mode: str | None,
     seed_reason: str | None,
     changed_files: list[str],
     sections: dict,
@@ -1109,6 +1162,8 @@ def brief_payload(
     decision = build_decision or {}
     return {
         "selected_seed": seed,
+        "secondary_seeds": secondary_seeds,
+        "seed_mode": seed_mode,
         "why_this_seed": seed_reason or "seed selected from current context",
         "seed_confidence": seed_confidence,
         "recent_task_influenced": recent_task_influenced,
@@ -1461,6 +1516,8 @@ def generate_report(
     )
     brief = brief_payload(
         seed=seed,
+        secondary_seeds=list((seed_selection or {}).get("secondary_seeds", [])),
+        seed_mode=(seed_selection or {}).get("mode"),
         seed_reason=(seed_selection or {}).get("reason"),
         changed_files=changed_files,
         sections=sections,
@@ -1482,10 +1539,20 @@ def generate_report(
         "git_sha": git["git_sha"],
         "mode": mode,
         "seed": seed,
+        "secondary_seeds": list((seed_selection or {}).get("secondary_seeds", [])),
+        "seed_mode": (seed_selection or {}).get("mode"),
         "seed_kind": sections["seed_kind"],
         "changed_files": changed_files,
         "detected_adapter": detected_adapter,
         "detected_profile": detected_profile,
+        "adapter": {
+            "primary_adapter": detected_adapter,
+            "supplemental_adapters": list((build_decision or {}).get("supplemental_adapters", [])),
+            "adapter_source": (build_decision or {}).get("adapter_source"),
+            "adapter_reason": (build_decision or {}).get("adapter_reason"),
+            "adapter_conflicts": (build_decision or {}).get("adapter_conflicts", []),
+            "adapter_confidence": (build_decision or {}).get("adapter_confidence"),
+        },
         "definition": seed_detail or {"node_id": seed, "kind": sections["seed_kind"]},
         "reference_hints": reference_hints_payload(seed_detail),
         "direct": {
@@ -1506,6 +1573,8 @@ def generate_report(
         "atlas_summary": atlas_summary,
         "brief": brief,
         "trust": trust,
+        "trust_axes": trust.get("trust_axes", {}),
+        "trust_explanation": trust.get("trust_explanation", []),
         "seed_selection": seed_selection or {},
         "build_decision": build_decision or {},
         "context_resolution": context_resolution or {},

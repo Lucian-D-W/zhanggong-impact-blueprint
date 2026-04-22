@@ -147,6 +147,11 @@ def infer_context(
         "out_of_scope_files": [],
         "noise_files": [],
         "context_status": "missing",
+        "context_source": "explicit_seed" if explicit_seed else "explicit_changed_file" if explicit_files else "explicit_changed_line" if explicit_lines else "missing",
+        "explicit_context_files": list(explicit_files),
+        "background_dirty_files": [],
+        "background_dirty_files_count": 0,
+        "background_dirty_files_used_for_seed": False,
     }
 
     if explicit_seed:
@@ -163,6 +168,10 @@ def infer_context(
             diff_lines.extend(normalize_relative_path(item) for item in items if item)
         explicit_files_locked = "explicit_changed_files" in payload["context_sources"]
         explicit_lines_locked = "explicit_changed_lines" in payload["context_sources"]
+        if explicit_files_locked and source_name.startswith("git_"):
+            payload["background_dirty_files"] = sorted(set(payload["background_dirty_files"]) | set(diff_files))
+            payload["background_dirty_files_count"] = len(payload["background_dirty_files"])
+            return
         merged = False
         if diff_files and not explicit_files_locked:
             payload["changed_files"] = sorted(set(payload["changed_files"]) | set(diff_files))
@@ -240,9 +249,19 @@ def infer_context(
     if payload["changed_files"] and not payload["reason"].startswith("explicit"):
         payload["seed_confidence"] = 0.8 if payload["changed_lines"] else 0.65
         payload["reason"] = f"context inferred from {', '.join(payload['context_sources'])}"
+        if "patch_file" in payload["context_sources"]:
+            payload["context_source"] = "patch_file"
+        elif "stdin_patch" in payload["context_sources"]:
+            payload["context_source"] = "stdin_patch"
+        elif "git_working_tree" in payload["context_sources"]:
+            payload["context_source"] = "git_dirty_worktree"
+            payload["background_dirty_files_used_for_seed"] = True
+        elif "last_task" in payload["context_sources"]:
+            payload["context_source"] = "recent_task"
     elif payload["selected_seed"] and not explicit_seed:
         payload["seed_confidence"] = 0.72
         payload["reason"] = f"seed recovered from {', '.join(payload['context_sources'])}"
+        payload["context_source"] = "recent_task_seed"
 
     if payload["changed_files"]:
         retained_files: list[str] = []

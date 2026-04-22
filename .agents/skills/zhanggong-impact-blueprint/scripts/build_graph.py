@@ -17,6 +17,7 @@ from adapters import (
     collect_adapter_graph,
     configured_supplemental_adapters,
     detect_language_adapter,
+    effective_adapter_decision,
     detect_project_profile_name,
     detect_supplemental_adapters,
     file_node_id,
@@ -598,13 +599,31 @@ def write_symbol_diffs(db_path: pathlib.Path, edit_round_id: str, symbol_diffs: 
 def resolved_language_adapter(workspace_root: pathlib.Path, config_path: pathlib.Path) -> str:
     config = load_config(config_path)
     project_root = project_root_for(workspace_root, config)
-    return detect_language_adapter(project_root, config)
+    return effective_adapter_decision(config, project_root)["primary_adapter"]
 
 
 def resolved_supplemental_adapters(workspace_root: pathlib.Path, config_path: pathlib.Path) -> list[str]:
     config = load_config(config_path)
     project_root = project_root_for(workspace_root, config)
-    return detect_supplemental_adapters(project_root, config)
+    return effective_adapter_decision(config, project_root)["supplemental_adapters"]
+
+
+def ensure_requested_file_nodes(nodes: dict[str, Node], changed_files: list[str]) -> None:
+    for relative_path in changed_files:
+        normalized = relative_path.replace("\\", "/")
+        node_id = file_node_id(normalized)
+        if node_id in nodes:
+            continue
+        attrs = {"kind": "changed-file-fallback"}
+        if normalized.endswith((".json", ".toml", ".yaml", ".yml", ".ini", ".cfg")):
+            attrs["definition_kind"] = "config_file"
+        nodes[node_id] = Node(
+            node_id=node_id,
+            kind="file",
+            name=pathlib.PurePosixPath(normalized).name,
+            path=normalized,
+            attrs_json=json.dumps(attrs, ensure_ascii=False),
+        )
 
 
 def collect_rule_documents(
@@ -1083,6 +1102,7 @@ def collect_full_graph(
     for item in rule_evidence:
         all_evidence[item.evidence_id] = item
     warnings.extend(rule_warnings)
+    ensure_requested_file_nodes(all_nodes, list(config.get("_requested_changed_files", [])))
     return all_nodes, all_edges, all_evidence, rule_docs, warnings
 
 
@@ -1107,6 +1127,7 @@ def summary_from_db(
     changed_files: list[str],
     stale_reason: str,
     decision: dict | None = None,
+    adapter_decision: dict | None = None,
     warnings: list[str] | None = None,
 ) -> dict:
     node_count = conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
@@ -1126,6 +1147,10 @@ def summary_from_db(
         "configured_primary_adapter": config.get("primary_adapter", config.get("language_adapter", "auto")),
         "detected_adapter": adapter_name,
         "primary_adapter": adapter_name,
+        "adapter_source": (adapter_decision or {}).get("adapter_source"),
+        "adapter_reason": (adapter_decision or {}).get("adapter_reason"),
+        "adapter_conflicts": (adapter_decision or {}).get("adapter_conflicts", []),
+        "adapter_confidence": (adapter_decision or {}).get("adapter_confidence"),
         "detected_profile": profile_name,
         "supplemental_adapters_configured": configured_supplemental_adapters(config),
         "supplemental_adapters_detected": supplemental_adapters,
@@ -1151,13 +1176,16 @@ def manifest_meta_payload(decision: dict, *, profile_name: str, primary_adapter:
         "profile_name": profile_name,
         "primary_adapter": primary_adapter,
         "supplemental_adapters": supplemental_adapters,
+        "adapter_source": decision.get("adapter_source"),
+        "adapter_reason": decision.get("adapter_reason"),
         "dependency_fingerprint": plan.get("dependency_fingerprint", {}),
     }
 
 
 def _build_graph_unlocked(*, workspace_root: pathlib.Path, config_path: pathlib.Path, changed_files: list[str] | None = None, force_full: bool = False) -> dict:
     requested_changed_files = [item.replace("\\", "/") for item in (changed_files or [])]
-    config = load_config(config_path)
+    config = json.loads(json.dumps(load_config(config_path)))
+    config["_requested_changed_files"] = requested_changed_files
     paths = graph_paths(workspace_root, config)
     paths["report_dir"].mkdir(parents=True, exist_ok=True)
     paths["build_log_path"].parent.mkdir(parents=True, exist_ok=True)
@@ -1165,8 +1193,9 @@ def _build_graph_unlocked(*, workspace_root: pathlib.Path, config_path: pathlib.
     ensure_schema(paths["db_path"], schema_path_for(workspace_root))
     project_root = project_root_for(workspace_root, config)
     git = get_git_context(workspace_root)
-    adapter_name = detect_language_adapter(project_root, config)
-    supplemental_adapters = detect_supplemental_adapters(project_root, config)
+    adapter_decision = effective_adapter_decision(config, project_root)
+    adapter_name = adapter_decision["primary_adapter"]
+    supplemental_adapters = adapter_decision["supplemental_adapters"]
     profile_name = detect_project_profile_name(project_root, config, adapter_name)
     warnings: list[str] = []
     previous_manifest = load_manifest(workspace_root)
@@ -1190,6 +1219,15 @@ def _build_graph_unlocked(*, workspace_root: pathlib.Path, config_path: pathlib.
         supplemental_adapters=supplemental_adapters,
         requested_changed_files=requested_changed_files,
     )
+    decision["adapter_source"] = adapter_decision.get("adapter_source")
+    decision["adapter_reason"] = adapter_decision.get("adapter_reason")
+    decision["adapter_conflicts"] = adapter_decision.get("adapter_conflicts", [])
+    decision["adapter_confidence"] = adapter_decision.get("adapter_confidence")
+    decision["supplemental_adapters"] = list(supplemental_adapters)
+    decision.setdefault("trust", {}).setdefault("trust_axes", {})
+    decision["trust"]["trust_axes"]["adapter_confidence"] = adapter_decision.get("adapter_confidence", "medium")
+    decision["trust_axes"] = decision.get("trust", {}).get("trust_axes", {})
+    decision["trust_explanation"] = decision["trust_axes"].get("trust_explanation", [])
     if force_full:
         decision["build_mode"] = "full"
         decision["reason_codes"] = [*decision.get("reason_codes", []), "FORCED_FULL_REBUILD"]
@@ -1213,6 +1251,7 @@ def _build_graph_unlocked(*, workspace_root: pathlib.Path, config_path: pathlib.
                 changed_files=[],
                 stale_reason=plan["reason"],
                 decision=decision,
+                adapter_decision=adapter_decision,
                 warnings=warnings,
             )
         build_decision_path.write_text(json.dumps(decision, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -1261,6 +1300,7 @@ def _build_graph_unlocked(*, workspace_root: pathlib.Path, config_path: pathlib.
                     partial_edges[(edge.src_id, edge.edge_type, edge.dst_id)] = edge
                 for evidence in evidence_rows:
                     partial_evidence[evidence.evidence_id] = evidence
+            ensure_requested_file_nodes(partial_nodes, changed_files)
 
             for file_path in changed_files:
                 before_ids = before_ids_by_path.get(file_path, set())
@@ -1302,6 +1342,7 @@ def _build_graph_unlocked(*, workspace_root: pathlib.Path, config_path: pathlib.
                     changed_files=changed_files,
                     stale_reason=plan["reason"],
                     decision=decision,
+                    adapter_decision=adapter_decision,
                     warnings=warnings,
                 )
             if decision.get("shadow_verify"):
@@ -1383,6 +1424,7 @@ def _build_graph_unlocked(*, workspace_root: pathlib.Path, config_path: pathlib.
             changed_files=changed_files,
             stale_reason=plan["reason"],
             decision=decision,
+            adapter_decision=adapter_decision,
             warnings=warnings,
         )
 

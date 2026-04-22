@@ -32,12 +32,82 @@ For the full rules and behavior details, read [`.agents/skills/zhanggong-impact-
 - when you want a different model or a later session to pick up the work without starting from zero every time
 - when you want "read the impact surface first, then edit, then leave verification evidence" to become a habit
 
-## How to use it
+## Real repo flow
 
-1. Copy the `zhanggong-impact-blueprint` folder into the repository where you want to use it, under `./.agents/skills/`.
-2. After that, the target path should be `./.agents/skills/zhanggong-impact-blueprint/`.
-3. In your conversations with AI, explicitly tell it to use this skill.
-4. Your job is mostly to describe what you want changed. The AI using this skill should decide when to run `analyze` and when to run `finish` according to the rules.
+The final skill name is `zhanggong-impact-blueprint`.
 
-For normal use, you usually do not need to run the internal commands by hand. Those commands are more for maintenance, troubleshooting, or verifying the skill itself.
+For a real repository, the recommended flow is:
+
+1. `python .agents/skills/zhanggong-impact-blueprint/cig.py setup --minimal --project-root . --dry-run`
+2. `python .agents/skills/zhanggong-impact-blueprint/cig.py setup --minimal --project-root .`
+3. `python .agents/skills/zhanggong-impact-blueprint/cig.py calibrate --workspace-root .`
+4. `python .agents/skills/zhanggong-impact-blueprint/cig.py health --workspace-root .`
+5. `python .agents/skills/zhanggong-impact-blueprint/cig.py build --workspace-root .`
+6. `python .agents/skills/zhanggong-impact-blueprint/cig.py analyze --workspace-root . --changed-file <path>`
+7. `python .agents/skills/zhanggong-impact-blueprint/cig.py finish --workspace-root . --test-scope targeted`
+
+`setup` now defaults to `minimal`. Use `--full` only when you explicitly want the consumer docs, AGENTS managed block, and runtime docs. Use `--dry-run` first if you want to preview what setup would create or update.
+
+## Calibration rules
+
+Stage 18 is about repo reality calibration, not adding heavier machinery.
+
+- repo-local config wins over profile fallback
+- recent successful test command wins over default guessing
+- package scripts beat profile fallback
+- profile fallback beats adapter default
+- `primary_adapter` decides the main graph and finish verification
+- `supplemental_adapters` can add indexing coverage, but they do not take over the repo
+- `calibrate` is the step that checks whether the current repo reality matches your config and chosen profile
+- `baseline` is the step that lets `finish` distinguish historical red from a new regression
+
+The test command order is now:
+
+`repo config > recent successful command > package script > profile fallback > adapter default`
+
+## Examples
+
+Mixed-language repo:
+
+```json
+{
+  "primary_adapter": "tsjs",
+  "supplemental_adapters": ["python"]
+}
+```
+
+Historically red repo:
+
+1. capture baseline with `python .agents/skills/zhanggong-impact-blueprint/cig.py baseline --workspace-root . --capture-current`
+2. run a smoke or targeted finish
+3. read `regression_status` instead of pretending every failure is new
+
+Windows shell risk:
+
+- direct `.sh` test commands can fail on Windows
+- CRLF shell scripts can fail even when bash exists
+- prefer cross-platform `npm`, `pnpm`, `bun`, or `node` scripts for repo-facing verification
+
+Analyze output:
+
+- default terminal output is brief
+- long JSON still lands in `.ai/codegraph/reports/`
+- use `--json` or `--full-json` when a script needs the full payload
+
+## Update Note
+
+### Stage 18.1 / v0.18.1-rc1
+
+Current status: `accepted candidate`
+
+Key fixes in this update:
+
+- fix the Windows `.sh` test-entry preflight miss
+- fix the GBK / Windows terminal case where tests passed but CLI output failed on encoding
+- support Python repositories that use `test/`
+- fix flaky baseline / no_regression comparison
+- fix stale handoff errors after a successful `finish`
+- fix seed-selection mode incorrectly recommending `finish`
+- fix contradictory trust explanations
+- fix ignored list-form `test_command` values in repo config
 

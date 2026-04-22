@@ -180,7 +180,7 @@ def rank_seed_candidates(*, workspace_root: pathlib.Path, config_path: pathlib.P
     scored.sort(key=lambda item: (-item["score"], item["path"], item.get("symbol") or item["node_id"]))
     top_candidates = scored[:3]
     if not top_candidates:
-        return {"selected_seed": None, "top_candidates": [], "confidence": 0.0, "reason": "no candidates available"}
+        return {"selected_seed": None, "top_candidates": [], "candidate_count": 0, "confidence": 0.0, "reason": "no candidates available"}
 
     top_score = top_candidates[0]["score"]
     second_score = top_candidates[1]["score"] if len(top_candidates) > 1 else None
@@ -197,6 +197,7 @@ def rank_seed_candidates(*, workspace_root: pathlib.Path, config_path: pathlib.P
 
     return {
         "selected_seed": top_candidates[0]["node_id"] if auto_select else None,
+        "candidate_count": len(scored),
         "top_candidates": [
             {
                 "node_id": item["node_id"],

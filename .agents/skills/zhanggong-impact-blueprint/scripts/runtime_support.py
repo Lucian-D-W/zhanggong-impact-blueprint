@@ -2,6 +2,7 @@
 import json
 import os
 import pathlib
+import sys
 import traceback
 from datetime import datetime, timezone
 
@@ -50,10 +51,13 @@ def runtime_paths(workspace_root: pathlib.Path) -> dict[str, pathlib.Path]:
         "next_action": codegraph_dir / "next-action.json",
         "verification_policy": codegraph_dir / "verification-policy.json",
         "test_history": codegraph_dir / "test-history.jsonl",
+        "test_command_history": codegraph_dir / "test-command-history.jsonl",
         "calibration": codegraph_dir / "calibration.jsonl",
         "pending_changes": codegraph_dir / "pending-changes.jsonl",
         "repair_attempts": codegraph_dir / "repair-attempts.jsonl",
         "loop_breaker_report": codegraph_dir / "loop-breaker-report.json",
+        "baseline_status": codegraph_dir / "baseline-status.json",
+        "status_json": codegraph_dir / "status.json",
         "runtime_session_start": runtime_dir / "SESSION_START.md",
         "runtime_before_edit": runtime_dir / "BEFORE_EDIT.md",
         "runtime_after_edit": runtime_dir / "AFTER_EDIT.md",
@@ -103,6 +107,26 @@ def append_jsonl(path: pathlib.Path, payload: dict) -> None:
         fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
+def safe_json_dumps(payload: object) -> str:
+    return json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=False)
+
+
+def print_text(text: str, *, file=None) -> None:
+    stream = file or sys.stdout
+    output = text if text.endswith("\n") else text + "\n"
+    encoding = getattr(stream, "encoding", None) or "utf-8"
+    if hasattr(stream, "buffer"):
+        stream.buffer.write(output.encode(encoding, errors="backslashreplace"))
+        stream.flush()
+        return
+    stream.write(output.encode(encoding, errors="backslashreplace").decode(encoding, errors="strict"))
+    stream.flush()
+
+
+def print_json(payload: object) -> None:
+    print_text(safe_json_dumps(payload))
+
+
 def write_json(path: pathlib.Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -143,6 +167,11 @@ def write_error(workspace_root: pathlib.Path, payload: dict) -> None:
     write_json(paths["last_error"], payload)
 
 
+def clear_last_error(workspace_root: pathlib.Path) -> None:
+    paths = ensure_runtime_dirs(workspace_root)
+    write_json(paths["last_error"], {})
+
+
 def write_handoff(
     workspace_root: pathlib.Path,
     *,
@@ -159,6 +188,7 @@ def write_handoff(
     events = read_jsonl(paths["events"])
     last_task_path = paths["codegraph_dir"] / "last-task.json"
     last_task = read_json(last_task_path) or {}
+    last_error = read_json(paths["last_error"]) or {}
     last_run = read_json(paths["last_run"]) or {}
     recent_success = next((item for item in reversed(events) if item.get("status") == "success"), None)
     recent_failure = next((item for item in reversed(events) if item.get("status") == "failed"), None)
@@ -170,6 +200,8 @@ def write_handoff(
         "last_task": str(last_task_path) if last_task_path.exists() else "none",
     }
     top_candidates = (last_task.get("seed_selection") or {}).get("top_candidates", [])
+    if not top_candidates:
+        top_candidates = list(last_error.get("alternatives") or [])
     candidate_summary = ", ".join(item.get("node_id", "") for item in top_candidates[:3]) or "none"
     fallback_used = bool(last_task.get("fallback_used"))
     build_mode = last_task.get("build_mode") or last_run.get("build_mode") or "unknown"

@@ -37,3 +37,20 @@
 4. 你真正需要做的事情，主要是描述你要改什么；至于什么时候 `analyze`、什么时候 `finish`，应该由使用这个 skill 的 AI 按规则自己执行。
 
 如果只是正常使用，你一般不需要手动去跑这些命令行。命令行更偏向维护、排障或验证这个 skill 本身时使用。
+
+## 更新说明
+
+### Stage 18.1 / v0.18.1-rc1
+
+当前状态：`accepted candidate`
+
+修掉的重点问题包括：
+
+- 修复 Windows 下 `.sh` 测试入口预检漏判
+- 修复 GBK / Windows 终端下“测试已过但 CLI 因输出编码失败”
+- 支持 Python 项目使用 `test/` 目录
+- 修复 baseline / no_regression 的 flaky 判断
+- 修复 `finish` 成功后 handoff 残留旧错误
+- 修复 seed 未选定时 `next-action` 误推荐 `finish`
+- 修复 trust explanation 自相矛盾
+- 修复 repo config 中 list-form `test_command` 被忽略

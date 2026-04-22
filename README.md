@@ -48,10 +48,6 @@ For a real repository, the recommended flow is:
 
 `setup` now defaults to `minimal`. Use `--full` only when you explicitly want the consumer docs, AGENTS managed block, and runtime docs. Use `--dry-run` first if you want to preview what setup would create or update.
 
-Release prep status: `Stage 18.1 accepted candidate` / `v0.18.1-rc1`
-
-This release candidate is accepted for the Stage 18 user-feedback blocker scope. It is not described as fully proven across all historical stages.
-
 ## Calibration rules
 
 Stage 18 is about repo reality calibration, not adding heavier machinery.
@@ -97,4 +93,21 @@ Analyze output:
 - default terminal output is brief
 - long JSON still lands in `.ai/codegraph/reports/`
 - use `--json` or `--full-json` when a script needs the full payload
+
+## Update Note
+
+### Stage 18.1 / v0.18.1-rc1
+
+Current status: `accepted candidate`
+
+Key fixes in this update:
+
+- fix the Windows `.sh` test-entry preflight miss
+- fix the GBK / Windows terminal case where tests passed but CLI output failed on encoding
+- support Python repositories that use `test/`
+- fix flaky baseline / no_regression comparison
+- fix stale handoff errors after a successful `finish`
+- fix seed-selection mode incorrectly recommending `finish`
+- fix contradictory trust explanations
+- fix ignored list-form `test_command` values in repo config
 

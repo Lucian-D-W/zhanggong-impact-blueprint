@@ -44,9 +44,7 @@
 
 当前状态：`accepted candidate`
 
-这表示它已经通过了 Stage 18 用户反馈阻塞点范围内的验收，可以进入小范围真实仓库试用；但这不表示“所有历史阶段都已全量验证”。
-
-这一轮主要做的是验收稳定性热修，而不是继续加功能。修掉的重点问题包括：
+修掉的重点问题包括：
 
 - 修复 Windows 下 `.sh` 测试入口预检漏判
 - 修复 GBK / Windows 终端下“测试已过但 CLI 因输出编码失败”
@@ -56,24 +54,3 @@
 - 修复 seed 未选定时 `next-action` 误推荐 `finish`
 - 修复 trust explanation 自相矛盾
 - 修复 repo config 中 list-form `test_command` 被忽略
-
-如果你要把它接到真实仓库，推荐流程是：
-
-```bash
-python .agents/skills/zhanggong-impact-blueprint/cig.py setup --minimal --project-root . --dry-run
-python .agents/skills/zhanggong-impact-blueprint/cig.py setup --minimal --project-root .
-python .agents/skills/zhanggong-impact-blueprint/cig.py calibrate --workspace-root .
-python .agents/skills/zhanggong-impact-blueprint/cig.py health --workspace-root .
-python .agents/skills/zhanggong-impact-blueprint/cig.py build --workspace-root .
-python .agents/skills/zhanggong-impact-blueprint/cig.py analyze --workspace-root . --changed-file <path>
-python .agents/skills/zhanggong-impact-blueprint/cig.py finish --workspace-root . --test-scope targeted
-```
-
-接入时请优先记住这几条：
-
-- 仓库本地 config 优先于 profile fallback
-- `package.json` / 包管理器脚本优先于 profile fallback
-- `calibrate` 用来校准“这个真实仓库到底会选什么 adapter、什么测试命令”
-- `baseline` 用来区分“仓库历史本来就红”和“这次改动引入了新回归”
-
-这轮验收证据已经单独整理在 `STAGE18_1_ACCEPTANCE.md` 中。

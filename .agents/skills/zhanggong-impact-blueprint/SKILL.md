@@ -1,6 +1,6 @@
 ---
 name: zhanggong-impact-blueprint
-description: Use before editing source files, before editing config/schema/tests, and before behavior changes. If the repo is not initialized, run setup automatically. Run analyze before edit. Run finish after edit. Do not edit if the impact report is missing or empty unless the user explicitly overrides.
+description: Use before editing source files, config/schema/tests, or behavior. Run analyze before edit and finish after edit. Prefer repo-local config and explicit context over defaults, and keep handoff/test state aligned from one final state.
 ---
 
 # ZG Impact Blueprint

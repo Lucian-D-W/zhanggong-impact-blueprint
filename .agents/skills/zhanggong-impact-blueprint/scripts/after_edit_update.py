@@ -14,10 +14,11 @@ from datetime import datetime, timezone
 
 import build_graph
 import generate_report
-from adapters import adapter_coverage_adapter, adapter_test_command, detect_language_adapter
+from adapters import adapter_coverage_adapter, detect_language_adapter, detect_project_profile_name
 from db_support import connect_db
 from parser_backends import v8_relative_path
-from runtime_support import append_jsonl, read_jsonl, runtime_paths
+from runtime_support import append_jsonl, read_json, read_jsonl, runtime_paths, write_json
+from test_command_resolver import baseline_regression_status, command_to_string, failure_signature_from_output, normalize_command, preflight_test_command, record_test_command_history, resolve_test_command
 
 
 def utc_now() -> str:
@@ -169,6 +170,35 @@ def load_history_rows(workspace_root: pathlib.Path) -> list[dict]:
     return read_jsonl(runtime_paths(workspace_root)["test_history"])
 
 
+def load_baseline_status(workspace_root: pathlib.Path) -> dict:
+    return read_json(runtime_paths(workspace_root)["baseline_status"]) or {}
+
+
+def output_excerpt_lines(output_text: str) -> list[str]:
+    return [line.strip() for line in output_text.splitlines() if line.strip()][:20]
+
+
+def enrich_test_summary_with_regression(workspace_root: pathlib.Path, summary: dict, output_text: str) -> dict:
+    summary["output_excerpt_lines"] = output_excerpt_lines(output_text)
+    summary["failure_signature"] = failure_signature_from_output(
+        summary.get("command") or [],
+        summary.get("exit_code"),
+        output_text,
+        summary.get("failed_tests", []),
+    )
+    summary.update(
+        baseline_regression_status(
+            baseline=load_baseline_status(workspace_root),
+            current={
+                "status": summary.get("status", "unknown"),
+                "failure_signature": summary.get("failure_signature"),
+                "full_suite": summary.get("full_suite", False),
+            },
+        )
+    )
+    return summary
+
+
 def relevant_history_rows(history_rows: list[dict], changed_files: list[str], changed_symbols: list[str]) -> list[dict]:
     changed_file_set = set(changed_files)
     changed_symbol_set = set(changed_symbols)
@@ -216,7 +246,17 @@ def recommend_tests_for_task(*, workspace_root: pathlib.Path, config_path: pathl
     config = build_graph.load_config(config_path)
     project_root = build_graph.project_root_for(workspace_root, config)
     adapter_name = detect_language_adapter(project_root, config)
-    fallback_command = adapter_test_command(config, adapter_name, project_root)
+    profile_name = detect_project_profile_name(project_root, config, adapter_name)
+    fallback_command = list(
+        resolve_test_command(
+            workspace_root=workspace_root,
+            project_root=project_root,
+            config=config,
+            adapter_name=adapter_name,
+            profile_name=profile_name,
+        ).get("selected_test_command_argv")
+        or []
+    )
     report_payload = load_task_report_json(
         workspace_root=workspace_root,
         config_path=config_path,
@@ -352,12 +392,22 @@ def _run_test_scope_once(
     task_id: str,
     requested_test_scope: str = "configured",
     artifact_suffix: str = "",
+    cli_test_command: list[str] | str | None = None,
 ) -> dict:
     config = build_graph.load_config(config_path)
     paths = build_graph.graph_paths(workspace_root, config)
     project_root = build_graph.project_root_for(workspace_root, config)
     adapter_name = detect_language_adapter(project_root, config)
-    configured_command = adapter_test_command(config, adapter_name, project_root)
+    profile_name = detect_project_profile_name(project_root, config, adapter_name)
+    test_command_payload = resolve_test_command(
+        workspace_root=workspace_root,
+        project_root=project_root,
+        config=config,
+        adapter_name=adapter_name,
+        profile_name=profile_name,
+        cli_test_command=cli_test_command,
+    )
+    configured_command = list(test_command_payload.get("selected_test_command_argv") or [])
     recommend_payload = recommend_tests_for_task(
         workspace_root=workspace_root,
         config_path=config_path,
@@ -400,6 +450,7 @@ def _run_test_scope_once(
 
     normalized_commands = [normalize_test_command(command) for command in command_groups if command]
     primary_command = normalized_commands[0] if normalized_commands else []
+    preflight = preflight_test_command(primary_command, project_root, os.name)
 
     if not normalized_commands:
         summary = {
@@ -426,9 +477,53 @@ def _run_test_scope_once(
             "mapping_status": recommend_payload.get("mapping_status"),
             "fallback_command": recommend_payload.get("fallback_command", []),
             "failed_tests": [],
+            "selected_test_command": test_command_payload.get("selected_test_command"),
+            "test_command_source": test_command_payload.get("test_command_source"),
+            "test_command_candidates": test_command_payload.get("test_command_candidates", []),
+            "ignored_test_commands": test_command_payload.get("ignored_test_commands", []),
+            "test_command_preflight": preflight,
+            "recovery_commands": preflight.get("recovery_commands", []),
         }
         output_path.write_text(summary["coverage_reason"], encoding="utf-8")
-        paths["test_results_path"].write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+        summary = enrich_test_summary_with_regression(workspace_root, summary, summary["coverage_reason"])
+        write_json(paths["test_results_path"], summary)
+        return summary
+
+    if preflight.get("status") == "fail":
+        summary = {
+            "task_id": task_id,
+            "command": primary_command,
+            "commands": normalized_commands,
+            "requested_test_scope": requested_test_scope,
+            "effective_test_scope": "preflight_failed",
+            "test_scope_reason": "test command preflight failed before execution",
+            "status": "failed",
+            "tests_run": None,
+            "test_count_status": "unknown",
+            "tests_passed": False,
+            "exit_code": None,
+            "output_path": str(output_path.relative_to(workspace_root)),
+            "coverage_path": None,
+            "coverage_status": "unavailable",
+            "coverage_available": False,
+            "coverage_reason": "test command preflight failed",
+            "totals": {},
+            "full_suite": full_suite,
+            "detected_adapter": adapter_name,
+            "recommended_tests": recommended_tests,
+            "mapping_status": recommend_payload.get("mapping_status"),
+            "fallback_command": recommend_payload.get("fallback_command", []),
+            "failed_tests": [],
+            "selected_test_command": test_command_payload.get("selected_test_command"),
+            "test_command_source": test_command_payload.get("test_command_source"),
+            "test_command_candidates": test_command_payload.get("test_command_candidates", []),
+            "ignored_test_commands": test_command_payload.get("ignored_test_commands", []),
+            "test_command_preflight": preflight,
+            "recovery_commands": preflight.get("recovery_commands", []),
+        }
+        output_path.write_text("\n".join(issue["message"] for issue in preflight.get("issues", [])), encoding="utf-8")
+        summary = enrich_test_summary_with_regression(workspace_root, summary, output_path.read_text(encoding="utf-8"))
+        write_json(paths["test_results_path"], summary)
         return summary
 
     coverage_adapter = adapter_coverage_adapter(config, adapter_name, project_root)
@@ -477,8 +572,23 @@ def _run_test_scope_once(
                 "mapping_status": recommend_payload.get("mapping_status"),
                 "fallback_command": recommend_payload.get("fallback_command", []),
                 "failed_tests": parse_failed_tests(result.stdout + "\n" + result.stderr, adapter_name),
+                "selected_test_command": test_command_payload.get("selected_test_command"),
+                "test_command_source": test_command_payload.get("test_command_source"),
+                "test_command_candidates": test_command_payload.get("test_command_candidates", []),
+                "ignored_test_commands": test_command_payload.get("ignored_test_commands", []),
+                "test_command_preflight": preflight,
+                "recovery_commands": preflight.get("recovery_commands", []),
             }
-            paths["test_results_path"].write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+            summary = enrich_test_summary_with_regression(workspace_root, summary, result.stdout + "\n" + result.stderr)
+            write_json(paths["test_results_path"], summary)
+            record_test_command_history(
+                workspace_root=workspace_root,
+                command=summary.get("command") or [],
+                source=summary.get("test_command_source") or "unknown",
+                status=summary.get("status", "unknown"),
+                adapter_name=adapter_name,
+                profile_name=profile_name,
+            )
             return summary
 
         coverage_command = [
@@ -554,8 +664,23 @@ def _run_test_scope_once(
             "mapping_status": recommend_payload.get("mapping_status"),
             "fallback_command": recommend_payload.get("fallback_command", []),
             "failed_tests": parse_failed_tests(result.stdout + "\n" + result.stderr, adapter_name),
+            "selected_test_command": test_command_payload.get("selected_test_command"),
+            "test_command_source": test_command_payload.get("test_command_source"),
+            "test_command_candidates": test_command_payload.get("test_command_candidates", []),
+            "ignored_test_commands": test_command_payload.get("ignored_test_commands", []),
+            "test_command_preflight": preflight,
+            "recovery_commands": preflight.get("recovery_commands", []),
         }
-        paths["test_results_path"].write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+        summary = enrich_test_summary_with_regression(workspace_root, summary, result.stdout + "\n" + result.stderr)
+        write_json(paths["test_results_path"], summary)
+        record_test_command_history(
+            workspace_root=workspace_root,
+            command=normalized_commands[0],
+            source=summary.get("test_command_source") or "unknown",
+            status=summary.get("status", "unknown"),
+            adapter_name=adapter_name,
+            profile_name=profile_name,
+        )
         return summary
 
     if coverage_adapter == "v8_family" and len(normalized_commands) == 1:
@@ -641,8 +766,23 @@ def _run_test_scope_once(
             "mapping_status": recommend_payload.get("mapping_status"),
             "fallback_command": recommend_payload.get("fallback_command", []),
             "failed_tests": parse_failed_tests(result.stdout + "\n" + result.stderr, adapter_name),
+            "selected_test_command": test_command_payload.get("selected_test_command"),
+            "test_command_source": test_command_payload.get("test_command_source"),
+            "test_command_candidates": test_command_payload.get("test_command_candidates", []),
+            "ignored_test_commands": test_command_payload.get("ignored_test_commands", []),
+            "test_command_preflight": preflight,
+            "recovery_commands": preflight.get("recovery_commands", []),
         }
-        paths["test_results_path"].write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+        summary = enrich_test_summary_with_regression(workspace_root, summary, result.stdout + "\n" + result.stderr)
+        write_json(paths["test_results_path"], summary)
+        record_test_command_history(
+            workspace_root=workspace_root,
+            command=normalized_commands[0],
+            source=summary.get("test_command_source") or "unknown",
+            status=summary.get("status", "unknown"),
+            adapter_name=adapter_name,
+            profile_name=profile_name,
+        )
         return summary
 
     outputs: list[str] = []
@@ -690,8 +830,23 @@ def _run_test_scope_once(
         "mapping_status": recommend_payload.get("mapping_status"),
         "fallback_command": recommend_payload.get("fallback_command", []),
         "failed_tests": parse_failed_tests("\n".join(outputs), adapter_name),
+        "selected_test_command": test_command_payload.get("selected_test_command"),
+        "test_command_source": test_command_payload.get("test_command_source"),
+        "test_command_candidates": test_command_payload.get("test_command_candidates", []),
+        "ignored_test_commands": test_command_payload.get("ignored_test_commands", []),
+        "test_command_preflight": preflight,
+        "recovery_commands": preflight.get("recovery_commands", []),
     }
-    paths["test_results_path"].write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    summary = enrich_test_summary_with_regression(workspace_root, summary, "\n".join(outputs))
+    write_json(paths["test_results_path"], summary)
+    record_test_command_history(
+        workspace_root=workspace_root,
+        command=primary_command,
+        source=summary.get("test_command_source") or "unknown",
+        status=summary.get("status", "unknown"),
+        adapter_name=adapter_name,
+        profile_name=profile_name,
+    )
     return summary
 
 
@@ -702,12 +857,14 @@ def run_tests_with_coverage(
     task_id: str,
     requested_test_scope: str = "configured",
     shadow_full: bool = False,
+    cli_test_command: list[str] | str | None = None,
 ) -> dict:
     primary = _run_test_scope_once(
         workspace_root=workspace_root,
         config_path=config_path,
         task_id=task_id,
         requested_test_scope=requested_test_scope,
+        cli_test_command=cli_test_command,
     )
     if not shadow_full:
         return primary
@@ -729,6 +886,7 @@ def run_tests_with_coverage(
         task_id=task_id,
         requested_test_scope=shadow_scope,
         artifact_suffix="-shadow",
+        cli_test_command=cli_test_command,
     )
     primary_failed = set(primary.get("failed_tests", []))
     shadow_failed = set(shadow.get("failed_tests", []))
@@ -1143,6 +1301,7 @@ def after_edit_update(
     shadow_full: bool = False,
     verification_budget: str | None = None,
     source: str = "after-edit",
+    cli_test_command: list[str] | str | None = None,
 ) -> dict:
     config = build_graph.load_config(config_path)
     paths = build_graph.graph_paths(workspace_root, config)
@@ -1175,6 +1334,7 @@ def after_edit_update(
         task_id=task_id,
         requested_test_scope=test_scope,
         shadow_full=shadow_full,
+        cli_test_command=cli_test_command,
     )
     report_summary = generate_report.generate_report(
         workspace_root=workspace_root,

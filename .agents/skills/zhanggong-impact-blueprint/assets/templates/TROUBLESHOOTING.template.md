@@ -16,6 +16,15 @@ This file defines the recovery protocol for agents and humans.
 3. If the parser still cannot recognize the project, continue with generic fallback instead of fabricating function-level truth.
 4. `analyze --allow-fallback` and `finish --allow-fallback` will continue in file-level mode when that is the safest choice.
 5. Check `.ai/codegraph/context-resolution.json` to see which source the skill trusted for changed files and seed hints.
+6. Run `cig.py calibrate` when adapter choice or test command choice still feels off in a real repo.
+
+## Calibrate recommends a config patch
+
+1. Read the reported `adapter`, `test_command`, and `platform_risks`
+2. If the repo is mixed-language, prefer an explicit main adapter plus supplements
+3. Keep this order in mind:
+   repo config > recent successful command > package script > profile fallback > adapter default
+4. If the patch looks right, rerun `cig.py calibrate --apply`
 
 ## Build failed
 
@@ -42,6 +51,7 @@ This file defines the recovery protocol for agents and humans.
 5. If multiple candidates were found, use one of the top suggested seeds from the structured error
 6. If the error is `CONTEXT_MISSING`, do not trust an empty-looking report; provide context first or explicitly allow fallback
 7. If the task is documentation-only, use `classify-change` to decide whether a lightweight or bypass flow is the safer path instead of forcing a fake code seed
+8. Explicit `--changed-file` should win over dirty worktree noise; if it does not, inspect `background_dirty_files` in `context-resolution.json`
 
 ## After-edit test failed
 
@@ -52,6 +62,8 @@ This file defines the recovery protocol for agents and humans.
 5. Read `.ai/codegraph/next-action.json` for the most specific retry recommendation
 6. Fix the test command or the code under test
 7. Re-run `finish` or `after-edit`
+8. If Windows is involved, check for `.sh`, CRLF shell scripts, missing shebangs, and missing bash before retrying
+9. If the baseline full suite was already red, use `baseline-status.json` plus `regression_status` before blaming the current edit
 
 ## Contract context looks wrong
 
@@ -84,5 +96,6 @@ This file defines the recovery protocol for agents and humans.
 - `SEED_SELECTION_REQUIRED`: rerun `analyze` or `report` with `--changed-line` or an explicit `--seed`
 - `TASK_CONTEXT_MISSING`: rerun `analyze`, or provide `--seed` / `--task-id` explicitly when no recent context exists
 - `TEST_COMMAND_FAILED`: inspect `test-results.json` and the command output log, then retry after fixing the command or failing code
+- `TEST_COMMAND_PREFLIGHT_FAILED`: fix the executable entry point first; do not trust a shell-specific command that never actually ran
 - `UNEXPECTED_ERROR`: retry with `--debug` and inspect the latest error log
 

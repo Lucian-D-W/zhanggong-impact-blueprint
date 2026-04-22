@@ -166,10 +166,12 @@ Mutation rules:
 Use these high-level commands first:
 
 ```bash
-python .agents/skills/zhanggong-impact-blueprint/cig.py setup --project-root .
+python .agents/skills/zhanggong-impact-blueprint/cig.py setup --minimal --project-root .
+python .agents/skills/zhanggong-impact-blueprint/cig.py calibrate --workspace-root .
 python .agents/skills/zhanggong-impact-blueprint/cig.py health
 python .agents/skills/zhanggong-impact-blueprint/cig.py classify-change --workspace-root . --changed-file path/to/file
 python .agents/skills/zhanggong-impact-blueprint/cig.py assess-mutation --workspace-root . --path path/to/file --action move
+python .agents/skills/zhanggong-impact-blueprint/cig.py build --workspace-root .
 python .agents/skills/zhanggong-impact-blueprint/cig.py analyze
 python .agents/skills/zhanggong-impact-blueprint/cig.py install-integration-pack
 python .agents/skills/zhanggong-impact-blueprint/cig.py finish --test-scope targeted
@@ -185,6 +187,29 @@ Use these when context needs help:
 - `--full`
 - `--shadow-full`
 - `--debug`
+- `--json`
+- `--full-json`
+
+## Repo reality calibration rules
+
+- `primary_adapter=auto`, empty, null, or missing is treated as unset
+- if `primary_adapter` is unset and `language_adapter` is concrete, `language_adapter` wins
+- if both are unset, auto-detect can choose a main adapter and optional `supplemental_adapters`
+- `primary_adapter` decides the main graph, default seed bias, finish verification, and test command choice
+- `supplemental_adapters` only add indexing coverage; they do not take over the repo
+- for test command selection, keep this order:
+  repo config > recent successful command > package script > profile fallback > adapter default
+- `setup` defaults to `minimal`; use `--full` only when you explicitly want docs and AGENTS managed output
+- `analyze` defaults to brief terminal output; use `--json` or `--full-json` for machine consumption
+- use `baseline` plus `regression_status` when the repo is not historically all-green
+
+## Real repo priority principles
+
+- user-explicit config wins over default profile behavior
+- explicit `--changed-file` wins over dirty worktree noise
+- `test-results.json`, `handoff/latest.md`, and `next-action.json` must come from the same final state
+- do not enter `finish` while seed selection is still unresolved
+- terminal output must be safe for the active console encoding and must not turn a passed test run into a fake CLI failure
 
 ## Decision rules
 

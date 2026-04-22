@@ -96,7 +96,90 @@ def dependency_trust_level(status: str) -> str:
     return "medium"
 
 
-def build_trust_payload(*, graph_trust: str, dependency_fingerprint_status: str) -> dict:
+def _axis_to_level(axis_name: str, value: str) -> str:
+    if axis_name == "workspace_noise":
+        return {"low": "high", "medium": "medium", "high": "low"}.get(value, "medium")
+    if axis_name == "dependency_confidence":
+        return value if value in {"high", "medium", "low"} else "medium"
+    if axis_name == "context_confidence":
+        return {"explicit": "high", "inferred": "medium", "fallback": "low", "missing": "low"}.get(value, "medium")
+    if axis_name == "adapter_confidence":
+        return value if value in {"high", "medium", "low"} else "medium"
+    if axis_name == "test_signal":
+        return {"direct": "high", "configured": "medium", "full": "high", "none": "low", "unknown": "medium"}.get(value, "medium")
+    return "medium"
+
+
+def trust_lowering_reasons(
+    *,
+    workspace_noise: str,
+    dependency_confidence: str,
+    context_confidence: str,
+    adapter_confidence: str,
+    test_signal: str,
+) -> list[str]:
+    reasons: list[str] = []
+    if workspace_noise in {"medium", "high"}:
+        reasons.append(f"workspace_noise is {workspace_noise}")
+    if dependency_confidence in {"low", "unknown"}:
+        reasons.append(f"dependency_confidence is {dependency_confidence}")
+    if context_confidence in {"inferred", "fallback", "missing"}:
+        reasons.append(f"context_confidence is {context_confidence}")
+    if adapter_confidence == "low":
+        reasons.append("adapter_confidence is low")
+    if test_signal in {"none", "unknown"}:
+        reasons.append(f"test_signal is {test_signal}")
+    return reasons
+
+
+def trust_axes_payload(
+    *,
+    graph_freshness: str,
+    generated_noise: bool,
+    dependency_fingerprint_status: str,
+    context_confidence: str = "missing",
+    adapter_confidence: str = "medium",
+    test_signal: str = "unknown",
+) -> dict:
+    dependency_confidence = {
+        "unchanged": "high",
+        "not_applicable": "high",
+        "changed": "low",
+        "unknown": "low",
+    }.get(dependency_fingerprint_status, "unknown")
+    workspace_noise = "high" if generated_noise else "low"
+    overall_trust = clamp_trust_level(
+        _axis_to_level("workspace_noise", workspace_noise),
+        _axis_to_level("dependency_confidence", dependency_confidence),
+        _axis_to_level("context_confidence", context_confidence),
+        _axis_to_level("adapter_confidence", adapter_confidence),
+        _axis_to_level("test_signal", test_signal),
+    )
+    explanation: list[str] = []
+    lowering_reasons = trust_lowering_reasons(
+        workspace_noise=workspace_noise,
+        dependency_confidence=dependency_confidence,
+        context_confidence=context_confidence,
+        adapter_confidence=adapter_confidence,
+        test_signal=test_signal,
+    )
+    if graph_freshness == "fresh" and overall_trust in {"medium", "low"} and lowering_reasons:
+        explanation.append(f"Graph is fresh, but overall trust is {overall_trust} because " + ", ".join(lowering_reasons[:2]) + ".")
+    if dependency_confidence in {"low", "unknown"} and not any("dependency_confidence" in item for item in explanation):
+        explanation.append(f"Dependency confidence is {dependency_confidence}, which lowers overall trust without making the graph stale.")
+    return {
+        "graph_freshness": graph_freshness,
+        "workspace_noise": workspace_noise,
+        "dependency_confidence": dependency_confidence,
+        "context_confidence": context_confidence,
+        "adapter_confidence": adapter_confidence,
+        "test_signal": test_signal,
+        "overall_trust": overall_trust,
+        "trust_explanation": explanation,
+    }
+
+
+def build_trust_payload(*, graph_trust: str, dependency_fingerprint_status: str, graph_freshness: str = "unknown", generated_noise: bool = False) -> dict:
     parser = "unknown"
     dependency = dependency_fingerprint_status or "unknown"
     test_signal = "not-run"
@@ -115,6 +198,14 @@ def build_trust_payload(*, graph_trust: str, dependency_fingerprint_status: str)
         "coverage": coverage,
         "context": context,
         "overall": overall,
+        "trust_axes": trust_axes_payload(
+            graph_freshness=graph_freshness,
+            generated_noise=generated_noise,
+            dependency_fingerprint_status=dependency,
+            context_confidence="missing",
+            adapter_confidence="medium",
+            test_signal="unknown",
+        ),
     }
 
 
@@ -228,6 +319,8 @@ def build_decision(
     trust = build_trust_payload(
         graph_trust=graph_trust,
         dependency_fingerprint_status=dependency_fingerprint_status,
+        graph_freshness=graph_freshness,
+        generated_noise=bool(generated_noise),
     )
 
     return {
@@ -252,6 +345,8 @@ def build_decision(
             changed_files=changed_files,
             tracked_count=tracked_count,
         ),
+        "trust_axes": trust.get("trust_axes", {}),
+        "trust_explanation": trust.get("trust_axes", {}).get("trust_explanation", []),
     }
 
 

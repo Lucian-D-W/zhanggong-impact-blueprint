@@ -3,24 +3,39 @@
 ## Shortest path
 
 ```bash
-python .agents/skills/zhanggong-impact-blueprint/cig.py setup --project-root .
-python .agents/skills/zhanggong-impact-blueprint/cig.py analyze
-python .agents/skills/zhanggong-impact-blueprint/cig.py finish
+python .agents/skills/zhanggong-impact-blueprint/cig.py setup --minimal --project-root . --dry-run
+python .agents/skills/zhanggong-impact-blueprint/cig.py setup --minimal --project-root .
+python .agents/skills/zhanggong-impact-blueprint/cig.py calibrate --workspace-root .
+python .agents/skills/zhanggong-impact-blueprint/cig.py health --workspace-root .
+python .agents/skills/zhanggong-impact-blueprint/cig.py build --workspace-root .
+python .agents/skills/zhanggong-impact-blueprint/cig.py analyze --workspace-root . --changed-file <path>
+python .agents/skills/zhanggong-impact-blueprint/cig.py finish --workspace-root . --test-scope targeted
 ```
 
-If the repo has not been initialized yet, `analyze` will auto-run the minimal
-setup it needs. `setup` is still the recommended first command because it also
-writes `AGENTS.md`, `.gitignore`, and the consumer docs.
+If the repo has not been initialized yet, `analyze` will still auto-run the
+minimal setup it needs. For real repos, `setup --minimal` is the preferred
+explicit first step because it keeps the first write small and predictable.
 
 These high-level commands automatically create:
 
-- `AGENTS.md`
-- `.gitignore`
 - `.zhanggong-impact-blueprint/config.json`
 - `.zhanggong-impact-blueprint/schema.sql`
+- `.ai/codegraph/`
+- a managed `.gitignore` block
+
+Use `setup --full` only when you explicitly want:
+
+- `AGENTS.md` managed block
 - `QUICKSTART.md`
 - `TROUBLESHOOTING.md`
 - `CONSUMER_GUIDE.md`
+
+Calibration and verification priorities for real repos:
+
+- repo-local config wins over profile fallback
+- package scripts beat profile fallback
+- `calibrate` is the step that checks what adapter and test command the repo will really use
+- `baseline` is the step that distinguishes historical red from a new regression
 
 ## Profile examples
 
@@ -35,25 +50,34 @@ python .agents/skills/zhanggong-impact-blueprint/cig.py finish
 TS/JS:
 
 ```bash
-python .agents/skills/zhanggong-impact-blueprint/cig.py setup --profile node-cli --project-root .
-python .agents/skills/zhanggong-impact-blueprint/cig.py analyze
-python .agents/skills/zhanggong-impact-blueprint/cig.py finish
+python .agents/skills/zhanggong-impact-blueprint/cig.py setup --minimal --profile node-cli --project-root .
+python .agents/skills/zhanggong-impact-blueprint/cig.py calibrate --workspace-root .
+python .agents/skills/zhanggong-impact-blueprint/cig.py analyze --workspace-root . --changed-file src/cli.js
+python .agents/skills/zhanggong-impact-blueprint/cig.py finish --workspace-root . --test-scope targeted
 ```
 
-TS/JS + PostgreSQL:
+Mixed TS/JS + Python:
+
+```json
+{
+  "primary_adapter": "tsjs",
+  "supplemental_adapters": ["python"]
+}
+```
+
+Historically red full suite:
 
 ```bash
-python .agents/skills/zhanggong-impact-blueprint/cig.py setup --profile node-cli --with sql-postgres --project-root .
-python .agents/skills/zhanggong-impact-blueprint/cig.py analyze
-python .agents/skills/zhanggong-impact-blueprint/cig.py finish
+python .agents/skills/zhanggong-impact-blueprint/cig.py baseline --workspace-root . --capture-current
+python .agents/skills/zhanggong-impact-blueprint/cig.py finish --workspace-root . --test-scope targeted
 ```
 
 ## Output modes
 
-- `analyze` and `status` default to `brief`
-- use `--full` when you need more detail
+- `analyze` defaults to brief terminal output
+- use `--json` or `--full-json` when a script needs the full payload
 - each report writes both `.md` and `.json`
-- `brief` is the daily-use mode; it is intentionally short
+- `brief` is the daily-use mode and intentionally short
 - read `affected_contracts` and `architecture_chains` when API, route, event,
   table, config/env, or IPC changes may be involved
 - treat low-confidence `DEPENDS_ON` as fallback evidence, not parser certainty
@@ -93,6 +117,8 @@ python .agents/skills/zhanggong-impact-blueprint/cig.py after-edit --seed <seed>
 - Context inference: `.ai/codegraph/context-resolution.json`
 - Seed candidates: `.ai/codegraph/seed-candidates.json`
 - Next action: `.ai/codegraph/next-action.json`
+- Baseline status: `.ai/codegraph/baseline-status.json`
+- Final status: `.ai/codegraph/status.json`
 - Contract chains: read `affected_contracts` and `architecture_chains` inside
   the report JSON and `next-action.json`
 - Health: `python .agents/skills/zhanggong-impact-blueprint/cig.py health --workspace-root .`

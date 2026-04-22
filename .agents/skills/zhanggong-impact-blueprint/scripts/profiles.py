@@ -1,11 +1,76 @@
 #!/usr/bin/env python3
 import json
+import os
 import pathlib
 
 
 AUTO_PROFILE = "auto"
 PYTHON_PROFILE = "python-basic"
 GENERIC_PROFILE = "generic-file"
+
+
+def default_python_test_globs() -> list[str]:
+    return ["tests/*.py", "tests/**/*.py", "test/*.py", "test/**/*.py"]
+
+
+def default_tsjs_source_globs() -> list[str]:
+    return [
+        "src/*.js",
+        "src/**/*.js",
+        "src/*.ts",
+        "src/**/*.ts",
+        "src/*.jsx",
+        "src/**/*.jsx",
+        "src/*.tsx",
+        "src/**/*.tsx",
+        "app/*.js",
+        "app/**/*.js",
+        "app/*.ts",
+        "app/**/*.ts",
+        "app/*.jsx",
+        "app/**/*.jsx",
+        "app/*.tsx",
+        "app/**/*.tsx",
+        "pages/*.js",
+        "pages/**/*.js",
+        "pages/*.ts",
+        "pages/**/*.ts",
+        "pages/*.jsx",
+        "pages/**/*.jsx",
+        "pages/*.tsx",
+        "pages/**/*.tsx",
+    ]
+
+
+def default_tsjs_test_globs() -> list[str]:
+    extensions = ["js", "jsx", "ts", "tsx", "mjs", "cjs"]
+    patterns: list[str] = []
+    for base_dir in ("tests", "test"):
+        for extension in extensions:
+            patterns.extend([f"{base_dir}/*.{extension}", f"{base_dir}/**/*.{extension}"])
+    for extension in extensions:
+        patterns.extend([f"**/*.test.{extension}", f"**/*.spec.{extension}"])
+    return patterns
+
+
+def normalize_package_manager_command(manager: str | None, script_name: str) -> list[str]:
+    resolved = manager or "npm"
+    if resolved == "bun":
+        return ["bun", "run", script_name]
+    if resolved == "pnpm":
+        return ["pnpm", "run", script_name]
+    if resolved == "yarn":
+        return ["yarn", script_name]
+    return ["npm", "run", script_name]
+
+
+def _normalized_adapter(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower().replace("-", "_")
+    if normalized in {"", "auto", "none", "null"}:
+        return None
+    return {"node": "tsjs", "javascript": "tsjs", "typescript": "tsjs", "py": "python"}.get(normalized, normalized)
 
 
 PROFILE_PRESETS = {
@@ -20,49 +85,8 @@ PROFILE_PRESETS = {
     "node-cli": {
         "language_adapter": "tsjs",
         "tsjs": {
-            "source_globs": [
-                "src/*.js",
-                "src/**/*.js",
-                "src/*.ts",
-                "src/**/*.ts",
-                "src/*.jsx",
-                "src/**/*.jsx",
-                "src/*.tsx",
-                "src/**/*.tsx",
-                "app/*.js",
-                "app/**/*.js",
-                "app/*.ts",
-                "app/**/*.ts",
-                "app/*.jsx",
-                "app/**/*.jsx",
-                "app/*.tsx",
-                "app/**/*.tsx",
-                "pages/*.js",
-                "pages/**/*.js",
-                "pages/*.ts",
-                "pages/**/*.ts",
-                "pages/*.jsx",
-                "pages/**/*.jsx",
-                "pages/*.tsx",
-                "pages/**/*.tsx",
-            ],
-            "test_globs": [
-                "tests/*.js",
-                "tests/**/*.js",
-                "tests/*.ts",
-                "tests/**/*.ts",
-                "tests/*.jsx",
-                "tests/**/*.jsx",
-                "tests/*.tsx",
-                "tests/**/*.tsx",
-                "app/**/*.spec.js",
-                "app/**/*.spec.ts",
-                "app/**/*.spec.tsx",
-                "pages/**/*.spec.js",
-                "pages/**/*.spec.ts",
-                "pages/**/*.spec.tsx",
-            ],
-            "test_command": ["node", "--test"],
+            "source_globs": default_tsjs_source_globs(),
+            "test_globs": default_tsjs_test_globs(),
             "coverage_adapter": "v8_family",
         },
         "rules": {"globs": ["docs/rules/*.md"]},
@@ -71,43 +95,8 @@ PROFILE_PRESETS = {
     "react-vite": {
         "language_adapter": "tsjs",
         "tsjs": {
-            "source_globs": [
-                "src/*.js",
-                "src/**/*.js",
-                "src/*.ts",
-                "src/**/*.ts",
-                "src/*.jsx",
-                "src/**/*.jsx",
-                "src/*.tsx",
-                "src/**/*.tsx",
-                "app/*.js",
-                "app/**/*.js",
-                "app/*.ts",
-                "app/**/*.ts",
-                "app/*.jsx",
-                "app/**/*.jsx",
-                "app/*.tsx",
-                "app/**/*.tsx",
-                "pages/*.js",
-                "pages/**/*.js",
-                "pages/*.ts",
-                "pages/**/*.ts",
-                "pages/*.jsx",
-                "pages/**/*.jsx",
-                "pages/*.tsx",
-                "pages/**/*.tsx",
-            ],
-            "test_globs": [
-                "tests/*.js",
-                "tests/**/*.js",
-                "tests/*.ts",
-                "tests/**/*.ts",
-                "tests/*.jsx",
-                "tests/**/*.jsx",
-                "tests/*.tsx",
-                "tests/**/*.tsx",
-            ],
-            "test_command": ["node", "--test"],
+            "source_globs": default_tsjs_source_globs(),
+            "test_globs": default_tsjs_test_globs(),
             "coverage_adapter": "v8_family",
         },
         "rules": {"globs": ["docs/rules/*.md"]},
@@ -116,27 +105,8 @@ PROFILE_PRESETS = {
     "next-basic": {
         "language_adapter": "tsjs",
         "tsjs": {
-            "source_globs": [
-                "src/*.js",
-                "src/**/*.js",
-                "src/*.ts",
-                "src/**/*.ts",
-                "src/*.jsx",
-                "src/**/*.jsx",
-                "src/*.tsx",
-                "src/**/*.tsx",
-            ],
-            "test_globs": [
-                "tests/*.js",
-                "tests/**/*.js",
-                "tests/*.ts",
-                "tests/**/*.ts",
-                "tests/*.jsx",
-                "tests/**/*.jsx",
-                "tests/*.tsx",
-                "tests/**/*.tsx",
-            ],
-            "test_command": ["node", "--test"],
+            "source_globs": default_tsjs_source_globs(),
+            "test_globs": default_tsjs_test_globs(),
             "coverage_adapter": "v8_family",
         },
         "rules": {"globs": ["docs/rules/*.md"]},
@@ -145,27 +115,8 @@ PROFILE_PRESETS = {
     "electron-renderer": {
         "language_adapter": "tsjs",
         "tsjs": {
-            "source_globs": [
-                "src/*.js",
-                "src/**/*.js",
-                "src/*.ts",
-                "src/**/*.ts",
-                "src/*.jsx",
-                "src/**/*.jsx",
-                "src/*.tsx",
-                "src/**/*.tsx",
-            ],
-            "test_globs": [
-                "tests/*.js",
-                "tests/**/*.js",
-                "tests/*.ts",
-                "tests/**/*.ts",
-                "tests/*.jsx",
-                "tests/**/*.jsx",
-                "tests/*.tsx",
-                "tests/**/*.tsx",
-            ],
-            "test_command": ["node", "--test"],
+            "source_globs": default_tsjs_source_globs(),
+            "test_globs": default_tsjs_test_globs(),
             "coverage_adapter": "v8_family",
         },
         "rules": {"globs": ["docs/rules/*.md"]},
@@ -174,27 +125,8 @@ PROFILE_PRESETS = {
     "obsidian-plugin": {
         "language_adapter": "tsjs",
         "tsjs": {
-            "source_globs": [
-                "src/*.js",
-                "src/**/*.js",
-                "src/*.ts",
-                "src/**/*.ts",
-                "src/*.jsx",
-                "src/**/*.jsx",
-                "src/*.tsx",
-                "src/**/*.tsx",
-            ],
-            "test_globs": [
-                "tests/*.js",
-                "tests/**/*.js",
-                "tests/*.ts",
-                "tests/**/*.ts",
-                "tests/*.jsx",
-                "tests/**/*.jsx",
-                "tests/*.tsx",
-                "tests/**/*.tsx",
-            ],
-            "test_command": ["node", "--test"],
+            "source_globs": default_tsjs_source_globs(),
+            "test_globs": default_tsjs_test_globs(),
             "coverage_adapter": "v8_family",
         },
         "rules": {"globs": ["docs/rules/*.md"]},
@@ -203,27 +135,8 @@ PROFILE_PRESETS = {
     "tauri-frontend": {
         "language_adapter": "tsjs",
         "tsjs": {
-            "source_globs": [
-                "src/*.js",
-                "src/**/*.js",
-                "src/*.ts",
-                "src/**/*.ts",
-                "src/*.jsx",
-                "src/**/*.jsx",
-                "src/*.tsx",
-                "src/**/*.tsx",
-            ],
-            "test_globs": [
-                "tests/*.js",
-                "tests/**/*.js",
-                "tests/*.ts",
-                "tests/**/*.ts",
-                "tests/*.jsx",
-                "tests/**/*.jsx",
-                "tests/*.tsx",
-                "tests/**/*.tsx",
-            ],
-            "test_command": ["node", "--test"],
+            "source_globs": default_tsjs_source_globs(),
+            "test_globs": default_tsjs_test_globs(),
             "coverage_adapter": "v8_family",
         },
         "rules": {"globs": ["docs/rules/*.md"]},
@@ -252,6 +165,11 @@ def apply_profile_preset(config: dict, profile_name: str) -> dict:
         return config
     merged = merge_dicts(config, {key: value for key, value in preset.items() if key != "doctor_checks"})
     merged["project_profile"] = profile_name
+    explicit_primary = _normalized_adapter(config.get("primary_adapter"))
+    preset_adapter = _normalized_adapter(preset.get("language_adapter"))
+    if explicit_primary is None and preset_adapter:
+        merged["primary_adapter"] = preset_adapter
+        merged["language_adapter"] = preset_adapter
     return merged
 
 
@@ -265,11 +183,44 @@ def package_json_data(project_root: pathlib.Path) -> dict:
         return {}
 
 
+def package_manager(project_root: pathlib.Path, package_data: dict | None = None) -> str | None:
+    package_data = package_data if package_data is not None else package_json_data(project_root)
+    package_manager_field = str(package_data.get("packageManager", "")).strip()
+    if package_manager_field:
+        lowered = package_manager_field.lower()
+        for candidate in ("bun", "pnpm", "yarn", "npm"):
+            if lowered.startswith(candidate + "@") or lowered == candidate:
+                return candidate
+    markers = [
+        ("bun.lockb", "bun"),
+        ("bun.lock", "bun"),
+        ("pnpm-lock.yaml", "pnpm"),
+        ("yarn.lock", "yarn"),
+        ("package-lock.json", "npm"),
+    ]
+    for marker, manager in markers:
+        if (project_root / marker).exists():
+            return manager
+    if (project_root / "package.json").exists():
+        return "npm"
+    return None
+
+
 def package_dependencies(package_data: dict) -> set[str]:
     deps = set(package_data.get("dependencies", {}).keys())
     deps.update(package_data.get("devDependencies", {}).keys())
     deps.update(package_data.get("peerDependencies", {}).keys())
     return deps
+
+
+def detect_python_test_start_dir(project_root: pathlib.Path | None) -> str | None:
+    if project_root is None:
+        return None
+    if (project_root / "tests").exists():
+        return "tests"
+    if (project_root / "test").exists():
+        return "test"
+    return None
 
 
 def has_any_file(project_root: pathlib.Path, patterns: list[str]) -> bool:
@@ -312,29 +263,47 @@ def detect_project_profile(project_root: pathlib.Path, config: dict, adapter_nam
 
 def profile_test_command(profile_name: str, project_root: pathlib.Path, config: dict, adapter_name: str) -> list[str]:
     if adapter_name != "tsjs":
-        return list(config.get(adapter_name, {}).get("test_command", []))
+        adapter_command = list(config.get(adapter_name, {}).get("test_command", []))
+        if adapter_command:
+            return adapter_command
+        if adapter_name == "python":
+            return [
+                "python",
+                "-m",
+                "unittest",
+                "discover",
+                "-s",
+                detect_python_test_start_dir(project_root) or "tests",
+                "-p",
+                "test_*.py",
+            ]
+        return []
 
     package_data = package_json_data(project_root)
     scripts = package_data.get("scripts", {})
+    deps = package_dependencies(package_data)
+    manager = package_manager(project_root, package_data)
     if profile_name == "node-cli":
         if "test:node-cli" in scripts:
-            return ["npm", "run", "test:node-cli"]
+            return normalize_package_manager_command(manager, "test:node-cli")
+        if "test" in scripts and ("vitest" in deps or "jest" in deps):
+            return normalize_package_manager_command(manager, "test")
         return ["node", "--test"]
     if profile_name == "react-vite":
         if "test:react-vite" in scripts:
-            return ["npm", "run", "test:react-vite"]
+            return normalize_package_manager_command(manager, "test:react-vite")
         if "test" in scripts:
-            return ["npm", "run", "test"]
+            return normalize_package_manager_command(manager, "test")
         return ["node", "--test"]
     if profile_name == "next-basic" and "test:next" in scripts:
-        return ["npm", "run", "test:next"]
+        return normalize_package_manager_command(manager, "test:next")
     if profile_name == "electron-renderer" and "test:electron" in scripts:
-        return ["npm", "run", "test:electron"]
+        return normalize_package_manager_command(manager, "test:electron")
     if profile_name == "obsidian-plugin" and "test:obsidian" in scripts:
-        return ["npm", "run", "test:obsidian"]
+        return normalize_package_manager_command(manager, "test:obsidian")
     if profile_name == "tauri-frontend" and "test:tauri" in scripts:
-        return ["npm", "run", "test:tauri"]
-    return list(config.get("tsjs", {}).get("test_command", []))
+        return normalize_package_manager_command(manager, "test:tauri")
+    return ["node", "--test"]
 
 
 def profile_coverage_adapter(profile_name: str, config: dict, adapter_name: str) -> str:

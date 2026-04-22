@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -20,14 +21,17 @@ import change_classifier  # noqa: E402
 import generate_report  # noqa: E402
 import list_seeds  # noqa: E402
 import repair_escalation  # noqa: E402
-from adapters import SQL_POSTGRES_ADAPTER, configured_supplemental_adapters, detect_language_adapter, detect_project_profile_name, detect_supplemental_adapters  # noqa: E402
+from adapters import SQL_POSTGRES_ADAPTER, configured_supplemental_adapters, detect_language_adapter, detect_project_profile_name, detect_supplemental_adapters, effective_adapter_decision, normalize_adapter_name  # noqa: E402
 from consumer_install import ensure_agents_md as ensure_consumer_agents_md, ensure_consumer_docs, ensure_gitignore as ensure_consumer_gitignore, export_single_folder  # noqa: E402
 from db_support import connect_db  # noqa: E402
 from doc_sources import doc_source_doctor_status  # noqa: E402
+from handoff import INTERNAL_STATE_INCONSISTENCY, final_state_payload, write_consistent_handoff  # noqa: E402
 from identity import DISPLAY_NAME, FORMAL_NAME, SKILL_DIR_FRAGMENT, SKILL_SLUG, STATE_CONFIG_RELATIVE_PATH, STATE_DIRNAME  # noqa: E402
-from profiles import AUTO_PROFILE, PROFILE_PRESETS, apply_profile_preset, detect_project_profile, package_json_data, profile_coverage_adapter, profile_test_command  # noqa: E402
+from profiles import AUTO_PROFILE, PROFILE_PRESETS, apply_profile_preset, default_python_test_globs, default_tsjs_source_globs, default_tsjs_test_globs, detect_project_profile, package_json_data, package_manager as profile_package_manager, profile_coverage_adapter, profile_test_command  # noqa: E402
 from recent_task import auto_task_id, latest_seed_candidates, read_last_task, utc_now as recent_task_utc_now, write_last_task  # noqa: E402
-from runtime_support import CIGUserError, ensure_runtime_dirs, error_payload_from_exception, event_payload, latest_success_timestamp, normalize_output_paths, read_json, read_jsonl, recent_command_status, relative_path_string, runtime_paths, shell_quote_path, write_error, write_event, write_handoff, write_json  # noqa: E402
+from runtime_support import CIGUserError, clear_last_error, ensure_runtime_dirs, error_payload_from_exception, event_payload, latest_success_timestamp, normalize_output_paths, print_json, print_text, read_json, read_jsonl, recent_command_status, relative_path_string, runtime_paths, shell_quote_path, write_error, write_event, write_handoff, write_json  # noqa: E402
+from setup_support import managed_gitignore_block, normalize_setup_mode, upsert_managed_block, write_json_if_missing, write_text_if_missing  # noqa: E402
+from test_command_resolver import baseline_regression_status, capture_baseline_payload, command_to_string, normalize_command, package_json_script_candidates, preflight_test_command, record_test_command_history, resolve_test_command  # noqa: E402
 from context_inference import infer_context, stdin_patch_if_available  # noqa: E402
 from seed_ranker import rank_seed_candidates  # noqa: E402
 
@@ -38,6 +42,7 @@ DEFAULT_CONFIG = {
     "supplemental_adapters": [],
     "language_adapter": "auto",
     "project_profile": "auto",
+    "test_command": [],
     "rule_adapter": "markdown",
     "doc_source_adapter": "local_markdown",
     "doc_cache": {
@@ -73,22 +78,14 @@ DEFAULT_CONFIG = {
     "rules": {"globs": ["docs/rules/*.md"]},
     "python": {
         "source_globs": ["src/*.py", "src/**/*.py"],
-        "test_globs": ["tests/*.py", "tests/**/*.py"],
-        "test_command": ["python", "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"],
+        "test_globs": default_python_test_globs(),
+        "test_command": [],
         "coverage_adapter": "coveragepy",
     },
     "tsjs": {
-        "source_globs": [
-            "src/*.js", "src/**/*.js", "src/*.ts", "src/**/*.ts", "src/*.jsx", "src/**/*.jsx", "src/*.tsx", "src/**/*.tsx",
-            "app/*.js", "app/**/*.js", "app/*.ts", "app/**/*.ts", "app/*.jsx", "app/**/*.jsx", "app/*.tsx", "app/**/*.tsx",
-            "pages/*.js", "pages/**/*.js", "pages/*.ts", "pages/**/*.ts", "pages/*.jsx", "pages/**/*.jsx", "pages/*.tsx", "pages/**/*.tsx"
-        ],
-        "test_globs": [
-            "tests/*.js", "tests/**/*.js", "tests/*.ts", "tests/**/*.ts", "tests/*.jsx", "tests/**/*.jsx", "tests/*.tsx", "tests/**/*.tsx",
-            "app/**/*.spec.js", "app/**/*.spec.ts", "app/**/*.spec.tsx",
-            "pages/**/*.spec.js", "pages/**/*.spec.ts", "pages/**/*.spec.tsx"
-        ],
-        "test_command": ["node", "--test"],
+        "source_globs": default_tsjs_source_globs(),
+        "test_globs": default_tsjs_test_globs(),
+        "test_command": [],
         "coverage_adapter": "v8_family",
     },
     "generic": {
@@ -127,6 +124,7 @@ DEFAULT_CONFIG = {
         "parser_backend": "sql_postgres_lite",
     },
     "impact": {"max_depth": 3},
+    "verification": {"test_command": []},
     "flow_policy": change_classifier.default_flow_policy(),
     "doc_roles": change_classifier.default_doc_roles(),
     "mutation_guard": change_classifier.default_mutation_guard(),
@@ -432,30 +430,34 @@ def init_workspace(
     profile: str | None = None,
     project_root: str | None = None,
     with_adapters: list[str] | None = None,
-    write_agents_md: bool = True,
-    write_gitignore: bool = True,
+    mode: str = "minimal",
+    dry_run: bool = False,
+    preview_changes: bool = False,
 ) -> dict:
     ensure_supported_profile(profile)
+    mode = normalize_setup_mode(minimal=mode != "full", full=mode == "full")
     codegraph_dir = workspace_root / ".ai" / "codegraph"
     report_dir = codegraph_dir / "reports"
     doc_cache_dir = codegraph_dir / "doc-cache"
     config_dir = workspace_root / STATE_DIRNAME
-    config_dir.mkdir(parents=True, exist_ok=True)
-    codegraph_dir.mkdir(parents=True, exist_ok=True)
-    report_dir.mkdir(parents=True, exist_ok=True)
-    doc_cache_dir.mkdir(parents=True, exist_ok=True)
-    ensure_runtime_dirs(workspace_root)
 
     config_path = config_path_for(workspace_root)
     schema_path = schema_path_for(workspace_root)
     created: list[str] = []
+    updated: list[str] = []
+    skipped: list[str] = []
+    would_create: list[str] = []
+    would_update: list[str] = []
+    would_skip: list[str] = []
+    reasons: dict[str, str] = {}
+    preview: list[str] = []
 
     use_existing_config = config_path.exists() and project_root is None and profile in (None, AUTO_PROFILE) and not with_adapters
     config_payload = load_json(config_path) if use_existing_config else default_config_payload()
     if project_root:
         config_payload["project_root"] = project_root
     config_payload["primary_adapter"] = config_payload.get("primary_adapter", config_payload.get("language_adapter", "auto"))
-    config_payload["language_adapter"] = config_payload["primary_adapter"]
+    config_payload["language_adapter"] = config_payload.get("language_adapter", config_payload["primary_adapter"])
     config_payload["supplemental_adapters"] = list(config_payload.get("supplemental_adapters", []))
     if profile and profile != AUTO_PROFILE:
         config_payload = apply_profile_preset(config_payload, profile)
@@ -474,30 +476,130 @@ def init_workspace(
     active_profile = config_payload.get("project_profile", AUTO_PROFILE)
     if active_profile != AUTO_PROFILE:
         if PROFILE_PRESETS.get(active_profile, {}).get("language_adapter") == "tsjs":
-            config_payload["tsjs"]["test_command"] = profile_test_command(active_profile, resolved_project_root, config_payload, "tsjs")
             config_payload["tsjs"]["coverage_adapter"] = profile_coverage_adapter(active_profile, config_payload, "tsjs")
+
+    desired_config_text = json.dumps(config_payload, ensure_ascii=False, indent=2) + "\n"
+    desired_schema_text = default_schema_text()
+    existing_config_text = config_path.read_text(encoding="utf-8") if config_path.exists() else None
+    existing_schema_text = schema_path.read_text(encoding="utf-8") if schema_path.exists() else None
+    relative_config = str(config_path.relative_to(workspace_root))
+    relative_schema = str(schema_path.relative_to(workspace_root))
+    reasons[relative_config] = "required runtime config"
+    reasons[relative_schema] = "required runtime schema"
+    reasons[".ai/codegraph"] = "required runtime directory"
+    reasons[".gitignore"] = "required managed runtime ignore block"
+
+    def plan_change(relative_path: str, exists: bool, current_text: str | None, desired_text: str | None) -> None:
+        if not exists:
+            would_create.append(relative_path)
+            preview.append(f"CREATE {relative_path}")
+            return
+        if desired_text is not None and current_text != desired_text:
+            would_update.append(relative_path)
+            preview.append(f"UPDATE {relative_path}")
+            return
+        would_skip.append(relative_path)
+
+    plan_change(relative_config, config_path.exists(), existing_config_text, desired_config_text)
+    plan_change(relative_schema, schema_path.exists(), existing_schema_text, desired_schema_text)
+    if not codegraph_dir.exists():
+        would_create.append(".ai/codegraph")
+        preview.append("CREATE .ai/codegraph")
+    else:
+        would_skip.append(".ai/codegraph")
+
+    gitignore_path = workspace_root / ".gitignore"
+    gitignore_block = managed_gitignore_block()
+    existing_gitignore = gitignore_path.read_text(encoding="utf-8") if gitignore_path.exists() else None
+    if existing_gitignore and "# >>> zhanggong-impact-blueprint >>>" in existing_gitignore:
+        if gitignore_block.strip() in existing_gitignore:
+            would_skip.append(".gitignore")
+        else:
+            would_update.append(".gitignore")
+            preview.append("UPDATE .gitignore")
+    elif gitignore_path.exists():
+        would_update.append(".gitignore")
+        preview.append("UPDATE .gitignore")
+    else:
+        would_create.append(".gitignore")
+        preview.append("CREATE .gitignore")
+
+    consumer_docs = {}
+    agents_md_path = None
+    if mode == "full":
+        for relative_path, reason in {
+            "QUICKSTART.md": "full mode onboarding guide",
+            "TROUBLESHOOTING.md": "full mode troubleshooting guide",
+            "CONSUMER_GUIDE.md": "full mode consumer guide",
+            "AGENTS.md": "full mode managed workspace instructions",
+        }.items():
+            reasons[relative_path] = reason
+            target = workspace_root / relative_path
+            if target.exists():
+                would_skip.append(relative_path)
+            else:
+                would_create.append(relative_path)
+                preview.append(f"CREATE {relative_path}")
+
+    if dry_run:
+        return {
+            "mode": mode,
+            "would_create": sorted(set(would_create)),
+            "would_update": sorted(set(would_update)),
+            "would_skip": sorted(set(would_skip)),
+            "reasons": reasons,
+            "preview_changes": preview if preview_changes else [],
+            "config_path": str(config_path),
+            "schema_path": str(schema_path),
+        }
+
+    config_dir.mkdir(parents=True, exist_ok=True)
+    codegraph_dir.mkdir(parents=True, exist_ok=True)
+    report_dir.mkdir(parents=True, exist_ok=True)
+    doc_cache_dir.mkdir(parents=True, exist_ok=True)
+    ensure_runtime_dirs(workspace_root)
 
     if not config_path.exists():
         write_json(config_path, config_payload)
-        created.append(str(config_path.relative_to(workspace_root)))
-    else:
+        created.append(relative_config)
+    elif existing_config_text != desired_config_text:
         write_json(config_path, config_payload)
-    if not schema_path.exists():
-        schema_path.write_text(default_schema_text(), encoding="utf-8")
-        created.append(str(schema_path.relative_to(workspace_root)))
+        updated.append(relative_config)
+    else:
+        skipped.append(relative_config)
 
-    agents_md_path = None
-    gitignore_path = None
-    consumer_docs = {}
-    if write_agents_md:
-        agents_md_path = ensure_consumer_agents_md(workspace_root)
-    if write_gitignore:
-        gitignore_path = ensure_consumer_gitignore(workspace_root)
-    consumer_docs = ensure_consumer_docs(workspace_root)
+    if not schema_path.exists():
+        schema_path.write_text(desired_schema_text, encoding="utf-8")
+        created.append(relative_schema)
+    else:
+        skipped.append(relative_schema)
+
+    block_status, _ = upsert_managed_block(gitignore_path, gitignore_block)
+    if block_status == "created":
+        created.append(".gitignore")
+    else:
+        updated.append(".gitignore")
+
+    if mode == "full":
+        consumer_docs = ensure_consumer_docs(workspace_root)
+        integration = install_integration_pack(workspace_root=workspace_root, config_path=config_path)
+        agents_md_path = integration.get("agents_path")
+        for key, value in consumer_docs.items():
+            relative = pathlib.Path(value).relative_to(workspace_root).as_posix()
+            if relative not in created and relative not in updated:
+                if pathlib.Path(value).exists():
+                    created.append(relative)
+        if agents_md_path:
+            relative_agents = pathlib.Path(agents_md_path).relative_to(workspace_root).as_posix()
+            if relative_agents not in created and relative_agents not in updated:
+                updated.append(relative_agents)
 
     return {
         "workspace_root": str(workspace_root),
+        "mode": mode,
         "created": created,
+        "updated": updated,
+        "skipped": skipped,
         "config_path": str(config_path),
         "schema_path": str(schema_path),
         "codegraph_dir": str(codegraph_dir),
@@ -506,7 +608,7 @@ def init_workspace(
         "primary_adapter": config_payload["primary_adapter"],
         "supplemental_adapters": config_payload["supplemental_adapters"],
         "agents_md_path": agents_md_path,
-        "gitignore_path": gitignore_path,
+        "gitignore_path": str(gitignore_path) if gitignore_path else None,
         **consumer_docs,
     }
 
@@ -665,11 +767,18 @@ def fixture_spec(fixture: str) -> dict:
 def detect_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> dict:
     config = build_graph.load_config(config_path)
     project_root = build_graph.project_root_for(workspace_root, config)
-    detected_adapter = detect_language_adapter(project_root, config)
+    adapter_decision = effective_adapter_decision(config, project_root)
+    detected_adapter = adapter_decision["primary_adapter"]
     detected_profile, confidence, reason = detect_project_profile(project_root, config, detected_adapter)
-    supplemental_detected = detect_supplemental_adapters(project_root, config)
-    package_manager = detect_package_manager(project_root)
-    test_command_candidates = detect_test_command_candidates(project_root, config, detected_adapter, detected_profile)
+    supplemental_detected = adapter_decision.get("supplemental_adapters", [])
+    package_manager_name = detect_package_manager(project_root)
+    test_command_payload = resolve_test_command(
+        workspace_root=workspace_root,
+        project_root=project_root,
+        config=config,
+        adapter_name=detected_adapter,
+        profile_name=detected_profile,
+    )
     return {
         "workspace_root": str(workspace_root),
         "project_root": str(project_root),
@@ -681,8 +790,16 @@ def detect_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
         "detected_profile": detected_profile,
         "configured_supplemental_adapters": configured_supplemental_adapters(config),
         "supplemental_adapters_detected": supplemental_detected,
-        "package_manager": package_manager,
-        "test_command_candidates": test_command_candidates,
+        "package_manager": package_manager_name,
+        "test_command_candidates": [item.get("command") for item in test_command_payload.get("test_command_candidates", [])],
+        "selected_test_command": test_command_payload.get("selected_test_command"),
+        "test_command_source": test_command_payload.get("test_command_source"),
+        "ignored_test_commands": test_command_payload.get("ignored_test_commands", []),
+        "adapter_source": adapter_decision.get("adapter_source"),
+        "adapter_reason": adapter_decision.get("adapter_reason"),
+        "adapter_conflicts": adapter_decision.get("adapter_conflicts", []),
+        "adapter_confidence": adapter_decision.get("adapter_confidence"),
+        "language_adapter": adapter_decision.get("language_adapter"),
         "confidence": confidence,
         "reason": reason,
     }
@@ -700,39 +817,154 @@ def default_config_template_payload() -> dict:
 
 
 def detect_package_manager(project_root: pathlib.Path) -> str | None:
-    markers = [
-        ("pnpm-lock.yaml", "pnpm"),
-        ("yarn.lock", "yarn"),
-        ("bun.lockb", "bun"),
-        ("bun.lock", "bun"),
-        ("package-lock.json", "npm"),
-    ]
-    for marker, manager in markers:
-        if (project_root / marker).exists():
-            return manager
-    if (project_root / "package.json").exists():
-        return "npm"
-    return None
+    return profile_package_manager(project_root, package_json_data(project_root))
 
 
 def detect_test_command_candidates(project_root: pathlib.Path, config: dict, adapter_name: str, profile_name: str) -> list[list[str]]:
-    if adapter_name == "python":
-        if (project_root / "pytest.ini").exists():
-            return [["pytest"]]
-        pyproject = project_root / "pyproject.toml"
-        if pyproject.exists() and "pytest" in pyproject.read_text(encoding="utf-8", errors="ignore").lower():
-            return [["pytest"]]
-        return [["python", "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"]]
-    if adapter_name == "tsjs":
-        preferred = profile_test_command(profile_name, project_root, config, "tsjs")
-        candidates = [preferred]
-        package_data = package_json_data(project_root)
-        scripts = package_data.get("scripts", {})
-        for script_name in ("test", "test:node-cli", "test:react-vite"):
-            if script_name in scripts:
-                candidates.append(["npm", "run", script_name])
-        return candidates
-    return []
+    payload = resolve_test_command(
+        workspace_root=project_root,
+        project_root=project_root,
+        config=config,
+        adapter_name=adapter_name,
+        profile_name=profile_name,
+    )
+    return [item.get("command", []) for item in payload.get("test_command_candidates", [])]
+
+
+def merge_config_patch(base: dict, patch: dict) -> dict:
+    merged = json.loads(json.dumps(base))
+    for key, value in patch.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = merge_config_patch(merged[key], value)
+        else:
+            merged[key] = json.loads(json.dumps(value))
+    return merged
+
+
+def recommend_calibration_patch(config: dict, adapter_decision: dict, test_command_payload: dict) -> dict:
+    patch: dict = {}
+    current_primary = normalize_adapter_name(config.get("primary_adapter"))
+    desired_primary = adapter_decision.get("primary_adapter")
+    if desired_primary and current_primary != desired_primary:
+        patch["primary_adapter"] = desired_primary
+    supplemental = list(adapter_decision.get("supplemental_adapters", []))
+    if supplemental:
+        patch["supplemental_adapters"] = supplemental
+    test_source = test_command_payload.get("test_command_source") or ""
+    selected_command = list(test_command_payload.get("selected_test_command_argv") or [])
+    if desired_primary and selected_command and not test_source.startswith("repo_config:"):
+        patch.setdefault(desired_primary, {})
+        patch[desired_primary]["test_command"] = selected_command
+    return patch
+
+
+def baseline_payload(
+    *,
+    workspace_root: pathlib.Path,
+    config_path: pathlib.Path,
+    test_command: str | None,
+    capture_current: bool,
+) -> dict:
+    config = build_graph.load_config(config_path)
+    project_root = build_graph.project_root_for(workspace_root, config)
+    adapter_decision = effective_adapter_decision(config, project_root)
+    adapter_name = adapter_decision["primary_adapter"]
+    profile_name = detect_project_profile_name(project_root, config, adapter_name)
+    paths = runtime_paths(workspace_root)
+    if capture_current:
+        test_results = read_json(build_graph.graph_paths(workspace_root, config)["test_results_path"]) or {}
+        payload = capture_baseline_payload(
+            command=normalize_command(test_results.get("command") or test_results.get("selected_test_command_argv") or []),
+            summary=test_results,
+            source="auto",
+        )
+        write_json(paths["baseline_status"], payload)
+        return payload
+
+    resolved = resolve_test_command(
+        workspace_root=workspace_root,
+        project_root=project_root,
+        config=config,
+        adapter_name=adapter_name,
+        profile_name=profile_name,
+        cli_test_command=test_command,
+    )
+    command = list(resolved.get("selected_test_command_argv") or [])
+    preflight = preflight_test_command(command, project_root, os.name)
+    if preflight.get("status") == "fail":
+        raise CIGUserError(
+            "TEST_COMMAND_PREFLIGHT_FAILED",
+            "The baseline test command is not executable in the current environment.",
+            retryable=True,
+            suggested_next_step="Inspect the reported recovery commands or run `cig.py calibrate` first.",
+            alternatives=[{"command": item} for item in preflight.get("recovery_commands", [])],
+        )
+    result = subprocess.run(
+        command,
+        cwd=project_root,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+        check=False,
+    )
+    output_text = result.stdout + "\n" + result.stderr
+    failed_tests = after_edit_update.parse_failed_tests(output_text, adapter_name)
+    summary = {
+        "status": "passed" if result.returncode == 0 else "failed",
+        "failed_tests": failed_tests,
+        "failure_signature": failure_signature_from_output(command, result.returncode, output_text, failed_tests),
+        "output_excerpt_lines": [line.strip() for line in output_text.splitlines() if line.strip()][:20],
+    }
+    payload = capture_baseline_payload(command=command, summary=summary, source="manual")
+    write_json(paths["baseline_status"], payload)
+    return payload
+
+
+def calibrate_payload(
+    *,
+    workspace_root: pathlib.Path,
+    config_path: pathlib.Path,
+    apply: bool = False,
+    dry_run: bool = False,
+) -> dict:
+    config = build_graph.load_config(config_path)
+    project_root = build_graph.project_root_for(workspace_root, config)
+    adapter_decision = effective_adapter_decision(config, project_root)
+    adapter_name = adapter_decision["primary_adapter"]
+    profile_name = detect_project_profile_name(project_root, config, adapter_name)
+    test_command_payload = resolve_test_command(
+        workspace_root=workspace_root,
+        project_root=project_root,
+        config=config,
+        adapter_name=adapter_name,
+        profile_name=profile_name,
+    )
+    preflight = preflight_test_command(test_command_payload.get("selected_test_command_argv"), project_root, os.name)
+    baseline = read_json(runtime_paths(workspace_root)["baseline_status"]) or {}
+    test_dirs = [name for name in ("test", "tests") if (project_root / name).exists()]
+    recommended_patch = recommend_calibration_patch(config, adapter_decision, test_command_payload)
+    status = "ok"
+    if preflight.get("status") == "warn":
+        status = "warn"
+    if preflight.get("status") == "fail" or (test_command_payload.get("test_command_source") or "").startswith("adapter_default"):
+        status = "needs_attention"
+    if apply and recommended_patch and not dry_run:
+        write_json(config_path, merge_config_patch(config, recommended_patch))
+    return {
+        "status": status,
+        "adapter": adapter_decision,
+        "test_command": {
+            **test_command_payload,
+            "test_command_preflight": preflight,
+        },
+        "test_dirs": test_dirs,
+        "baseline": baseline,
+        "platform_risks": preflight.get("issues", []),
+        "recommended_config_patch": recommended_patch,
+        "applied": bool(apply and recommended_patch and not dry_run),
+        "dry_run": dry_run,
+    }
 
 
 def export_skill(*, workspace_root: pathlib.Path, out_dir: pathlib.Path, mode: str = "full") -> dict:
@@ -1115,12 +1347,12 @@ def doctor_payload(workspace_root: pathlib.Path, config_path: pathlib.Path, *, f
 
 
 def print_doctor(payload: dict) -> None:
-    print(f"OVERALL {payload['overall']}")
+    print_text(f"OVERALL {payload['overall']}")
     for status in payload["statuses"]:
-        print(f"{status['level']} {status['message']}")
+        print_text(f"{status['level']} {status['message']}")
     safe_fixes = [item for item in payload.get("safe_fixes", []) if item]
     if safe_fixes:
-        print("SAFE_FIXES " + ", ".join(safe_fixes))
+        print_text("SAFE_FIXES " + ", ".join(safe_fixes))
 
 
 def status_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> dict:
@@ -1210,6 +1442,7 @@ def status_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
         "context_resolution": read_json(paths["context_resolution"]),
         "next_action": read_json(paths["next_action"]),
         "brief": latest_brief,
+        "trust_axes": ((latest_brief.get("trust") or {}).get("trust_axes") or ((read_json(paths["build_decision"]) or {}).get("trust_axes")) or {}),
         "next_step": next_step,
     }
 
@@ -1222,6 +1455,7 @@ def health_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
     graph_trust = "unknown"
     graph_freshness = "unknown"
     dependency_fingerprint_status = "unknown"
+    trust_axes: dict = {}
     last_task = read_last_task(workspace_root) or {}
 
     if not config_exists:
@@ -1237,10 +1471,25 @@ def health_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
         graph_trust = build_decision_payload.get("graph_trust", build_decision_payload.get("trust_level", "unknown"))
         graph_freshness = build_decision_payload.get("graph_freshness", "unknown")
         dependency_fingerprint_status = build_decision_payload.get("dependency_fingerprint_status", "unknown")
+        trust_axes = build_decision_payload.get("trust_axes", {})
         if not graph["db_path"].exists() or graph_freshness != "fresh":
             issues.append("graph_stale")
             quoted_workspace_root = shell_quote_path(workspace_root)
             fix_commands.append(f"python .agents/skills/zhanggong-impact-blueprint/cig.py build --workspace-root {quoted_workspace_root} --full-rebuild")
+        project_root = build_graph.project_root_for(workspace_root, config)
+        adapter_name = detect_language_adapter(project_root, config)
+        profile_name = detect_project_profile_name(project_root, config, adapter_name)
+        test_command_payload = resolve_test_command(
+            workspace_root=workspace_root,
+            project_root=project_root,
+            config=config,
+            adapter_name=adapter_name,
+            profile_name=profile_name,
+        )
+        uncertain_test_command = not str(test_command_payload.get("test_command_source", "")).startswith(("repo_config:", "package_json_script:"))
+        if uncertain_test_command:
+            issues.append("calibration_recommended")
+            fix_commands.insert(0, f"python .agents/skills/zhanggong-impact-blueprint/cig.py calibrate --workspace-root {shell_quote_path(workspace_root)}")
 
     last_task_phase = last_task.get("command", "none") if last_task else "none"
     needs_finish = last_task_phase in {"analyze", "report"} and (last_task.get("status") == "success")
@@ -1258,6 +1507,7 @@ def health_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
         "graph_trust": graph_trust,
         "graph_freshness": graph_freshness,
         "dependency_fingerprint_status": dependency_fingerprint_status,
+        "trust_axes": trust_axes,
         "last_task_phase": last_task_phase,
         "needs_finish": needs_finish,
     }
@@ -1273,6 +1523,50 @@ def candidate_brief(item: dict) -> dict:
         "end_line": item.get("end_line"),
         "reason": item.get("reason"),
         "reason_details": item.get("reason_details", []),
+    }
+
+
+def seed_candidate_label(item: dict) -> str:
+    path = item.get("path") or item.get("node_id", "")
+    symbol = item.get("symbol")
+    return f"{path}:{symbol}" if symbol else path
+
+
+def seed_candidate_confidence_label(value) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "unknown"
+    if number >= 0.85:
+        return "high"
+    if number >= 0.65:
+        return "medium"
+    return "low"
+
+
+def seed_candidates_payload(*, workspace_root: pathlib.Path, task_id: str | None, candidates: list[dict], status: str) -> dict | None:
+    if not candidates:
+        return None
+    retry_commands: list[str] = []
+    for item in candidates[:3]:
+        retry_commands.append(
+            f"python .agents/skills/zhanggong-impact-blueprint/cig.py analyze --workspace-root {shell_quote_path(workspace_root)} --seed {item['node_id']}"
+        )
+    return {
+        "task_id": task_id,
+        "status": status,
+        "candidates": [
+            {
+                "seed": item.get("node_id"),
+                "label": seed_candidate_label(item),
+                "reason": item.get("reason"),
+                "confidence": seed_candidate_confidence_label(item.get("confidence")),
+                "path": item.get("path"),
+                "symbol": item.get("symbol"),
+            }
+            for item in candidates
+        ],
+        "retry_commands": retry_commands,
     }
 
 
@@ -1604,6 +1898,7 @@ def next_action_payload(
     fallback_used: bool,
     changed_files_override: list[str] | None = None,
     escalation_level: str = "auto",
+    selection_state: str | None = None,
 ) -> dict:
     config = build_graph.load_config(config_path)
     build_decision = (build_payload or {}).get("build_decision", {})
@@ -1777,9 +2072,15 @@ def next_action_payload(
     elif direct_summary.get("callers") or direct_summary.get("rules"):
         risk_level = "medium"
     can_edit_now = bool(seed) or flow_level in {"skip", "health_only", "analyze_only"}
+    selection_required = selection_state == "seed_selection_required"
 
     recommended_commands: list[str] = []
-    if flow_level in {"skip", "health_only", "analyze_only"}:
+    if selection_required:
+        recommended_commands = [
+            f"python .agents/skills/zhanggong-impact-blueprint/cig.py analyze --workspace-root {shell_quote_path(workspace_root)} --seed {item['node_id']}"
+            for item in ((seed_selection or {}).get("top_candidates") or [])[:3]
+        ]
+    elif flow_level in {"skip", "health_only", "analyze_only"}:
         recommended_commands = []
     elif command_name == "analyze":
         recommended_commands.append(
@@ -1911,10 +2212,19 @@ def next_action_payload(
         for key, value in list(trust_payload.items()):
             if value == "high":
                 trust_payload[key] = "medium"
+    if selection_required:
+        recommended_action = "select_seed"
+        recommended_test_scope = "none"
+        can_edit_now = False
+        suggestion = "Choose one seed and rerun analyze."
+        user_message = "Multiple seed candidates matched the current files. Choose one explicit seed before editing."
+        agent_instruction = "Do not edit yet. Pick one candidate seed, rerun analyze with --seed, then continue."
     return {
+        "status": selection_state or "ready",
         "command": command_name,
         "task_id": task_id,
         "selected_seed": seed,
+        "secondary_seeds": list((seed_selection or {}).get("secondary_seeds", [])),
         "change_class": change_summary.get("change_class"),
         "flow_level": flow_level,
         "effective_change_class": effective_class,
@@ -1975,6 +2285,7 @@ def resolve_seed_selection(
     changed_files: list[str],
     changed_lines: list[str],
     allow_fallback: bool,
+    multi_seed: str = "auto",
 ) -> tuple[str, dict]:
     if explicit_seed:
         return explicit_seed, {
@@ -1985,6 +2296,7 @@ def resolve_seed_selection(
             "top_candidates": [{"node_id": explicit_seed, "confidence": 1.0, "seed_confidence": 1.0, "reason": "explicit seed provided", "reason_details": ["explicit seed provided"]}],
             "fallback_used": False,
             "recent_task_influenced": False,
+            "secondary_seeds": [],
         }
 
     ranked = rank_seed_candidates(
@@ -2009,6 +2321,20 @@ def resolve_seed_selection(
             "top_candidates": top_candidates,
             "fallback_used": fallback_used,
             "recent_task_influenced": ranked.get("recent_task_influenced", False),
+            "secondary_seeds": [],
+        }
+
+    if top_candidates and multi_seed == "auto" and int(ranked.get("candidate_count", len(top_candidates))) <= 3:
+        primary_candidate = top_candidates[0]
+        return primary_candidate["node_id"], {
+            "mode": "multi_seed_auto",
+            "seed_confidence": ranked.get("confidence", 0.0),
+            "confidence": ranked.get("confidence", 0.0),
+            "reason": primary_candidate.get("reason", "primary seed selected from a small candidate set"),
+            "top_candidates": top_candidates,
+            "fallback_used": bool(primary_candidate.get("kind") == "file"),
+            "recent_task_influenced": ranked.get("recent_task_influenced", False),
+            "secondary_seeds": [item["node_id"] for item in top_candidates[1:]],
         }
 
     candidates = latest_seed_candidates(workspace_root, config_path)
@@ -2028,6 +2354,7 @@ def resolve_seed_selection(
             "top_candidates": [candidate_brief(candidates[0])],
             "fallback_used": candidates[0].get("kind") == "file",
             "recent_task_influenced": False,
+            "secondary_seeds": [],
         }
     if allow_fallback:
         file_candidates = [item for item in (top_candidates or candidates[:3]) if item.get("kind") == "file"]
@@ -2041,6 +2368,7 @@ def resolve_seed_selection(
                 "top_candidates": top_candidates or [candidate_brief(selected)],
                 "fallback_used": True,
                 "recent_task_influenced": any("recent task" in detail for detail in selected.get("reason_details", [])),
+                "secondary_seeds": [],
             }
     shortlist = top_candidates or [candidate_brief(item) for item in candidates[:3]]
     suggestions = ", ".join(item["node_id"] for item in shortlist)
@@ -2049,6 +2377,7 @@ def resolve_seed_selection(
         "Multiple seed candidates matched the current files.",
         retryable=True,
         suggested_next_step=f"Run the command again with --seed using one of: {suggestions}",
+        alternatives=shortlist,
     )
 
 
@@ -2232,6 +2561,7 @@ def run_analyze_command(
     escalation_level: str = "auto",
     patch_file: pathlib.Path | None = None,
     stdin_patch: str | None = None,
+    multi_seed: str = "auto",
 ) -> dict:
     config = build_graph.load_config(config_path)
     project_root = build_graph.project_root_for(workspace_root, config)
@@ -2269,7 +2599,6 @@ def run_analyze_command(
             write_machine_outputs(
                 workspace_root,
                 context_resolution=context_resolution,
-                seed_candidates={"task_id": task_id, "candidates": []},
             )
             raise CIGUserError(
                 "CONTEXT_MISSING",
@@ -2289,7 +2618,12 @@ def run_analyze_command(
         write_machine_outputs(
             workspace_root,
             context_resolution=context_resolution,
-            seed_candidates={"task_id": task_id, "candidates": file_candidates},
+            seed_candidates=seed_candidates_payload(
+                workspace_root=workspace_root,
+                task_id=task_id,
+                candidates=file_candidates,
+                status="selection_required",
+            ),
         )
         if len(seeds_payload.get("file_details", [])) != 1:
             raise CIGUserError(
@@ -2419,16 +2753,53 @@ def run_analyze_command(
         write_machine_outputs(
             workspace_root,
             context_resolution=context_resolution,
-            seed_candidates={"task_id": task_id, "candidates": preview_candidates},
+            seed_candidates=seed_candidates_payload(
+                workspace_root=workspace_root,
+                task_id=task_id,
+                candidates=preview_candidates,
+                status="preview",
+            ),
         )
-    selected_seed, seed_selection = resolve_seed_selection(
-        workspace_root=workspace_root,
-        config_path=config_path,
-        explicit_seed=seed or context_resolution.get("selected_seed"),
-        changed_files=effective_changed_files,
-        changed_lines=effective_changed_lines,
-        allow_fallback=allow_fallback,
-    )
+    try:
+        selected_seed, seed_selection = resolve_seed_selection(
+            workspace_root=workspace_root,
+            config_path=config_path,
+            explicit_seed=seed or context_resolution.get("selected_seed"),
+            changed_files=effective_changed_files,
+            changed_lines=effective_changed_lines,
+            allow_fallback=allow_fallback,
+            multi_seed=multi_seed,
+        )
+    except CIGUserError as exc:
+        if exc.error_code == "SEED_SELECTION_REQUIRED":
+            candidate_payload = seed_candidates_payload(
+                workspace_root=workspace_root,
+                task_id=task_id,
+                candidates=preview_candidates,
+                status="selection_required",
+            )
+            provisional_next_action = next_action_payload(
+                workspace_root=workspace_root,
+                config_path=config_path,
+                command_name="analyze",
+                task_id=task_id,
+                seed=None,
+                report_payload=None,
+                build_payload=build_payload,
+                seed_selection={"top_candidates": preview_candidates, "reason": str(exc)},
+                tests_payload=None,
+                fallback_used=False,
+                changed_files_override=effective_changed_files,
+                escalation_level=escalation_level,
+                selection_state="seed_selection_required",
+            )
+            write_machine_outputs(
+                workspace_root,
+                context_resolution=context_resolution,
+                seed_candidates=candidate_payload,
+                next_action=provisional_next_action,
+            )
+        raise
     context_resolution.update(
         {
             "selected_seed": selected_seed,
@@ -2439,6 +2810,7 @@ def run_analyze_command(
             "changed_files": raw_changed_files,
             "changed_lines": raw_changed_lines,
             "context_incomplete": context_resolution.get("context_status") != "resolved" or seed_selection.get("fallback_used", False),
+            "secondary_seeds": seed_selection.get("secondary_seeds", []),
         }
     )
     resolved_task_id = task_id or auto_task_id(seed=selected_seed, changed_files=effective_changed_files, prefix="analyze")
@@ -2477,7 +2849,12 @@ def run_analyze_command(
     machine_outputs = write_machine_outputs(
         workspace_root,
         context_resolution=context_resolution,
-        seed_candidates={"task_id": resolved_task_id, "candidates": seed_selection.get("top_candidates", [])[:3]},
+        seed_candidates=seed_candidates_payload(
+            workspace_root=workspace_root,
+            task_id=resolved_task_id,
+            candidates=seed_selection.get("top_candidates", [])[:3],
+            status="preview",
+        ),
         next_action=next_action,
     )
     machine_outputs["verification_policy_path"] = str(ensure_verification_policy_file(workspace_root, config_path))
@@ -2508,6 +2885,7 @@ def run_analyze_command(
         "changed_files": effective_changed_files,
         "changed_lines": effective_changed_lines,
         "seed_selection": seed_selection,
+        "secondary_seeds": seed_selection.get("secondary_seeds", []),
         "fallback_used": seed_selection.get("fallback_used", False),
         "context_resolution": context_resolution,
         "detect": detect,
@@ -2585,6 +2963,7 @@ def finalize_after_edit(
     context_resolution: dict | None = None,
     test_scope: str = "configured",
     shadow_full: bool = False,
+    cli_test_command: list[str] | str | None = None,
 ) -> dict:
     payload = after_edit_update.after_edit_update(
         workspace_root=workspace_root,
@@ -2596,6 +2975,7 @@ def finalize_after_edit(
         test_scope=test_scope,
         shadow_full=shadow_full,
         source=command_name,
+        cli_test_command=cli_test_command,
     )
     context = command_context(workspace_root, config_path)
     config = build_graph.load_config(config_path)
@@ -2664,18 +3044,81 @@ def finalize_after_edit(
     )
     payload.setdefault("tests", {})["verification_budget"] = next_action.get("verification_budget")
     payload.setdefault("tests", {})["budget_reason_codes"] = next_action.get("budget_reason_codes", [])
-    if payload["tests"]["status"] == "failed":
-        handoff_path = write_handoff(
-            workspace_root,
+    tests_payload = payload.get("tests") or {}
+    regression_status = tests_payload.get("regression_status", "unknown")
+    tests_failed = tests_payload.get("status") == "failed"
+    tests_skipped = tests_payload.get("status") == "skipped"
+    preflight_failed = tests_payload.get("test_command_preflight", {}).get("status") == "fail"
+    failure_error_code = "TEST_COMMAND_PREFLIGHT_FAILED" if preflight_failed else "TEST_COMMAND_FAILED"
+    failure_message = (
+        "Finish stopped before executing the selected test command because preflight found it was not executable."
+        if preflight_failed
+        else "Graph/report refresh succeeded, but the configured test command failed."
+    )
+    failure_next_step = (
+        "Inspect the reported recovery commands or run `cig.py calibrate` to choose a cross-platform executable test command, then rerun finish/after-edit."
+        if preflight_failed
+        else "Inspect handoff/latest.md and test-results.json, fix the failing command or code, then rerun finish/after-edit."
+    )
+    if tests_failed and regression_status in {"new_failure", "unknown"}:
+        task_status = "failed"
+    elif tests_failed or tests_skipped:
+        task_status = "partial"
+    else:
+        task_status = "completed"
+    final_state = final_state_payload(
+        task_status=task_status,
+        last_successful_step=command_name if task_status != "failed" else (read_json(runtime_paths(workspace_root)["last_run"]) or {}).get("command", "none"),
+        tests_passed=bool(tests_payload.get("tests_passed")),
+        test_results_path=str(workspace_root / ".ai" / "codegraph" / "test-results.json"),
+        effective_test_scope=tests_payload.get("effective_test_scope", "unknown"),
+        regression_status=regression_status,
+        handoff_status="completed" if task_status == "completed" else "partial" if task_status == "partial" else "failed",
+        baseline_status=tests_payload.get("baseline_status", "unknown"),
+        current_status=tests_payload.get("current_status", tests_payload.get("status", "unknown")),
+        last_error=None if task_status != "failed" else {"error_code": failure_error_code, "message": failure_message},
+    )
+    tests_payload["final_state"] = final_state
+    next_action["final_state"] = final_state
+    write_json(workspace_root / ".ai" / "codegraph" / "test-results.json", tests_payload)
+    write_json(runtime_paths(workspace_root)["next_action"], next_action)
+    if task_status != "failed":
+        clear_last_error(workspace_root)
+    notes: list[str] = []
+    if tests_failed and regression_status == "no_regression":
+        notes.append("Baseline is already red with the same failure signature; this finish did not introduce a new regression.")
+    if tests_payload.get("baseline_status") == "failed" and tests_payload.get("tests_passed") and not tests_payload.get("full_suite", True):
+        notes.append("Selected smoke or targeted verification passed, but the historical baseline full suite is still red.")
+    if tests_payload.get("test_command_preflight", {}).get("status") == "fail":
+        notes.append("Finish stopped before executing the selected test command because preflight found it was not executable.")
+    try:
+        handoff_path = write_consistent_handoff(
+            workspace_root=workspace_root,
             task_id=task_id,
             command=command_name,
-            status="failed",
-            failure_point="TEST_COMMAND_FAILED",
-            suggested_next_step="Inspect test-results.json and the output log, fix the test command or code, then rerun finish/after-edit.",
             seed=seed,
             report_path=payload["report"]["report_path"],
-            test_results_path=str(workspace_root / ".ai" / "codegraph" / "test-results.json"),
+            final_state=final_state,
+            test_results=tests_payload,
+            suggested_next_step=(
+                "Inspect test-results.json and the output log, fix the test command or code, then rerun finish/after-edit."
+                if task_status == "failed"
+                else "Review the updated report and test results, then continue with the next task."
+                if task_status == "completed"
+                else "Review the warning notes, baseline status, and test-results.json before continuing."
+            ),
+            notes=notes,
         )
+    except ValueError as exc:
+        if str(exc) == INTERNAL_STATE_INCONSISTENCY:
+            raise CIGUserError(
+                INTERNAL_STATE_INCONSISTENCY,
+                "Final state disagreed with test-results.json while writing handoff output.",
+                retryable=False,
+                suggested_next_step="Inspect status.json, handoff/latest.md, and test-results.json for stale state and rerun finish.",
+            )
+        raise
+    if task_status == "failed":
         persist_last_task(
             workspace_root,
             command_name=command_name,
@@ -2699,31 +3142,16 @@ def finalize_after_edit(
             test_signal=payload.get("report", {}).get("test_signal"),
         )
         raise CIGUserError(
-            "TEST_COMMAND_FAILED",
-            "Graph/report refresh succeeded, but the configured test command failed.",
+            failure_error_code,
+            failure_message,
             retryable=True,
-            suggested_next_step="Inspect handoff/latest.md and test-results.json, fix the failing command or code, then rerun finish/after-edit.",
+            suggested_next_step=failure_next_step,
             output_paths={
                 "report_path": payload["report"]["report_path"],
                 "test_results_path": str(workspace_root / ".ai" / "codegraph" / "test-results.json"),
                 "handoff_path": str(handoff_path),
             },
         )
-    write_handoff(
-        workspace_root,
-        task_id=task_id,
-        command=command_name,
-        status="completed" if payload["tests"]["status"] == "passed" else "completed-with-warnings",
-        failure_point="none" if payload["tests"]["status"] == "passed" else "TESTS_SKIPPED",
-        suggested_next_step=(
-            "Review the updated report and test results, then continue with the next task."
-            if payload["tests"]["status"] == "passed"
-            else "Tests were skipped. Review test-results.json, confirm that is acceptable for this repo, then continue or configure a real test command."
-        ),
-        seed=seed,
-        report_path=payload["report"]["report_path"],
-        test_results_path=str(workspace_root / ".ai" / "codegraph" / "test-results.json"),
-    )
     last_task_path_str = persist_last_task(
         workspace_root,
         command_name=command_name,
@@ -2755,6 +3183,7 @@ def finalize_after_edit(
     payload["next_action"] = next_action
     payload["machine_outputs"] = machine_outputs
     payload["brief"] = payload.get("report", {}).get("brief")
+    payload["final_state"] = final_state
     return payload
 
 
@@ -2808,8 +3237,7 @@ def auto_setup_if_missing(workspace_root: pathlib.Path, config_path: pathlib.Pat
         profile=AUTO_PROFILE,
         project_root=".",
         with_adapters=[],
-        write_agents_md=True,
-        write_gitignore=True,
+        mode="minimal",
     )
 
 
@@ -2823,9 +3251,10 @@ def command_context(workspace_root: pathlib.Path, config_path: pathlib.Path | No
         }
     config = build_graph.load_config(config_path)
     project_root = build_graph.project_root_for(workspace_root, config)
-    primary_adapter = detect_language_adapter(project_root, config)
+    adapter_decision = effective_adapter_decision(config, project_root)
+    primary_adapter = adapter_decision["primary_adapter"]
     detected_profile = detect_project_profile_name(project_root, config, primary_adapter)
-    supplemental = detect_supplemental_adapters(project_root, config)
+    supplemental = adapter_decision.get("supplemental_adapters", [])
     return {
         "project_root": str(project_root),
         "profile": detected_profile,
@@ -2837,7 +3266,7 @@ def command_context(workspace_root: pathlib.Path, config_path: pathlib.Path | No
 def success_next_step(command_name: str) -> str:
     mapping = {
         "init": "Run `cig.py doctor` next.",
-        "setup": "Run `cig.py analyze` next. It will infer context from your working tree when possible.",
+        "setup": "Run `cig.py calibrate` next, then `cig.py health` and `cig.py analyze`.",
         "doctor": "Run `cig.py detect` next.",
         "detect": "Run `cig.py build` next.",
         "build": "Run `cig.py seeds` next.",
@@ -2845,6 +3274,8 @@ def success_next_step(command_name: str) -> str:
         "report": "Read the report, edit the code, then run `cig.py after-edit`.",
         "after-edit": "Review the updated report, test results, and handoff note.",
         "analyze": "Edit the code, then run `cig.py finish --test-scope targeted`. It will reuse the latest task context when possible.",
+        "calibrate": "Review the calibration output, then run `cig.py health` and `cig.py analyze`.",
+        "baseline": "Use the captured baseline when interpreting later finish results.",
         "recommend-tests": "Use the mapped commands for targeted verification, or fall back to the configured suite if mapping is unavailable.",
         "finish": "Review handoff/latest.md and start the next task when ready.",
         "demo": "Inspect the generated graph, report, logs, and handoff artifacts.",
@@ -2861,6 +3292,49 @@ def requested_report_mode(args, default: str = "brief") -> str:
     if getattr(args, "brief", False):
         return "brief"
     return default
+
+
+def render_analyze_brief_text(payload: dict) -> str:
+    report = payload.get("report", {})
+    brief = payload.get("brief") or report.get("brief") or {}
+    next_action = payload.get("next_action") or {}
+    trust_axes = ((brief.get("trust") or {}).get("trust_axes") or {})
+    lines = [
+        f"selected_seed: {brief.get('selected_seed') or payload.get('seed') or 'selection_required'}",
+    ]
+    secondary = list(brief.get("secondary_seeds") or payload.get("secondary_seeds") or [])
+    if secondary:
+        lines.append(f"secondary_seeds: {', '.join(secondary[:3])}")
+    lines.extend(
+        [
+            f"change_class: {next_action.get('change_class', 'unknown')}",
+            f"verification_budget: {next_action.get('verification_budget', 'unknown')}",
+            f"recommended_test_scope: {next_action.get('recommended_test_scope', 'unknown')}",
+        ]
+    )
+    for item in list(next_action.get("must_read_first") or [])[:3]:
+        lines.append(f"must_read_first: {item}")
+    if trust_axes:
+        lines.append(
+            "trust_axes: "
+            + ", ".join(
+                f"{key}={value}"
+                for key, value in [
+                    ("graph_freshness", trust_axes.get("graph_freshness")),
+                    ("workspace_noise", trust_axes.get("workspace_noise")),
+                    ("dependency_confidence", trust_axes.get("dependency_confidence")),
+                    ("context_confidence", trust_axes.get("context_confidence")),
+                    ("adapter_confidence", trust_axes.get("adapter_confidence")),
+                    ("test_signal", trust_axes.get("test_signal")),
+                    ("overall_trust", trust_axes.get("overall_trust")),
+                ]
+                if value is not None
+            )
+        )
+    lines.append(f"uncertainty_count: {(next_action.get('atlas_summary') or {}).get('uncertainty_count', 0)}")
+    lines.append(f"report_path: {report.get('report_path')}")
+    lines.append(f"next_action_path: {payload.get('machine_outputs', {}).get('next_action_path')}")
+    return "\n".join(lines[:20])
 
 
 def output_paths_for_command(command_name: str, workspace_root: pathlib.Path, payload: dict | pathlib.Path | None, config_path: pathlib.Path | None) -> dict:
@@ -2927,6 +3401,13 @@ def output_paths_for_command(command_name: str, workspace_root: pathlib.Path, pa
             "context_resolution_path": payload.get("machine_outputs", {}).get("context_resolution_path"),
             "next_action_path": payload.get("machine_outputs", {}).get("next_action_path"),
         }
+    if command_name == "baseline":
+        return {"baseline_status_path": str(runtime_paths(workspace_root)["baseline_status"])}
+    if command_name == "calibrate":
+        return {
+            "config_path": str(config_path) if config_path else None,
+            "baseline_status_path": str(runtime_paths(workspace_root)["baseline_status"]),
+        }
     if command_name == "demo":
         return {"workspace_root": str(payload) if isinstance(payload, pathlib.Path) else None}
     if command_name == "export-skill" and isinstance(payload, dict):
@@ -2960,8 +3441,11 @@ def main() -> int:
     setup_parser.add_argument("--profile", default=None)
     setup_parser.add_argument("--project-root", default=None)
     setup_parser.add_argument("--with", dest="with_adapters", action="append", default=[])
+    setup_parser.add_argument("--minimal", action="store_true")
     setup_parser.add_argument("--brief", action="store_true", help="Prefer compact output")
     setup_parser.add_argument("--full", action="store_true", help="Prefer fuller output")
+    setup_parser.add_argument("--dry-run", action="store_true")
+    setup_parser.add_argument("--preview-changes", action="store_true")
 
     doctor_parser = subparsers.add_parser("doctor", help="Run a lightweight workspace health check")
     doctor_parser.add_argument("--workspace-root", default=".")
@@ -3008,6 +3492,10 @@ def main() -> int:
     analyze_parser.add_argument("--allow-fallback", action="store_true")
     analyze_parser.add_argument("--brief", action="store_true")
     analyze_parser.add_argument("--full", action="store_true")
+    analyze_parser.add_argument("--json", action="store_true")
+    analyze_parser.add_argument("--verbose-json", action="store_true")
+    analyze_parser.add_argument("--full-json", action="store_true")
+    analyze_parser.add_argument("--multi-seed", choices=["auto", "off", "required"], default="auto")
     analyze_parser.add_argument("--escalation-level", choices=["L0", "L1", "L2", "L3", "auto"], default="auto")
 
     recommend_tests_parser = subparsers.add_parser("recommend-tests", help="Map directly affected test seeds to executable commands")
@@ -3053,6 +3541,7 @@ def main() -> int:
     after_parser.add_argument("--allow-fallback", action="store_true")
     after_parser.add_argument("--test-scope", choices=["targeted", "configured", "full"], default="configured")
     after_parser.add_argument("--shadow-full", action="store_true")
+    after_parser.add_argument("--test-command", default=None)
 
     finish_parser = subparsers.add_parser("finish", help="High-level after-edit command that reuses recent analyze context")
     finish_parser.add_argument("--workspace-root", default=".")
@@ -3066,6 +3555,19 @@ def main() -> int:
     finish_parser.add_argument("--full", action="store_true")
     finish_parser.add_argument("--test-scope", choices=["targeted", "configured", "full"], default="configured")
     finish_parser.add_argument("--shadow-full", action="store_true")
+    finish_parser.add_argument("--test-command", default=None)
+
+    baseline_parser = subparsers.add_parser("baseline", help="Capture or persist baseline test status for the current repo")
+    baseline_parser.add_argument("--workspace-root", default=".")
+    baseline_parser.add_argument("--config", default=STATE_CONFIG_RELATIVE_PATH)
+    baseline_parser.add_argument("--test-command", default=None)
+    baseline_parser.add_argument("--capture-current", action="store_true")
+
+    calibrate_parser = subparsers.add_parser("calibrate", help="Inspect adapter, test command, baseline, and platform fit for a real repo")
+    calibrate_parser.add_argument("--workspace-root", default=".")
+    calibrate_parser.add_argument("--config", default=STATE_CONFIG_RELATIVE_PATH)
+    calibrate_parser.add_argument("--apply", action="store_true")
+    calibrate_parser.add_argument("--dry-run", action="store_true")
 
     demo_parser = subparsers.add_parser("demo", help="Run a fixture end-to-end demo")
     demo_parser.add_argument("--fixture", choices=["python_minimal", "tsjs_minimal", "generic_minimal", "tsjs_node_cli", "tsx_react_vite", "sql_pg_minimal", "tsjs_pg_compound"], default="python_minimal")
@@ -3120,7 +3622,7 @@ def main() -> int:
                 suggested_next_step=success_next_step("demo"),
             )
             write_event(workspace_root, event)
-            print(workspace_root)
+            print_text(str(workspace_root))
             return 0
 
         if args.command == "export-skill":
@@ -3142,7 +3644,7 @@ def main() -> int:
                 suggested_next_step=success_next_step("export-skill"),
             )
             write_event(workspace_root, event)
-            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            print_json(payload)
             return 0
 
         if args.command == "init":
@@ -3173,21 +3675,26 @@ def main() -> int:
                 suggested_next_step=success_next_step("init"),
             )
             write_event(workspace_root, event)
-            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            print_json(payload)
             return 0
 
         if args.command == "setup":
+            setup_mode = normalize_setup_mode(minimal=bool(args.minimal or not args.full), full=bool(args.full))
             init_payload = init_workspace(
                 workspace_root,
                 profile=args.profile,
                 project_root=args.project_root,
                 with_adapters=args.with_adapters,
-                write_agents_md=True,
-                write_gitignore=True,
+                mode=setup_mode,
+                dry_run=bool(args.dry_run),
+                preview_changes=bool(args.preview_changes),
             )
+            if args.dry_run:
+                print_json(init_payload)
+                return 0
             current_config_path = config_path_for(workspace_root)
             context = command_context(workspace_root, current_config_path)
-            doctor = doctor_payload(workspace_root, current_config_path, fix_safe=True)
+            doctor = doctor_payload(workspace_root, current_config_path, fix_safe=False)
             if doctor["overall"] == "FAIL":
                 error_code = (
                     "SUPPLEMENTAL_ADAPTER_MISSING"
@@ -3220,10 +3727,10 @@ def main() -> int:
                 suggested_next_step=success_next_step("setup"),
             )
             write_event(workspace_root, event)
-            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            print_json(payload)
             return 0
 
-        if args.command in {"report", "analyze", "recommend-tests", "after-edit", "finish", "install-integration-pack"}:
+        if args.command in {"report", "analyze", "recommend-tests", "after-edit", "finish", "install-integration-pack", "calibrate", "baseline"}:
             auto_setup_if_missing(workspace_root, config_path)
         if args.command not in {"status", "health", "release-check"}:
             ensure_config_exists(config_path)
@@ -3340,6 +3847,7 @@ def main() -> int:
                 escalation_level=args.escalation_level,
                 patch_file=pathlib.Path(args.patch_file).resolve() if args.patch_file else None,
                 stdin_patch=stdin_patch_if_available(),
+                multi_seed=args.multi_seed,
             )
             task_id = payload["task_id"]
             seed = payload["seed"]
@@ -3379,6 +3887,20 @@ def main() -> int:
                 workspace_root=workspace_root,
                 config_path=config_path,
             )
+        elif args.command == "baseline":
+            payload = baseline_payload(
+                workspace_root=workspace_root,
+                config_path=config_path,
+                test_command=args.test_command,
+                capture_current=bool(args.capture_current),
+            )
+        elif args.command == "calibrate":
+            payload = calibrate_payload(
+                workspace_root=workspace_root,
+                config_path=config_path,
+                apply=bool(args.apply),
+                dry_run=bool(args.dry_run),
+            )
         elif args.command == "after-edit":
             flow_summary = change_classifier.classify_change(
                 workspace_root,
@@ -3416,6 +3938,7 @@ def main() -> int:
                     context_resolution=context_resolution,
                     test_scope=args.test_scope,
                     shadow_full=args.shadow_full,
+                    cli_test_command=args.test_command,
                 )
                 task_id = resolved_task_id
                 seed = resolved_seed
@@ -3458,6 +3981,7 @@ def main() -> int:
                     context_resolution=context_resolution,
                     test_scope=args.test_scope,
                     shadow_full=args.shadow_full,
+                    cli_test_command=args.test_command,
                 )
                 task_id = resolved_task_id
                 seed = resolved_seed
@@ -3498,7 +4022,10 @@ def main() -> int:
             suggested_next_step=success_next_step(args.command),
         )
         write_event(workspace_root, event)
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        if args.command == "analyze" and not any(getattr(args, name, False) for name in ("json", "verbose_json", "full_json")):
+            print_text(render_analyze_brief_text(payload))
+        else:
+            print_json(payload)
         return 0
     except Exception as exc:
         error_info = error_payload_from_exception(
@@ -3529,7 +4056,7 @@ def main() -> int:
         if args.debug:
             traceback.print_exc()
         else:
-            print(f"ERROR [{error_info['error_code']}]: {error_info['message']}", file=sys.stderr)
+            print_text(f"ERROR [{error_info['error_code']}]: {error_info['message']}", file=sys.stderr)
         return 1
 
 

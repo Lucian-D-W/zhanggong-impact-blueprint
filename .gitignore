@@ -6,3 +6,10 @@ __pycache__/
 coverage-*.json
 coverage-*.data
 dist/
+
+# local-only working content
+docs/
+tests/
+AGENTS.md
+.zhanggong-impact-blueprint/
+.tmp-gitnexus-src/

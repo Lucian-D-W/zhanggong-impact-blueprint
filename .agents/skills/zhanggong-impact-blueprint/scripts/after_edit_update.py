@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 
 import build_graph
 import generate_report
+from providers import provider_registry
 from adapters import adapter_coverage_adapter, detect_language_adapter, detect_project_profile_name
 from db_support import connect_db
 from parser_backends import v8_relative_path
@@ -1336,6 +1337,17 @@ def after_edit_update(
         shadow_full=shadow_full,
         cli_test_command=cli_test_command,
     )
+    provider_state = provider_registry.collect_provider_analysis(
+        workspace_root=workspace_root,
+        config=config,
+        seed_context=provider_registry.seed_context_from_graph(
+            workspace_root=workspace_root,
+            config=config,
+            seed=seed,
+            changed_files=changed_files,
+        ),
+        bootstrap=True,
+    )
     report_summary = generate_report.generate_report(
         workspace_root=workspace_root,
         config_path=config_path,
@@ -1346,6 +1358,7 @@ def after_edit_update(
         changed_files=changed_files,
         test_summary=test_summary,
         build_decision=graph_summary.get("build_decision"),
+        provider_analysis=provider_state,
     )
     test_signal = (report_summary.get("brief") or {}).get("test_signal", {})
     test_summary["affected_tests_found"] = test_signal.get("affected_tests_found", False)

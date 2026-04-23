@@ -21,6 +21,7 @@ import change_classifier  # noqa: E402
 import generate_report  # noqa: E402
 import list_seeds  # noqa: E402
 import repair_escalation  # noqa: E402
+from providers import provider_registry  # noqa: E402
 from adapters import SQL_POSTGRES_ADAPTER, configured_supplemental_adapters, detect_language_adapter, detect_project_profile_name, detect_supplemental_adapters, effective_adapter_decision, normalize_adapter_name  # noqa: E402
 from consumer_install import ensure_agents_md as ensure_consumer_agents_md, ensure_consumer_docs, ensure_gitignore as ensure_consumer_gitignore, export_single_folder  # noqa: E402
 from db_support import connect_db  # noqa: E402
@@ -45,6 +46,21 @@ DEFAULT_CONFIG = {
     "test_command": [],
     "rule_adapter": "markdown",
     "doc_source_adapter": "local_markdown",
+    "graph_provider": "gitnexus",
+    "providers": {
+        "gitnexus": {
+            "enabled": True,
+            "command": "gitnexus",
+            "mode": "cli",
+            "bootstrap": "auto",
+            "fallback_to_internal": True,
+            "skip_agents_md": True,
+            "use_npx": False,
+        },
+        "internal": {
+            "enabled": True,
+        },
+    },
     "doc_cache": {
         "enabled": True,
         "dir": ".ai/codegraph/doc-cache",
@@ -459,6 +475,8 @@ def init_workspace(
     config_payload["primary_adapter"] = config_payload.get("primary_adapter", config_payload.get("language_adapter", "auto"))
     config_payload["language_adapter"] = config_payload.get("language_adapter", config_payload["primary_adapter"])
     config_payload["supplemental_adapters"] = list(config_payload.get("supplemental_adapters", []))
+    config_payload["graph_provider"] = config_payload.get("graph_provider", DEFAULT_CONFIG["graph_provider"])
+    config_payload["providers"] = merge_config_patch(DEFAULT_CONFIG["providers"], config_payload.get("providers", {}))
     if profile and profile != AUTO_PROFILE:
         config_payload = apply_profile_preset(config_payload, profile)
     elif "project_profile" not in config_payload:
@@ -944,15 +962,31 @@ def calibrate_payload(
     baseline = read_json(runtime_paths(workspace_root)["baseline_status"]) or {}
     test_dirs = [name for name in ("test", "tests") if (project_root / name).exists()]
     recommended_patch = recommend_calibration_patch(config, adapter_decision, test_command_payload)
+    provider_state = provider_registry.collect_provider_analysis(
+        workspace_root=workspace_root,
+        config=config,
+        seed_context={"seed": None, "path": None, "symbol": None, "changed_files": []},
+        bootstrap=False,
+    )
     status = "ok"
     if preflight.get("status") == "warn":
         status = "warn"
     if preflight.get("status") == "fail" or (test_command_payload.get("test_command_source") or "").startswith("adapter_default"):
         status = "needs_attention"
+    if provider_state.get("provider_status") == "failed":
+        status = "needs_attention"
     if apply and recommended_patch and not dry_run:
         write_json(config_path, merge_config_patch(config, recommended_patch))
     return {
         "status": status,
+        "graph_provider": provider_state.get("graph_provider"),
+        "provider_status": provider_state.get("provider_status"),
+        "provider_reason": provider_state.get("provider_reason"),
+        "provider_install_hint": provider_state.get("provider_install_hint"),
+        "provider_index_status": provider_state.get("provider_index_status"),
+        "provider_fallback": provider_state.get("provider_fallback"),
+        "fallback_provider": provider_state.get("fallback_provider"),
+        "provider_effective": provider_state.get("provider_effective"),
         "adapter": adapter_decision,
         "test_command": {
             **test_command_payload,
@@ -961,6 +995,7 @@ def calibrate_payload(
         "test_dirs": test_dirs,
         "baseline": baseline,
         "platform_risks": preflight.get("issues", []),
+        "provider": provider_state,
         "recommended_config_patch": recommended_patch,
         "applied": bool(apply and recommended_patch and not dry_run),
         "dry_run": dry_run,
@@ -1457,6 +1492,13 @@ def health_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
     dependency_fingerprint_status = "unknown"
     trust_axes: dict = {}
     last_task = read_last_task(workspace_root) or {}
+    config = build_graph.load_config(config_path) if config_exists else default_config_payload()
+    provider_state = provider_registry.collect_provider_analysis(
+        workspace_root=workspace_root,
+        config=config,
+        seed_context={"seed": None, "path": None, "symbol": None, "changed_files": []},
+        bootstrap=False,
+    )
 
     if not config_exists:
         issues.append("config_missing")
@@ -1465,7 +1507,6 @@ def health_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
         issues.append("graph_stale")
         fix_commands.append(f"python .agents/skills/zhanggong-impact-blueprint/cig.py build --workspace-root {quoted_workspace_root} --full-rebuild")
     else:
-        config = build_graph.load_config(config_path)
         graph = build_graph.graph_paths(workspace_root, config)
         build_decision_payload = read_json(paths["build_decision"]) or {}
         graph_trust = build_decision_payload.get("graph_trust", build_decision_payload.get("trust_level", "unknown"))
@@ -1501,6 +1542,15 @@ def health_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
 
     return {
         "ready": ready,
+        "graph_provider": provider_state.get("graph_provider"),
+        "provider_status": provider_state.get("provider_status"),
+        "provider_reason": provider_state.get("provider_reason"),
+        "provider_install_hint": provider_state.get("provider_install_hint"),
+        "provider_index_status": provider_state.get("provider_index_status"),
+        "provider_fallback": provider_state.get("provider_fallback"),
+        "fallback_provider": provider_state.get("fallback_provider"),
+        "provider_effective": provider_state.get("provider_effective"),
+        "graph_source": provider_state.get("provider_effective") or provider_state.get("graph_provider"),
         "issues": issues,
         "fix_commands": fix_commands,
         "next_command": next_command,
@@ -1510,6 +1560,7 @@ def health_payload(workspace_root: pathlib.Path, config_path: pathlib.Path) -> d
         "trust_axes": trust_axes,
         "last_task_phase": last_task_phase,
         "needs_finish": needs_finish,
+        "provider": provider_state,
     }
 
 
@@ -1906,6 +1957,8 @@ def next_action_payload(
     report_json = read_report_json_payload(report_payload)
     direct_payload = (report_payload or {}).get("direct") or (report_json.get("direct") or {})
     definition = (report_payload or {}).get("definition") or (report_json.get("definition") or {})
+    provider_brief = (report_payload or {}).get("provider") or report_json.get("provider") or {}
+    provider_overlay = (report_payload or {}).get("provider_overlay") or report_json.get("provider_overlay") or {}
     affected_contracts = list((report_payload or {}).get("affected_contracts") or report_json.get("affected_contracts") or [])
     architecture_chains = list((report_payload or {}).get("architecture_chains") or report_json.get("architecture_chains") or [])
     raw_atlas_views = list((report_payload or {}).get("atlas_views") or report_json.get("atlas_views") or [])
@@ -1999,6 +2052,7 @@ def next_action_payload(
         [
             definition.get("path"),
             *changed_files,
+            *list(report_brief.get("must_read_first") or provider_overlay.get("must_read_first") or []),
         ]
     )
     expanded_chain = {
@@ -2224,6 +2278,13 @@ def next_action_payload(
         "command": command_name,
         "task_id": task_id,
         "selected_seed": seed,
+        "graph_provider": provider_brief.get("graph_provider"),
+        "provider_status": provider_brief.get("provider_status"),
+        "provider_reason": provider_brief.get("provider_reason"),
+        "provider_fallback": provider_brief.get("provider_fallback"),
+        "fallback_provider": provider_brief.get("fallback_provider"),
+        "provider_effective": provider_brief.get("provider_effective"),
+        "provider_evidence_summary": list(report_brief.get("provider_evidence_summary") or []),
         "secondary_seeds": list((seed_selection or {}).get("secondary_seeds", [])),
         "change_class": change_summary.get("change_class"),
         "flow_level": flow_level,
@@ -2657,6 +2718,17 @@ def run_analyze_command(
         )
         resolved_task_id = task_id or auto_task_id(seed=selected_seed, changed_files=effective_changed_files, prefix="analyze")
         suggested_next = "The current report is incomplete, so narrow the seed or pass --changed-file before editing."
+        provider_state = provider_registry.collect_provider_analysis(
+            workspace_root=workspace_root,
+            config=config,
+            seed_context=provider_registry.seed_context_from_graph(
+                workspace_root=workspace_root,
+                config=config,
+                seed=selected_seed,
+                changed_files=effective_changed_files,
+            ),
+            bootstrap=True,
+        )
         report_payload = generate_report.generate_report(
             workspace_root=workspace_root,
             config_path=config_path,
@@ -2669,6 +2741,7 @@ def run_analyze_command(
             build_decision=build_payload.get("build_decision"),
             next_step=suggested_next,
             context_resolution=context_resolution,
+            provider_analysis=provider_state,
         )
         context = command_context(workspace_root, config_path)
         next_action = next_action_payload(
@@ -2715,6 +2788,13 @@ def run_analyze_command(
         return {
             "task_id": resolved_task_id,
             "seed": selected_seed,
+            "graph_provider": provider_state.get("graph_provider"),
+            "provider_status": provider_state.get("provider_status"),
+            "provider_reason": provider_state.get("provider_reason"),
+            "provider_fallback": provider_state.get("provider_fallback"),
+            "fallback_provider": provider_state.get("fallback_provider"),
+            "provider_effective": provider_state.get("provider_effective"),
+            "provider_evidence_summary": provider_state.get("provider_evidence_summary", []),
             "changed_files": effective_changed_files,
             "changed_lines": effective_changed_lines,
             "seed_selection": seed_selection,
@@ -2819,6 +2899,17 @@ def run_analyze_command(
         if context_resolution.get("context_incomplete")
         else "If this brief looks right, edit the code and then run `cig.py finish`."
     )
+    provider_state = provider_registry.collect_provider_analysis(
+        workspace_root=workspace_root,
+        config=config,
+        seed_context=provider_registry.seed_context_from_graph(
+            workspace_root=workspace_root,
+            config=config,
+            seed=selected_seed,
+            changed_files=effective_changed_files,
+        ),
+        bootstrap=True,
+    )
     report_payload = generate_report.generate_report(
         workspace_root=workspace_root,
         config_path=config_path,
@@ -2831,6 +2922,7 @@ def run_analyze_command(
         build_decision=build_payload.get("build_decision"),
         next_step=suggested_next,
         context_resolution=context_resolution,
+        provider_analysis=provider_state,
     )
     context = command_context(workspace_root, config_path)
     next_action = next_action_payload(
@@ -2882,6 +2974,13 @@ def run_analyze_command(
     return {
         "task_id": resolved_task_id,
         "seed": selected_seed,
+        "graph_provider": provider_state.get("graph_provider"),
+        "provider_status": provider_state.get("provider_status"),
+        "provider_reason": provider_state.get("provider_reason"),
+        "provider_fallback": provider_state.get("provider_fallback"),
+        "fallback_provider": provider_state.get("fallback_provider"),
+        "provider_effective": provider_state.get("provider_effective"),
+        "provider_evidence_summary": provider_state.get("provider_evidence_summary", []),
         "changed_files": effective_changed_files,
         "changed_lines": effective_changed_lines,
         "seed_selection": seed_selection,
@@ -3310,6 +3409,8 @@ def render_analyze_brief_text(payload: dict) -> str:
             f"change_class: {next_action.get('change_class', 'unknown')}",
             f"verification_budget: {next_action.get('verification_budget', 'unknown')}",
             f"recommended_test_scope: {next_action.get('recommended_test_scope', 'unknown')}",
+            f"graph_provider: {next_action.get('graph_provider') or brief.get('graph_provider') or payload.get('graph_provider') or 'unknown'}",
+            f"provider_status: {next_action.get('provider_status') or brief.get('provider_status') or payload.get('provider_status') or 'unknown'}",
         ]
     )
     for item in list(next_action.get("must_read_first") or [])[:3]:
@@ -3802,6 +3903,18 @@ def main() -> int:
                 allow_fallback=args.allow_fallback,
             )
             resolved_task_id = args.task_id or auto_task_id(seed=selected_seed, changed_files=args.changed_file, prefix="report")
+            report_config = build_graph.load_config(config_path)
+            provider_state = provider_registry.collect_provider_analysis(
+                workspace_root=workspace_root,
+                config=report_config,
+                seed_context=provider_registry.seed_context_from_graph(
+                    workspace_root=workspace_root,
+                    config=report_config,
+                    seed=selected_seed,
+                    changed_files=args.changed_file,
+                ),
+                bootstrap=True,
+            )
             payload = generate_report.generate_report(
                 workspace_root=workspace_root,
                 config_path=config_path,
@@ -3810,6 +3923,7 @@ def main() -> int:
                 max_depth=args.max_depth,
                 mode=requested_report_mode(args, "brief"),
                 changed_files=args.changed_file,
+                provider_analysis=provider_state,
             )
             persist_last_task(
                 workspace_root,

@@ -1,10 +1,10 @@
 name: zhanggong-impact-blueprint
 entry: cig.py
-description: Repo-local impact analysis workflow for setup, analyze, finish, export, and status.
+description: Repo-local Stage 20 workflow for install/setup, calibrate, analyze, finish, and status.
 recommended_commands:
   - setup
+  - calibrate
   - analyze
   - finish
-  - status
 
 

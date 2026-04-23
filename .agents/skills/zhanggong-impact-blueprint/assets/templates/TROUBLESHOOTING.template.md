@@ -26,6 +26,20 @@ This file defines the recovery protocol for agents and humans.
    repo config > recent successful command > package script > profile fallback > adapter default
 4. If the patch looks right, rerun `cig.py calibrate --apply`
 
+## GitNexus provider fell back
+
+1. Read `graph_provider`, `provider_status`, `provider_reason`, and `fallback_provider` in `calibrate`, `health`, or `analyze --json`
+2. If the repo is healthy enough to keep working, accept the internal fallback and continue the workflow
+3. Prefer direct `gitnexus` CLI; do not assume `npx gitnexus analyze` is trustworthy on Windows
+4. If the repo is not a git repo, GitNexus may need `--skip-git`; current Stage 20 behavior guarantees fallback more than it guarantees success on every path
+5. If the path includes non-ASCII characters on Windows and GitNexus fails, keep the fallback and record the reason instead of blocking `finish`
+
+## GitNexus created root-level noise
+
+1. zhanggong should suppress new `.claude/`, `CLAUDE.md`, `AGENTS.md`, and `.gitignore` noise when GitNexus bootstraps
+2. If the repo still looks GitNexus-owned at the root, inspect `provider_side_effects` and `provider_side_effects_suppressed` in `calibrate` or `analyze --json`
+3. `.gitnexus` can stay as provider runtime data, but prefer `.git/info/exclude` over tracked `.gitignore` edits when hiding it from status noise
+
 ## Build failed
 
 1. Check `last-error.json` and `errors.jsonl`

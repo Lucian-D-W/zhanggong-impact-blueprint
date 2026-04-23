@@ -79,6 +79,70 @@ def unique_strings(values: list[str]) -> list[str]:
     return ordered
 
 
+def merge_provider_contracts(base: list[dict], extra: list[dict]) -> list[dict]:
+    merged: dict[tuple[str, str, str], dict] = {}
+    for item in [*base, *extra]:
+        files = unique_strings(list(item.get("files") or []))
+        key = (
+            item.get("node_id") or item.get("name") or "",
+            item.get("relationship") or "",
+            item.get("kind") or "",
+        )
+        if key in merged:
+            merged[key]["confidence"] = max(float(merged[key].get("confidence") or 0.0), float(item.get("confidence") or 0.0))
+            merged[key]["files"] = unique_strings(list(merged[key].get("files") or []) + files)
+            if item.get("provider_evidence") and not merged[key].get("provider_evidence"):
+                merged[key]["provider_evidence"] = item.get("provider_evidence")
+            continue
+        merged[key] = {
+            **item,
+            "files": files,
+        }
+    return sorted(merged.values(), key=lambda item: (item.get("kind", ""), item.get("name", ""), item.get("relationship", "")))
+
+
+def merge_provider_chains(base: list[dict], extra: list[dict]) -> list[dict]:
+    merged: list[dict] = []
+    seen: set[tuple[str, str, tuple[str, ...]]] = set()
+    for item in [*base, *extra]:
+        nodes = tuple(sorted(node.get("node_id", "") for node in item.get("nodes", [])))
+        key = (item.get("chain_type", ""), item.get("summary", ""), nodes)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(item)
+    return merged
+
+
+def provider_uncertainty_view_payload(provider_overlay: dict) -> dict | None:
+    uncertainties = unique_strings(list(provider_overlay.get("uncertainty") or []))
+    if not uncertainties:
+        return None
+    contracts = list(provider_overlay.get("affected_contracts") or [])
+    read_first = unique_strings(list(provider_overlay.get("must_read_first") or []))
+    supporting_edges: list[dict] = []
+    for view in provider_overlay.get("atlas_views") or []:
+        supporting_edges.extend(view.get("supporting_edges") or [])
+    return {
+        "view_type": "uncertainty",
+        "title": "Provider uncertainty view",
+        "why_this_view": "GitNexus returned useful graph signals, but some of them should still be treated as hints instead of proof.",
+        "confidence": "low",
+        "primary_contracts": [
+            {
+                "node_id": item.get("node_id"),
+                "kind": item.get("kind"),
+                "name": item.get("name"),
+                "path": (item.get("files") or [""])[0],
+            }
+            for item in contracts[:4]
+        ],
+        "read_first": read_first,
+        "supporting_edges": supporting_edges[:8],
+        "uncertainties": uncertainties,
+    }
+
+
 def contract_node_ref(node_id: str, kind: str, name: str, path: str) -> dict:
     return {
         "node_id": node_id,
@@ -1270,6 +1334,8 @@ def write_markdown_report(
             f"- recent_task_influenced: {brief.get('recent_task_influenced', False)}",
             f"- changed_files: {', '.join(brief['changed_files_summary'])}",
             f"- direct_impact: callers={impact['callers']}, callees={impact['callees']}, tests={impact['tests']}, rules={impact['rules']}",
+            f"- graph_provider: {brief.get('graph_provider') or 'internal'} ({brief.get('provider_status') or 'unknown'})",
+            f"- provider_reason: {brief.get('provider_reason') or 'none'}",
             f"- build_trust: mode={trust.get('build_mode') or 'unknown'}, graph_trust={trust.get('graph_trust') or trust.get('trust_level') or 'unknown'}, freshness={trust.get('graph_freshness') or 'unknown'}, dependencies={trust.get('dependency_fingerprint_status') or 'unknown'}, reasons={', '.join(trust.get('reason_codes', [])) or 'none'}, verification={trust.get('verification_status') or 'skipped'}",
             f"- trust: overall={multidimensional_trust.get('overall', 'unknown')}, graph={multidimensional_trust.get('graph', 'unknown')}, parser={multidimensional_trust.get('parser', 'unknown')}, dependency={multidimensional_trust.get('dependency', 'unknown')}, test_signal={multidimensional_trust.get('test_signal', 'unknown')}, coverage={multidimensional_trust.get('coverage', 'unknown')}, context={multidimensional_trust.get('context', 'unknown')}",
             f"- report_completeness: {brief['report_completeness']['level']} ({brief['report_completeness']['reason']})",
@@ -1430,6 +1496,7 @@ def generate_report(
     next_step: str | None = None,
     context_resolution: dict | None = None,
     test_summary: dict | None = None,
+    provider_analysis: dict | None = None,
 ) -> dict:
     config = load_config(config_path)
     paths = graph_paths(workspace_root, config)
@@ -1493,12 +1560,24 @@ def generate_report(
         context_resolution=context_resolution,
         fallback_used=bool((seed_selection or {}).get("fallback_used")),
     )
+    provider_overlay = dict((provider_analysis or {}).get("provider_overlay") or {})
+    affected_contracts = merge_provider_contracts(affected_contracts, list(provider_overlay.get("affected_contracts") or []))
+    architecture_chains = merge_provider_chains(architecture_chains, list(provider_overlay.get("architecture_chains") or []))
     atlas_views, atlas_summary = summarize_contracts_for_agent(
         affected_contracts,
         architecture_chains,
         report_completeness=report_completeness,
         full_contracts_path=str(json_report_path.relative_to(workspace_root)),
     )
+    provider_atlas_views = list(provider_overlay.get("atlas_views") or [])
+    provider_uncertainty_view = provider_uncertainty_view_payload(provider_overlay)
+    if provider_uncertainty_view:
+        provider_atlas_views.append(provider_uncertainty_view)
+    if provider_atlas_views:
+        atlas_views, atlas_summary = compress_atlas_views(
+            [*atlas_views, *provider_atlas_views],
+            full_contracts_path=str(json_report_path.relative_to(workspace_root)),
+        )
     test_signal = test_signal_payload(sections=sections, test_summary=test_summary)
     trust = multidimensional_trust_payload(
         build_decision=build_decision,
@@ -1514,6 +1593,22 @@ def generate_report(
         next_tests=next_tests,
         report_completeness=report_completeness,
     )
+    provider_must_read_first = unique_strings(list(provider_overlay.get("must_read_first") or []))
+    key_evidence_paths = unique_strings(key_evidence_paths + provider_must_read_first)
+    provider_metadata = {
+        "graph_provider": (provider_analysis or {}).get("graph_provider"),
+        "provider_status": (provider_analysis or {}).get("provider_status"),
+        "provider_reason": (provider_analysis or {}).get("provider_reason"),
+        "provider_fallback": (provider_analysis or {}).get("provider_fallback"),
+        "fallback_provider": (provider_analysis or {}).get("fallback_provider"),
+        "provider_effective": (provider_analysis or {}).get("provider_effective"),
+        "provider_index_status": (provider_analysis or {}).get("provider_index_status"),
+        "provider_install_hint": (provider_analysis or {}).get("provider_install_hint"),
+        "provider_evidence_summary": list((provider_analysis or {}).get("provider_evidence_summary") or []),
+        "provider_side_effects": list((provider_analysis or {}).get("provider_side_effects") or []),
+        "provider_side_effects_suppressed": list((provider_analysis or {}).get("provider_side_effects_suppressed") or []),
+        "provider_git_info_exclude_path": (provider_analysis or {}).get("provider_git_info_exclude_path"),
+    }
     brief = brief_payload(
         seed=seed,
         secondary_seeds=list((seed_selection or {}).get("secondary_seeds", [])),
@@ -1533,6 +1628,8 @@ def generate_report(
         user_summary=user_summary,
         trust=trust,
     )
+    brief.update(provider_metadata)
+    brief["must_read_first"] = key_evidence_paths[:6]
     json_payload = {
         "task_id": task_id,
         "generated_at": utc_now(),
@@ -1572,6 +1669,8 @@ def generate_report(
         "atlas_views": atlas_views,
         "atlas_summary": atlas_summary,
         "brief": brief,
+        "provider": provider_metadata,
+        "provider_overlay": provider_overlay,
         "trust": trust,
         "trust_axes": trust.get("trust_axes", {}),
         "trust_explanation": trust.get("trust_explanation", []),
@@ -1682,6 +1781,8 @@ def generate_report(
         "report_completeness": report_completeness,
         "test_signal": test_signal,
         "trust": trust,
+        "provider": provider_metadata,
+        "provider_overlay": provider_overlay,
     }
 
 

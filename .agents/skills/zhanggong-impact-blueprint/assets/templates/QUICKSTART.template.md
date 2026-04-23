@@ -1,5 +1,16 @@
 # ZG Impact Blueprint Quickstart
 
+## Install GitNexus first
+
+```bash
+npm install -g gitnexus
+gitnexus --version
+```
+
+Use `zhanggong` as the daily entrypoint after GitNexus is installed. Stage 20
+uses GitNexus as the default graph provider and keeps workflow ownership in
+zhanggong.
+
 ## Shortest path
 
 ```bash
@@ -32,9 +43,15 @@ Use `setup --full` only when you explicitly want:
 
 Calibration and verification priorities for real repos:
 
+- user-facing entrypoint is still `cig.py`, not direct GitNexus workflow commands
 - repo-local config wins over profile fallback
 - package scripts beat profile fallback
 - `calibrate` is the step that checks what adapter and test command the repo will really use
+- default `graph_provider` is `gitnexus`
+- GitNexus enriches graph/context/impact, but `finish`, baseline/no_regression, and handoff still belong to zhanggong
+- Stage 20 uses direct `gitnexus` CLI first; do not assume `npx gitnexus analyze` is reliable on Windows
+- if GitNexus is missing, unindexed, or path-incompatible, the workflow falls back to the internal provider instead of blocking the repo
+- if GitNexus emits `.claude/`, `CLAUDE.md`, or `.gitignore` noise during indexing, zhanggong suppresses that root-level noise so the repo still feels like a zhanggong workflow
 - `baseline` is the step that distinguishes historical red from a new regression
 
 ## Profile examples
@@ -80,6 +97,7 @@ python .agents/skills/zhanggong-impact-blueprint/cig.py finish --workspace-root 
 - `brief` is the daily-use mode and intentionally short
 - read `affected_contracts` and `architecture_chains` when API, route, event,
   table, config/env, or IPC changes may be involved
+- `analyze --json` now reports `graph_provider`, `provider_status`, and provider evidence summary
 - treat low-confidence `DEPENDS_ON` as fallback evidence, not parser certainty
 - use `--patch-file <path>` when your editor or agent already has a diff file
 - use `--changed-line <path:line>` only when auto context inference still needs help

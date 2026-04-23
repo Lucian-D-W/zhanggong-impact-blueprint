@@ -1,0 +1,8 @@
+{
+  "name": "cig-stage5-tsjs-pg-compound",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:node-cli": "node --test"
+  }
+}

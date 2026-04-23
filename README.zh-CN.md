@@ -1,4 +1,4 @@
-# 张工的施工图 skill.md
+# 张工的施工图.skill
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
@@ -8,26 +8,18 @@
 
 张工的施工图 / ZhangGong Impact Blueprint 是一个面向 agent 驱动改动的、仓库本地化的影响图谱与验证护栏。
 完整规则和详细行为说明请看 [`.agents/skills/zhanggong-impact-blueprint/SKILL.md`](E:/AA-HomeforAI/CodeAccounting/.agents/skills/zhanggong-impact-blueprint/SKILL.md:1)。
+如果你更习惯中文审阅，可以看中文版说明：[`.agents/skills/zhanggong-impact-blueprint/SKILL.zh-CN.md`](E:/AA-HomeforAI/CodeAccounting/.agents/skills/zhanggong-impact-blueprint/SKILL.zh-CN.md:1)。
 
 ## 这是什么
 
 - 一个可复制的 skill 文件夹
-- 一个只持久化直接边的仓库本地 SQLite 图谱
 - 一个在改动前给出影响阅读面、在改动后保留结构化证据的轻量工作流
 
 ## 有什么用
 
-- 核心就是给 AI 立规矩：别一上来就瞎改。尤其上下文不够时，能少犯“漏看链路、反复 debug、打几个补丁然后死循环”的毛病。
+- 核心就是给 AI 立规矩：别一上来就瞎改。尤其上下文不够时，能少犯“漏看链路、反复 debug、打几个补丁然后死循环”的毛病。让agent明白“今日隐患视而不见，明日事故必来相见”的重要道理。
 - 短期会多花点 token 和步骤，但中长期有复利——项目更耐造、好交接，不用每次换个 AI 就从零讲起。
 - 对上下文不足的 AI 特别友好，能把它从“局部糊墙 + 死循环排障”的坑里拽出来，逼它先看影响再动手。
-
-## 适合什么场景
-
-- 当你已经把 AI 当成了日常搭子，而不是偶尔拿来查个报错的小工具
-- 当你的项目不再是一个跑完就扔的临时脚本，而是得长期伺候、反复改来改去的老代码
-- 当你发现 AI 经常因为记不住上下文，乱删代码、瞎改逻辑，或者越修bug越多
-- 当你希望换了个AI、换了轮对话，接手的人（或机器）还不至于一脸懵逼、啥都从头讲
-- 当你想把“动代码之前先看影响面，改完留个验证记录”这件事，刻进DNA里
 
 ## 怎么使用
 
@@ -38,11 +30,40 @@
 
 如果只是正常使用，你一般不需要手动去跑这些命令行。命令行更偏向维护、排障或验证这个 skill 本身时使用。
 
+## 先安装 GitNexus
+
+Stage 20 在第一次跑真实仓库前，最好先把 GitNexus 装好。
+
+1. 安装 GitNexus CLI：
+   `npm install -g gitnexus`
+2. 验证命令可用：
+   `gitnexus --version`
+3. 日常仍然使用 `zhanggong` 这条主流程：
+   `setup --minimal -> calibrate -> analyze -> finish`
+
+当 GitNexus 可用时，zhanggong 会把它当成默认 graph provider。
+当 GitNexus 对当前仓库还没准备好时，zhanggong 会继续用 internal provider，把流程跑完。
+
+## 适合什么场景
+
+- 当你已经把 AI 当成了日常搭子，而不是偶尔拿来查个报错的小工具
+- 当你的项目不再是一个跑完就扔的临时脚本，而是得长期伺候、反复改来改去的老代码
+- 当你发现 AI 经常因为记不住上下文，乱删代码、瞎改逻辑，或者越修bug越多
+- 当你希望换了个AI、换了轮对话，接手的人（或机器）还不至于一脸懵逼、啥都从头讲
+- 当你想把“动代码之前先看影响面，改完留个验证记录”这件事，刻进DNA里
+
 ## 更新说明
 
-### Stage 18.1 / v0.18.1-rc1
+### Stage 20 / v0.20.0-rc1
 
-当前状态：`accepted candidate`
+重点变化：
+
+- 增加 provider 抽象层
+- 接入更强的 gitnexus 分析
+- 默认 `graph_provider = gitnexus`
+- `GitNexus` 失败时自动 fallback 到 internal provider
+
+### Stage 18.1 / v0.18.1-rc1
 
 修掉的重点问题包括：
 
@@ -54,3 +75,8 @@
 - 修复 seed 未选定时 `next-action` 误推荐 `finish`
 - 修复 trust explanation 自相矛盾
 - 修复 repo config 中 list-form `test_command` 被忽略
+
+## 致谢
+
+Stage 20 形态下，本项目默认使用 GitNexus 作为图谱 provider。
+感谢 [GitNexus](https://github.com/abhigyanpatwari/GitNexus) 提供更强的本地图谱、上下游影响和流程链路视角。

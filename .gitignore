@@ -1,0 +1,15 @@
+.ai/
+__pycache__/
+*.pyc
+.coverage
+.coverage.*
+coverage-*.json
+coverage-*.data
+dist/
+
+# local-only working content
+docs/
+tests/
+AGENTS.md
+.zhanggong-impact-blueprint/
+.tmp-gitnexus-src/

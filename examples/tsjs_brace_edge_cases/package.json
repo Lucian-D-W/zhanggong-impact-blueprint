@@ -1,0 +1,9 @@
+{
+  "name": "tsjs-brace-edge-cases",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:node-cli": "node --test"
+  }
+}
+

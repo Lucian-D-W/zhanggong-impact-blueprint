@@ -1,0 +1,8 @@
+{
+  "name": "cig-benchmark-ambiguous",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:node-cli": "node --test"
+  }
+}

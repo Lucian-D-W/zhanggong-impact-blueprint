@@ -31,14 +31,38 @@ def get_provider(provider_name: str) -> GraphProvider:
     return PROVIDERS.get(provider_name, PROVIDERS["internal"])
 
 
-def _normalize_state(*, graph_provider: str, requested_state: dict, effective_provider: str | None, provider_status: str, provider_reason: str, provider_fallback: bool = False, fallback_provider: str | None = None) -> dict:
+def _provider_authority(
+    *,
+    graph_provider: str,
+    effective_provider: str | None,
+    provider_fallback: bool,
+) -> str:
+    if provider_fallback:
+        return "fallback"
+    if effective_provider and effective_provider == graph_provider:
+        return "primary"
+    if effective_provider:
+        return "delegated"
+    return "unavailable"
+
+
+def _normalize_state(*, graph_provider: str, requested_state: dict, effective_provider: str | None, provider_status: str, provider_reason: str, provider_fallback: bool = False, fallback_provider: str | None = None, provider_fallback_reason: str | None = None) -> dict:
+    authority = _provider_authority(
+        graph_provider=graph_provider,
+        effective_provider=effective_provider,
+        provider_fallback=provider_fallback,
+    )
     return {
         "graph_provider": graph_provider,
         "provider_status": provider_status,
         "provider_reason": provider_reason,
         "provider_fallback": provider_fallback,
+        "provider_fallback_reason": provider_fallback_reason,
         "fallback_provider": fallback_provider,
         "provider_effective": effective_provider,
+        "provider_authority": authority,
+        "provider_role": "fact_source",
+        "workflow_owner": "zhanggong",
         "provider_install_hint": requested_state.get("provider_install_hint"),
         "provider_index_status": requested_state.get("provider_index_status", "unknown"),
         "provider_available": bool(requested_state.get("available", False)),
@@ -48,6 +72,8 @@ def _normalize_state(*, graph_provider: str, requested_state: dict, effective_pr
         "provider_evidence_summary": [],
         "provider_overlay": {
             "source": effective_provider or graph_provider,
+            "provider_authority": authority,
+            "provider_role": "fact_source",
             "affected_contracts": [],
             "architecture_chains": [],
             "atlas_views": [],
@@ -88,6 +114,7 @@ def resolve_provider(*, workspace_root: pathlib.Path, config: dict, bootstrap: b
                 provider_reason=f"{reason} Falling back to zhanggong internal graph.",
                 provider_fallback=True,
                 fallback_provider="internal",
+                provider_fallback_reason=reason,
             )
             state["provider_side_effects"] = list(
                 requested_state.get("external_side_effects") or internal_state.get("external_side_effects") or []

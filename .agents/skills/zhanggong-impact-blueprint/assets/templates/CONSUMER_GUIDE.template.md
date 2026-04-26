@@ -4,110 +4,57 @@ This guide is for repos that copied only:
 
 `./.agents/skills/zhanggong-impact-blueprint/`
 
-## Fast path
+## Start Small
 
-1. Run setup:
-
-```bash
-python .agents/skills/zhanggong-impact-blueprint/cig.py setup --project-root .
-```
-
-2. Generate a report for the file you plan to edit:
+Preview first:
 
 ```bash
-python .agents/skills/zhanggong-impact-blueprint/cig.py analyze
+python .agents/skills/zhanggong-impact-blueprint/cig.py setup --workspace-root . --project-root . --dry-run --preview-changes
+python .agents/skills/zhanggong-impact-blueprint/cig.py setup --workspace-root . --project-root .
 ```
 
-3. Edit the code.
+Use `--full` only when the repo wants generated onboarding docs and AGENTS integration.
 
-4. Refresh graph, report, evidence, and tests:
+## Pick The Lane
 
 ```bash
-python .agents/skills/zhanggong-impact-blueprint/cig.py finish
+python .agents/skills/zhanggong-impact-blueprint/cig.py classify-change --workspace-root . --changed-file <path>
 ```
 
-What these commands try to do for you:
+- `bypass`: ordinary docs, archive notes, review prose, diagrams.
+- `lightweight`: agent/workflow/process docs and templates.
+- `full_guardian`: source, tests, config, schema, SQL, env, dependencies, rules, commands.
 
-- `setup` writes the minimum repo-local files and checks the environment
-- `analyze` tries to infer the changed scope before you edit
-- `analyze` can also surface `affected_contracts` and `architecture_chains`
-  when the change reaches beyond function-level impact
-- `finish` refreshes the graph/report and records the test signal honestly
-
-## Python
+## Full Guardian Path
 
 ```bash
-python .agents/skills/zhanggong-impact-blueprint/cig.py setup --profile python-basic --project-root .
-python .agents/skills/zhanggong-impact-blueprint/cig.py analyze
-python .agents/skills/zhanggong-impact-blueprint/cig.py finish
+python .agents/skills/zhanggong-impact-blueprint/cig.py health --workspace-root .
+python .agents/skills/zhanggong-impact-blueprint/cig.py calibrate --workspace-root .
+python .agents/skills/zhanggong-impact-blueprint/cig.py analyze --workspace-root . --changed-file <path>
+python .agents/skills/zhanggong-impact-blueprint/cig.py finish --workspace-root . --test-scope targeted
 ```
 
-## TS/JS
+`analyze` is brief by default. It writes full evidence to:
 
-```bash
-python .agents/skills/zhanggong-impact-blueprint/cig.py setup --profile node-cli --project-root .
-python .agents/skills/zhanggong-impact-blueprint/cig.py analyze
-python .agents/skills/zhanggong-impact-blueprint/cig.py finish
-```
+- `.ai/codegraph/summary.json`
+- `.ai/codegraph/facts.json`
+- `.ai/codegraph/inferences.json`
+- `.ai/codegraph/next-action.json`
+- `.ai/codegraph/reports/`
 
-## TS/JS + PostgreSQL
+## Daily-Use Rules
 
-```bash
-python .agents/skills/zhanggong-impact-blueprint/cig.py setup --profile node-cli --with sql-postgres --project-root .
-python .agents/skills/zhanggong-impact-blueprint/cig.py analyze
-python .agents/skills/zhanggong-impact-blueprint/cig.py finish
-```
+- Provider is not workflow owner; zhanggong remains the workflow owner.
+- Repo config beats recent facts, package scripts, fallbacks, and defaults.
+- Explicit changed files beat dirty-worktree inference.
+- Multi-entry changes should expose primary and secondary seeds instead of blocking by default.
+- Tests passed does not mean safe.
+- Baseline red does not automatically mean this edit broke the repo.
 
-## Daily-use tips
+## Failure Recovery
 
-- Prefer `analyze` over low-level `report`; it infers changed files and ranks seeds for you.
-- Add `--changed-line <path:line>` only when the inferred top candidates are still too broad.
-- Add `--patch-file <path>` when your editor or agent already has a patch artifact.
-- Default output is `brief`; add `--full` only when you need more.
-- Read `affected_contracts` and `architecture_chains` before treating API,
-  route, event, table, config/env, or IPC changes as function-only edits.
-- Treat `DEPENDS_ON` as bounded fallback evidence when the precise relationship
-  type is uncertain.
-- Check `.ai/codegraph/reports/impact-<task-id>.json` when another agent needs machine-readable context.
-- Read `.ai/codegraph/build-decision.json` when you need to understand why the run trusted incremental vs full rebuild.
-- `tests passed` does not mean the change is proven safe; always read `report_completeness`, `graph_trust`, and `test_signal` together.
-- If `analyze` says the context is incomplete, do not keep editing as if the report were complete.
-
-## When you normally do not trigger the workflow
-
-- comment-only edits outside `docs/rules`
-- formatting-only edits that do not change tokens or behavior
-- generated/cache/build output files
-- README/docs copy edits that do not modify rules, setup commands, or test commands
-
-## When you still need to pass `--seed`
-
-Most of the time you should not need it. You normally only pass `--seed` when:
-
-- multiple functions or routines in the same diff remain genuinely ambiguous
-- the repo is not using git and you did not provide `--changed-file` or `--patch-file`
-- you intentionally want to analyze a specific function/routine instead of the current diff
-
-If `analyze` cannot safely choose, it will only show the top few ranked
-candidates and ask you to be explicit.
-
-## Where to look on failure
-
-- Status: run `python .agents/skills/zhanggong-impact-blueprint/cig.py status`
-- Health: run `python .agents/skills/zhanggong-impact-blueprint/cig.py health --workspace-root .`
-- Handoff: `.ai/codegraph/handoff/latest.md`
-- Recent task: `.ai/codegraph/last-task.json`
-- Context inference: `.ai/codegraph/context-resolution.json`
-- Seed candidates: `.ai/codegraph/seed-candidates.json`
-- Next action: `.ai/codegraph/next-action.json`
-- Contract-aware risk: inspect `affected_contracts` and `architecture_chains`
-  in the JSON report and next action payload
-- Structured logs: `.ai/codegraph/logs/`
-- Reports: `.ai/codegraph/reports/`
-- Recovery steps: `TROUBLESHOOTING.md`
-
-## Sharing with other people or agents
-
-- Share the normal exported package with `export-skill` (consumer mode)
-- Share `--mode debug-bundle` only when someone needs logs, reports, handoff, or last-error details for troubleshooting
-
+- Start with `health` for readiness.
+- Use `calibrate` when adapter or test command choice looks wrong.
+- Use `facts.json` for observed state.
+- Use `inferences.json` for uncertainty/trust/fallback.
+- Use `handoff/latest.md` and `final-state.json` after finish.

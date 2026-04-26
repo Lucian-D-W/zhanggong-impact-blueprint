@@ -112,6 +112,11 @@ def write_consistent_handoff(
 ) -> pathlib.Path:
     assert_final_state_consistency(final_state, test_results)
     paths = runtime_paths(workspace_root)
+    combined_notes = list(notes or [])
+    evidence = test_results.get("evidence_statement") or {}
+    if evidence.get("template"):
+        combined_notes.append("Test evidence interpretation:")
+        combined_notes.extend(str(item) for item in evidence.get("template") or [])
     handoff_text = render_handoff(
         workspace_root=workspace_root,
         task_id=task_id,
@@ -120,7 +125,7 @@ def write_consistent_handoff(
         report_path=report_path,
         final_state=final_state,
         suggested_next_step=suggested_next_step,
-        notes=notes,
+        notes=combined_notes,
     )
     paths["handoff_latest"].write_text(handoff_text, encoding="utf-8")
     write_json(paths["status_json"], final_state)

@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from adapters import detect_project_profile_name
 from build_graph import get_git_context, graph_paths, load_config, project_root_for, record_task_run, resolved_language_adapter
 from db_support import connect_db
-from trust_policy import trust_lowering_reasons
+from trust_policy import trust_axis_explanations, trust_lowering_reasons
 
 TRUST_ORDER = {"low": 0, "medium": 1, "high": 2}
 CONTRACT_NODE_KINDS = {
@@ -934,13 +934,51 @@ def next_tests_payload(sections: dict, seed: str) -> list[str]:
     return [f"Run the smallest test that exercises `{seed}` after the edit."]
 
 
-def report_completeness_payload(*, seed_kind: str, context_resolution: dict | None, fallback_used: bool) -> dict:
+def provider_has_primary_evidence(provider_analysis: dict | None, provider_overlay: dict | None) -> bool:
+    provider_analysis = provider_analysis or {}
+    provider_overlay = provider_overlay or {}
+    if provider_analysis.get("provider_effective") != "gitnexus":
+        return False
+    if provider_analysis.get("provider_status") != "ready":
+        return False
+    if provider_analysis.get("provider_fallback"):
+        return False
+    return bool(
+        provider_analysis.get("provider_evidence_summary")
+        or provider_overlay.get("affected_contracts")
+        or provider_overlay.get("architecture_chains")
+        or provider_overlay.get("atlas_views")
+    )
+
+
+def report_completeness_payload(
+    *,
+    seed_kind: str,
+    context_resolution: dict | None,
+    fallback_used: bool,
+    provider_analysis: dict | None = None,
+    provider_overlay: dict | None = None,
+) -> dict:
     context_status = (context_resolution or {}).get("context_status", "resolved")
+    has_gitnexus_primary_evidence = provider_has_primary_evidence(provider_analysis, provider_overlay)
     if context_status == "missing":
         return {"level": "low", "reason": "context_missing"}
     if fallback_used or seed_kind == "file":
+        if has_gitnexus_primary_evidence:
+            return {
+                "level": "medium",
+                "reason": "gitnexus_primary_evidence_with_inferred_seed",
+                "provider_source": "gitnexus",
+                "note": "Seed context is inferred or file-level, but GitNexus produced primary graph evidence; do not treat this as internal fallback.",
+            }
         return {"level": "low", "reason": "file_level_or_fallback"}
     if context_status == "partial":
+        if has_gitnexus_primary_evidence:
+            return {
+                "level": "medium",
+                "reason": "gitnexus_primary_evidence_with_partial_context",
+                "provider_source": "gitnexus",
+            }
         return {"level": "medium", "reason": "context_partial"}
     return {"level": "high", "reason": "function_or_routine_seed_with_resolved_context"}
 
@@ -1056,6 +1094,8 @@ def coverage_trust_level(value: str) -> str:
 
 
 def context_trust_value(*, context_resolution: dict | None, report_completeness: dict) -> str:
+    if str(report_completeness.get("reason") or "").startswith("gitnexus_primary_evidence_with_"):
+        return "partial"
     if report_completeness.get("level") == "low":
         if bool((context_resolution or {}).get("fallback_used")):
             return "fallback"
@@ -1142,10 +1182,24 @@ def multidimensional_trust_payload(
         adapter_confidence=adapter_confidence,
         test_signal=test_signal_axis,
     )
-    if graph_freshness == "fresh" and overall in {"medium", "low"} and lowering_reasons:
-        trust_explanation.append(f"Graph is fresh, but overall trust is {overall} because " + ", ".join(lowering_reasons[:2]) + ".")
+    if overall in {"medium", "low"} and lowering_reasons:
+        trust_explanation.append(
+            f"Overall trust is {overall}. Lowering axes: "
+            + ", ".join(lowering_reasons[:3])
+            + "."
+        )
+    if graph_freshness == "fresh" and lowering_reasons:
+        trust_explanation.append("Graph freshness is positive evidence here; it is not the downgrade reason.")
     if dependency_confidence in {"low", "unknown"} and not any("Dependency confidence" in item for item in trust_explanation):
         trust_explanation.append(f"Dependency confidence is {dependency_confidence}, which lowers overall trust without marking the graph stale.")
+    trust_axes["axis_explanations"] = trust_axis_explanations(
+        graph_freshness=graph_freshness,
+        workspace_noise=workspace_noise,
+        dependency_confidence=dependency_confidence,
+        context_confidence=context_confidence,
+        adapter_confidence=adapter_confidence,
+        test_signal=test_signal_axis,
+    )
     return {
         "graph": graph,
         "parser": parser,
@@ -1555,12 +1609,14 @@ def generate_report(
     next_tests = next_tests_payload(sections, seed)
     key_evidence_paths = key_evidence_paths_payload(seed_detail, evidence_lines, changed_files)
     relationships = relationship_payload(seed_detail, sections)
+    provider_overlay = dict((provider_analysis or {}).get("provider_overlay") or {})
     report_completeness = report_completeness_payload(
         seed_kind=sections["seed_kind"],
         context_resolution=context_resolution,
         fallback_used=bool((seed_selection or {}).get("fallback_used")),
+        provider_analysis=provider_analysis,
+        provider_overlay=provider_overlay,
     )
-    provider_overlay = dict((provider_analysis or {}).get("provider_overlay") or {})
     affected_contracts = merge_provider_contracts(affected_contracts, list(provider_overlay.get("affected_contracts") or []))
     architecture_chains = merge_provider_chains(architecture_chains, list(provider_overlay.get("architecture_chains") or []))
     atlas_views, atlas_summary = summarize_contracts_for_agent(
@@ -1600,8 +1656,12 @@ def generate_report(
         "provider_status": (provider_analysis or {}).get("provider_status"),
         "provider_reason": (provider_analysis or {}).get("provider_reason"),
         "provider_fallback": (provider_analysis or {}).get("provider_fallback"),
+        "provider_fallback_reason": (provider_analysis or {}).get("provider_fallback_reason"),
         "fallback_provider": (provider_analysis or {}).get("fallback_provider"),
         "provider_effective": (provider_analysis or {}).get("provider_effective"),
+        "provider_authority": (provider_analysis or {}).get("provider_authority"),
+        "provider_role": (provider_analysis or {}).get("provider_role"),
+        "workflow_owner": (provider_analysis or {}).get("workflow_owner"),
         "provider_index_status": (provider_analysis or {}).get("provider_index_status"),
         "provider_install_hint": (provider_analysis or {}).get("provider_install_hint"),
         "provider_evidence_summary": list((provider_analysis or {}).get("provider_evidence_summary") or []),

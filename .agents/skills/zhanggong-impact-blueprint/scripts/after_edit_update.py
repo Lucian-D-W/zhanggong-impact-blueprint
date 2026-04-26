@@ -243,6 +243,87 @@ def combine_recommended_commands(recommended_tests: list[dict]) -> list[list[str
     return deduped
 
 
+def is_python_unittest_discover_command(command: list[str]) -> bool:
+    normalized = normalize_command(command)
+    if len(normalized) < 4:
+        return False
+    executable = pathlib.Path(normalized[0]).name.lower()
+    return executable.startswith("python") and normalized[1:4] == ["-m", "unittest", "discover"]
+
+
+def is_broad_historical_test_command(command: list[str], adapter_name: str) -> bool:
+    normalized = normalize_command(command)
+    if adapter_name == "python" and is_python_unittest_discover_command(normalized):
+        start_dir = "."
+        pattern = "test*.py"
+        if "-s" in normalized:
+            index = normalized.index("-s")
+            if index + 1 < len(normalized):
+                start_dir = normalized[index + 1].replace("\\", "/").strip("./")
+        if "-p" in normalized:
+            index = normalized.index("-p")
+            if index + 1 < len(normalized):
+                pattern = normalized[index + 1]
+        return start_dir in {"", ".", "test", "tests"} and pattern in {"test*.py", "test_*.py", "*_test.py"}
+    return False
+
+
+def current_task_skip_summary(
+    *,
+    workspace_root: pathlib.Path,
+    paths: dict,
+    task_id: str,
+    requested_test_scope: str,
+    effective_test_scope: str,
+    test_scope_reason: str,
+    output_path: pathlib.Path,
+    adapter_name: str,
+    recommended_tests: list[dict],
+    recommend_payload: dict,
+    test_command_payload: dict,
+    preflight: dict,
+    skipped_command: list[str] | None = None,
+) -> dict:
+    skipped_command = normalize_command(skipped_command)
+    summary = {
+        "task_id": task_id,
+        "command": [],
+        "commands": [],
+        "requested_test_scope": requested_test_scope,
+        "effective_test_scope": effective_test_scope,
+        "test_scope_reason": test_scope_reason,
+        "status": "skipped",
+        "tests_run": None,
+        "test_count_status": "unknown",
+        "tests_passed": False,
+        "exit_code": None,
+        "output_path": str(output_path.relative_to(workspace_root)),
+        "coverage_path": None,
+        "coverage_status": "unavailable",
+        "coverage_available": False,
+        "coverage_reason": test_scope_reason,
+        "totals": {},
+        "full_suite": False,
+        "detected_adapter": adapter_name,
+        "recommended_tests": recommended_tests,
+        "mapping_status": recommend_payload.get("mapping_status"),
+        "fallback_command": recommend_payload.get("fallback_command", []),
+        "broad_command_skipped": bool(skipped_command),
+        "skipped_broad_command": command_to_string(skipped_command) if skipped_command else None,
+        "failed_tests": [],
+        "selected_test_command": test_command_payload.get("selected_test_command"),
+        "test_command_source": test_command_payload.get("test_command_source"),
+        "test_command_candidates": test_command_payload.get("test_command_candidates", []),
+        "ignored_test_commands": test_command_payload.get("ignored_test_commands", []),
+        "test_command_preflight": preflight,
+        "recovery_commands": preflight.get("recovery_commands", []),
+    }
+    output_path.write_text(test_scope_reason, encoding="utf-8")
+    summary = enrich_test_summary_with_regression(workspace_root, summary, test_scope_reason)
+    write_json(paths["test_results_path"], summary)
+    return summary
+
+
 def recommend_tests_for_task(*, workspace_root: pathlib.Path, config_path: pathlib.Path, task_id: str) -> dict:
     config = build_graph.load_config(config_path)
     project_root = build_graph.project_root_for(workspace_root, config)
@@ -288,35 +369,24 @@ def recommend_tests_for_task(*, workspace_root: pathlib.Path, config_path: pathl
                 "ranking_explanation": ["graph direct cover"],
             }
     history_rows = relevant_history_rows(load_history_rows(workspace_root), changed_files, changed_symbols)
+    historical_baseline_tests: list[dict] = []
     for row in history_rows:
         dependency_boost = 20 if row.get("dependency_fingerprint_status") in {"unknown", "changed"} else 0
         for failed_target in row.get("failed_tests", []):
             command = map_history_test_target_to_command(failed_target, adapter_name)
             if not command:
                 continue
-            key = tuple(command)
-            current = recommended_by_command.get(key)
-            if current is None:
-                current = {
+            historical_baseline_tests.append(
+                {
                     "seed": f"history:{failed_target}",
                     "command": command,
-                    "confidence": "medium",
-                    "reason": "history co-failure",
-                    "graph_score": 0,
-                    "history_score": 0,
-                    "risk_score": 0,
-                    "final_score": 0,
-                    "ranking_explanation": [],
+                    "confidence": "low",
+                    "reason": "historical baseline hint; not current-task verification",
+                    "history_score": 120,
+                    "risk_score": dependency_boost,
+                    "ranking_explanation": ["historical baseline only"],
                 }
-                recommended_by_command[key] = current
-            current["history_score"] += 120
-            current["risk_score"] += dependency_boost
-            if "history co-failure" not in current["ranking_explanation"]:
-                current["ranking_explanation"].append("history co-failure")
-            if dependency_boost and "dependency risk boost" not in current["ranking_explanation"]:
-                current["ranking_explanation"].append("dependency risk boost")
-            if current["reason"] != "direct COVERS edge":
-                current["reason"] = "history co-failure"
+            )
     recommended_tests = sorted(
         (
             {
@@ -338,6 +408,7 @@ def recommend_tests_for_task(*, workspace_root: pathlib.Path, config_path: pathl
         "mapping_status": mapping_status,
         "recommended_tests": recommended_tests,
         "fallback_command": fallback_command,
+        "historical_baseline_tests": historical_baseline_tests,
         "detected_adapter": adapter_name,
         "direct_test_seed_count": len(direct_test_seeds),
         "ranking_explanation": [item["ranking_explanation"] for item in recommended_tests],
@@ -386,6 +457,50 @@ def base_test_summary(
     }
 
 
+def test_evidence_statement(summary: dict, test_signal: dict) -> dict:
+    commands = [
+        command_to_string(command)
+        for command in (summary.get("commands") or [summary.get("command") or []])
+        if command
+    ]
+    directly_affected_found = bool(test_signal.get("affected_tests_found") or summary.get("recommended_tests"))
+    tests_passed = bool(summary.get("tests_passed"))
+    effective_scope = summary.get("effective_test_scope", "unknown")
+    if tests_passed and directly_affected_found:
+        evidence_weight = "direct_targeted_coverage" if effective_scope == "targeted" else "direct_tests_plus_suite_signal"
+    elif tests_passed:
+        evidence_weight = "no_regression_signal"
+    elif summary.get("status") == "skipped":
+        evidence_weight = "no_test_signal"
+    else:
+        evidence_weight = "failing_signal"
+    manual_risks: list[str] = []
+    if tests_passed and not directly_affected_found:
+        manual_risks.append("No directly affected tests were identified; passing tests show no obvious regression, not targeted coverage.")
+    if not summary.get("coverage_available"):
+        manual_risks.append("Coverage evidence is unavailable for the changed surface.")
+    if summary.get("baseline_status") == "failed" and summary.get("regression_status") == "no_regression":
+        manual_risks.append("The baseline was already red with the same failure signature; do not attribute it to this edit.")
+    passed_tests = commands if tests_passed else []
+    passed_label = ", ".join(passed_tests) if passed_tests else "none"
+    if commands and not tests_passed:
+        passed_label = "none; executed command(s) did not pass"
+    return {
+        "executed_commands": commands,
+        "passed_tests": passed_tests,
+        "directly_affected_tests_found": directly_affected_found,
+        "evidence_weight": evidence_weight,
+        "manual_risks": manual_risks,
+        "template": [
+            f"Tests run: {', '.join(commands) if commands else 'none'}.",
+            f"Tests passed: {passed_label}.",
+            f"Directly affected tests identified: {'yes' if directly_affected_found else 'no'}.",
+            f"Current evidence leans: {evidence_weight}.",
+            f"Manual confirmation still needed: {'; '.join(manual_risks) if manual_risks else 'none from this template'}.",
+        ],
+    }
+
+
 def _run_test_scope_once(
     *,
     workspace_root: pathlib.Path,
@@ -422,6 +537,12 @@ def _run_test_scope_once(
     coverage_json_path = workspace_root / ".ai" / "codegraph" / f"coverage-{task_id}{suffix}.json"
     recommended_tests = list(recommend_payload.get("recommended_tests") or [])
     targeted_commands = combine_recommended_commands(recommended_tests)
+    cli_command_explicit = bool(normalize_command(cli_test_command))
+    configured_is_broad_history = (
+        bool(configured_command)
+        and not cli_command_explicit
+        and is_broad_historical_test_command(configured_command, adapter_name)
+    )
 
     effective_test_scope = requested_test_scope
     test_scope_reason = "configured test command"
@@ -435,6 +556,11 @@ def _run_test_scope_once(
                 test_scope_reason = "running mapped direct tests only; some direct test seeds could not be mapped"
             else:
                 test_scope_reason = "running directly mapped affected tests"
+        elif configured_is_broad_history:
+            effective_test_scope = "skipped"
+            command_groups = []
+            full_suite = False
+            test_scope_reason = "no current-task test mapping was found; broad unittest discover is reserved for --test-scope full or explicit --test-command"
         else:
             effective_test_scope = "configured"
             command_groups = [configured_command] if configured_command else []
@@ -445,13 +571,45 @@ def _run_test_scope_once(
         test_scope_reason = "explicit full suite requested"
         full_suite = True
     else:
-        command_groups = [configured_command] if configured_command else []
-        test_scope_reason = "using configured test command"
-        full_suite = True
+        if cli_command_explicit:
+            command_groups = [configured_command] if configured_command else []
+            test_scope_reason = "using explicit current-task test command"
+            full_suite = False
+        elif targeted_commands:
+            effective_test_scope = "targeted"
+            command_groups = targeted_commands
+            test_scope_reason = "current-task mapped tests take priority over broad configured verification"
+            full_suite = False
+        elif configured_is_broad_history:
+            effective_test_scope = "skipped"
+            command_groups = []
+            test_scope_reason = "no current-task test mapping was found; broad unittest discover is reserved for --test-scope full or explicit --test-command"
+            full_suite = False
+        else:
+            command_groups = [configured_command] if configured_command else []
+            test_scope_reason = "using configured current-version test command"
+            full_suite = True
 
     normalized_commands = [normalize_test_command(command) for command in command_groups if command]
     primary_command = normalized_commands[0] if normalized_commands else []
     preflight = preflight_test_command(primary_command, project_root, os.name)
+
+    if effective_test_scope == "skipped" and not normalized_commands:
+        return current_task_skip_summary(
+            workspace_root=workspace_root,
+            paths=paths,
+            task_id=task_id,
+            requested_test_scope=requested_test_scope,
+            effective_test_scope=effective_test_scope,
+            test_scope_reason=test_scope_reason,
+            output_path=output_path,
+            adapter_name=adapter_name,
+            recommended_tests=recommended_tests,
+            recommend_payload=recommend_payload,
+            test_command_payload=test_command_payload,
+            preflight=preflight,
+            skipped_command=configured_command,
+        )
 
     if not normalized_commands:
         summary = {
@@ -1364,6 +1522,7 @@ def after_edit_update(
     test_summary["affected_tests_found"] = test_signal.get("affected_tests_found", False)
     test_summary["coverage_relevance"] = test_signal.get("coverage_relevance")
     test_summary["full_suite"] = test_signal.get("full_suite", test_summary.get("full_suite", True))
+    test_summary["evidence_statement"] = test_evidence_statement(test_summary, test_signal)
     paths["test_results_path"].write_text(json.dumps(test_summary, ensure_ascii=False, indent=2), encoding="utf-8")
     run_id = record_test_run(workspace_root=workspace_root, config_path=config_path, task_id=task_id, test_summary=test_summary)
     import_coverage(workspace_root=workspace_root, config_path=config_path, run_id=run_id, test_summary=test_summary)
@@ -1423,6 +1582,7 @@ def after_edit_update(
             f"- tests_run: {test_summary.get('tests_run') if test_summary.get('tests_run') is not None else 'unknown'}",
             f"- tests_passed: {test_summary.get('tests_passed', False)}",
             f"- affected_tests_found: {test_summary.get('affected_tests_found', False)}",
+            f"- evidence_weight: {(test_summary.get('evidence_statement') or {}).get('evidence_weight', 'unknown')}",
             f"- coverage_status: {test_summary['coverage_status']}",
             f"- coverage_available: {test_summary.get('coverage_available', False)}",
             f"- coverage_relevance: {test_summary.get('coverage_relevance') or 'unknown'}",

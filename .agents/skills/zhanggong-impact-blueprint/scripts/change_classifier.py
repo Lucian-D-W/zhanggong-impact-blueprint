@@ -63,9 +63,10 @@ DEFAULT_FLOW_POLICY = {
         "**/*.svg",
     ],
     "lightweight_globs": [
-        "README.md",
         "AGENTS.md",
         f"{SKILL_DIR_FRAGMENT}/SKILL.md",
+        f"{SKILL_DIR_FRAGMENT}/assets/templates/*.template.md",
+        f"{SKILL_DIR_FRAGMENT}/references/*.md",
         ".ai/codegraph/runtime/*.md",
         ".ai/codegraph/runtime/**/*.md",
     ],
@@ -103,6 +104,7 @@ DEFAULT_FLOW_POLICY = {
         "verification budget",
         "finish --test-scope",
         f"python {SKILL_DIR_FRAGMENT}/cig.py",
+        f"{SKILL_DIR_FRAGMENT}/cig.py",
         "governs:",
         "docs/rules",
         "context_missing",
@@ -153,7 +155,6 @@ def is_review_or_runtime_doc(path: str) -> bool:
         or "review_guide" in name
         or "review-guide" in name
         or name == "agents.md"
-        or name == "readme.md"
         or name == "skill.md"
     )
 
@@ -397,10 +398,10 @@ def file_classification(workspace_root: pathlib.Path, config: dict, changed_file
     winner = max(matched, key=lambda item: item[0])
     guard_pattern = matching_guard_pattern(workspace_root, path, flow_policy["markdown_guard_patterns"])
     suppress_guard_promotion = doc_role in {"working_note", "archive_note"}
-    if guard_pattern and winner[1] in {"bypass", "lightweight"} and not suppress_guard_promotion:
+    if guard_pattern and winner[1] == "bypass" and not suppress_guard_promotion:
         winner = (
-            CLASS_PRIORITY["guarded"],
-            "guarded",
+            CLASS_PRIORITY["lightweight"],
+            "lightweight",
             f"markdown_guard_patterns:{guard_pattern}",
         )
 
@@ -438,6 +439,26 @@ def flow_level_for_class(change_class: str) -> str:
     }[change_class]
 
 
+def workflow_lane_for_class(change_class: str) -> str:
+    return {
+        "bypass": "bypass",
+        "lightweight": "lightweight",
+        "guarded": "full_guardian",
+        "risk_sensitive": "full_guardian",
+        "mixed": "full_guardian",
+    }[change_class]
+
+
+def lane_explanation_for_class(change_class: str) -> str:
+    return {
+        "bypass": "No runtime, rule, command, schema, config, or agent-behavior effect was detected.",
+        "lightweight": "This can affect workflow or agent behavior, but no direct code behavior change was detected.",
+        "guarded": "Source, tests, config, schema, rule, or command behavior may change, so use the full guardian lane.",
+        "risk_sensitive": "Dependency, schema, env, SQL, or build/runtime configuration may change, so use the full guardian lane.",
+        "mixed": "At least one file requires the full guardian lane, so the whole change uses full guardian.",
+    }[change_class]
+
+
 def verification_budget_for_class(change_class: str) -> str:
     return {
         "bypass": "B0",
@@ -464,6 +485,9 @@ def classify_change(workspace_root: pathlib.Path, config: dict, changed_files: l
             "change_class": "lightweight",
             "effective_class": "lightweight",
             "flow_level": "health_only",
+            "workflow_lane": "lightweight",
+            "lane": "lightweight",
+            "lane_explanation": "No changed files were supplied, so only health/context checks are useful.",
             "verification_budget": "B1",
             "recommended_test_scope": "none",
             "reason_codes": ["no_changed_files"],
@@ -498,6 +522,9 @@ def classify_change(workspace_root: pathlib.Path, config: dict, changed_files: l
         "change_class": change_class,
         "effective_class": current_effective_class,
         "flow_level": flow_level_for_class(change_class),
+        "workflow_lane": workflow_lane_for_class(current_effective_class),
+        "lane": workflow_lane_for_class(current_effective_class),
+        "lane_explanation": lane_explanation_for_class(current_effective_class),
         "verification_budget": verification_budget_for_class(current_effective_class),
         "recommended_test_scope": recommended_scope_for_class(current_effective_class),
         "reason_codes": reason_codes,

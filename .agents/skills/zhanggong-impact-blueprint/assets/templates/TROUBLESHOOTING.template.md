@@ -1,115 +1,158 @@
 # ZG Impact Blueprint Troubleshooting
 
-This file defines the recovery protocol for agents and humans.
+This file is a recovery protocol for humans and agents. Start from the current facts, not from defaults.
 
-## Doctor failed
+## First Question: Which Lane?
 
-1. Read `.ai/codegraph/logs/last-error.json`
-2. If the error is config-related, run `setup` again with the right profile and project root.
-3. If the error is supplemental-adapter-related, either add the expected files or remove that supplemental adapter from config.
-4. Start with `health` for the compact readiness summary, then re-run `doctor`, or try `doctor --fix-safe` for safe repairs only
+Run:
 
-## Detect is uncertain
+```bash
+python .agents/skills/zhanggong-impact-blueprint/cig.py classify-change --workspace-root . --changed-file <path>
+```
 
-1. If `detect` falls back to `generic`, decide whether that is acceptable for this repo.
-2. If the repo should be Python or TS/JS, set `--profile` or `primary_adapter` explicitly.
-3. If the parser still cannot recognize the project, continue with generic fallback instead of fabricating function-level truth.
-4. `analyze --allow-fallback` and `finish --allow-fallback` will continue in file-level mode when that is the safest choice.
-5. Check `.ai/codegraph/context-resolution.json` to see which source the skill trusted for changed files and seed hints.
-6. Run `cig.py calibrate` when adapter choice or test command choice still feels off in a real repo.
+- `bypass`: do not force full guardian.
+- `lightweight`: keep workflow structure, usually skip tests.
+- `full_guardian`: run `analyze` before edit and `finish` after edit.
 
-## Calibrate recommends a config patch
+If a plain doc edit feels over-governed, check whether the file content mentions setup, tests, commands, rules, config, schema, or agent behavior. Those make it lightweight or full guardian depending on impact.
 
-1. Read the reported `adapter`, `test_command`, and `platform_risks`
-2. If the repo is mixed-language, prefer an explicit main adapter plus supplements
-3. Keep this order in mind:
-   repo config > recent successful command > package script > profile fallback > adapter default
-4. If the patch looks right, rerun `cig.py calibrate --apply`
+## Setup Feels Too Noisy
 
-## GitNexus provider fell back
+Use preview first:
 
-1. Read `graph_provider`, `provider_status`, `provider_reason`, and `fallback_provider` in `calibrate`, `health`, or `analyze --json`
-2. If the repo is healthy enough to keep working, accept the internal fallback and continue the workflow
-3. Prefer direct `gitnexus` CLI; do not assume `npx gitnexus analyze` is trustworthy on Windows
-4. If the repo is not a git repo, GitNexus may need `--skip-git`; current Stage 20 behavior guarantees fallback more than it guarantees success on every path
-5. If the path includes non-ASCII characters on Windows and GitNexus fails, keep the fallback and record the reason instead of blocking `finish`
+```bash
+python .agents/skills/zhanggong-impact-blueprint/cig.py setup --workspace-root . --project-root . --dry-run --preview-changes
+```
 
-## GitNexus created root-level noise
+Default setup is minimal. It should only write config, schema, runtime directory, and managed `.gitignore` block.
+Use `--full` only when the repo wants onboarding docs and AGENTS integration.
 
-1. zhanggong should suppress new `.claude/`, `CLAUDE.md`, `AGENTS.md`, and `.gitignore` noise when GitNexus bootstraps
-2. If the repo still looks GitNexus-owned at the root, inspect `provider_side_effects` and `provider_side_effects_suppressed` in `calibrate` or `analyze --json`
-3. `.gitnexus` can stay as provider runtime data, but prefer `.git/info/exclude` over tracked `.gitignore` edits when hiding it from status noise
+## Analyze Output Feels Too Long
 
-## Build failed
+Default `analyze` should be brief. If you need structure, open:
 
-1. Check `last-error.json` and `errors.jsonl`
-2. Confirm config exists and `project_root` is correct
-3. Confirm parser-specific source globs match real files
-4. Read `.ai/codegraph/build-decision.json` to see why the run wanted incremental vs full
-5. If generated/cache files polluted the diff, ignore them or add them to `.gitignore` before retrying
-6. Retry with `--debug` only if the structured error is not enough
+- `.ai/codegraph/summary.json`
+- `.ai/codegraph/facts.json`
+- `.ai/codegraph/inferences.json`
+- `.ai/codegraph/next-action.json`
 
-## Build is locked
+Facts are observed state. Inferences are uncertainty, fallback, trust, and low-confidence hints.
+Do not mix the two when explaining the result.
 
-1. Run `python .agents/skills/zhanggong-impact-blueprint/cig.py status --workspace-root .`
-2. Confirm no other build is still running before touching `.ai/codegraph/build.lock`
-3. Only then remove the stale lock file and retry
-4. Do not delete the lock preemptively while another agent or process may still be building
+## Multiple Seeds Appeared
 
-## Report failed
+This is not automatically an error.
 
-1. Confirm the seed exists in `cig.py seeds`
-2. Read `.ai/codegraph/seed-candidates.json` for the top ranked candidates
-3. If the seed is too broad or stale, rerun `analyze` with `--changed-line <path:line>` or `--patch-file <path>`
-4. If needed, start from a file seed before returning to a function/routine seed
-5. If multiple candidates were found, use one of the top suggested seeds from the structured error
-6. If the error is `CONTEXT_MISSING`, do not trust an empty-looking report; provide context first or explicitly allow fallback
-7. If the task is documentation-only, use `classify-change` to decide whether a lightweight or bypass flow is the safer path instead of forcing a fake code seed
-8. Explicit `--changed-file` should win over dirty worktree noise; if it does not, inspect `background_dirty_files` in `context-resolution.json`
+Read:
 
-## After-edit test failed
+- `selected_seed` for the primary view
+- `secondary_seeds` for parallel entries
+- `seed_coverage.reason` for why the workflow can continue
 
-1. Do not fabricate success
-2. Keep `test-results.json` and the report as evidence
-3. Read `handoff/latest.md`
-4. Read `.ai/codegraph/last-task.json` to recover the last analyze context
-5. Read `.ai/codegraph/next-action.json` for the most specific retry recommendation
-6. Fix the test command or the code under test
-7. Re-run `finish` or `after-edit`
-8. If Windows is involved, check for `.sh`, CRLF shell scripts, missing shebangs, and missing bash before retrying
-9. If the baseline full suite was already red, use `baseline-status.json` plus `regression_status` before blaming the current edit
+Only treat `selection_required` as blocking when the output explicitly says the candidate set cannot converge.
 
-## Contract context looks wrong
+## Provider Fell Back
 
-1. Read `.ai/codegraph/next-action.json`
-2. Confirm the current task was not pulled toward a stale recent code seed
-3. Inspect `affected_contracts` and `architecture_chains` when contract-level blast radius is part of the problem
-4. If the task is documentation-only, do not overfit the edit to irrelevant runtime context
+Read `graph_provider`, `provider_effective`, `provider_authority`, `provider_status`, `provider_reason`, `provider_fallback_reason`, and `fallback_provider`.
 
-## Coverage unavailable
+Valid cases:
 
-1. Record the unavailable status and reason
-2. Continue the workflow without pretending coverage exists
-3. If needed, fix the coverage adapter later as a separate task
-4. Do not describe `coverage unavailable` or `tests passed` as proof of safety
+- GitNexus missing
+- GitNexus stale/unindexed
+- path incompatibility
+- non-git repo constraints
+- provider side effects suppressed
 
-## Supplemental adapter failed
+Continue with internal fallback when the reason is explicit and the lane permits it. Do not let provider fallback silently change test or finish ownership.
 
-1. If the primary adapter still works, continue with the primary graph and record the supplemental failure
-2. If the supplemental adapter is required for the task, fix its paths/config first
-3. For `sql_postgres`, high-confidence query hints may remain hints until SQL parsing is restored
-4. Supplemental adapter failures should degrade to warnings whenever the primary graph is still usable
+If `provider_effective=gitnexus` and `provider_authority=primary`, do not describe the run as internal fallback. Seed/file-level fallback is a separate context-confidence issue, not a GitNexus availability issue.
 
-## Error code guide
+## Test Command Looks Wrong
 
-- `CONFIG_MISSING`: run `init`
-- `BUILD_LOCKED`: inspect status first and only remove `.ai/codegraph/build.lock` after confirming no active build is running
-- `CONTEXT_MISSING`: pass `--changed-file`, pass `--patch-file`, initialize git, or use `--allow-fallback` only if file-level continuation is acceptable
-- `INVALID_PROFILE`: choose a supported profile and run `init` again
-- `SUPPLEMENTAL_ADAPTER_MISSING`: add the expected files or disable the supplemental adapter
-- `SEED_SELECTION_REQUIRED`: rerun `analyze` or `report` with `--changed-line` or an explicit `--seed`
-- `TASK_CONTEXT_MISSING`: rerun `analyze`, or provide `--seed` / `--task-id` explicitly when no recent context exists
-- `TEST_COMMAND_FAILED`: inspect `test-results.json` and the command output log, then retry after fixing the command or failing code
-- `TEST_COMMAND_PREFLIGHT_FAILED`: fix the executable entry point first; do not trust a shell-specific command that never actually ran
-- `UNEXPECTED_ERROR`: retry with `--debug` and inspect the latest error log
+Run:
 
+```bash
+python .agents/skills/zhanggong-impact-blueprint/cig.py calibrate --workspace-root .
+```
+
+Check:
+
+- `selected_test_command`
+- `test_command_source`
+- `test_command_reason`
+- `test_command_candidates`
+- `ignored_test_commands`
+
+Priority is repo config > recent successful command > package scripts > profile fallback > adapter default.
+If repo config is being ignored, that is a bug to investigate.
+
+## Tests Passed But No Direct Tests Were Found
+
+Use this wording:
+
+- These tests passed: read `evidence_statement.passed_tests`.
+- Directly affected tests identified: read `evidence_statement.directly_affected_tests_found`.
+- Evidence weight: `no_regression_signal` means the selected suite did not explode, not that targeted coverage was proven.
+- Manual risks: read `evidence_statement.manual_risks`.
+
+Do not say this is fully safe unless targeted/direct coverage or broader verification supports it.
+
+## Broad Discover Was Skipped
+
+Default `finish` verifies the current task. If no current-task test is mapped and the only available command is broad Python `unittest discover`, zhanggong should skip it and explain why.
+
+- Use `--test-command "<current task command>"` when the agent knows the right verification.
+- Use `--test-scope full` when you intentionally want broad historical/baseline verification.
+- Do not treat broad discover as a substitute for directly affected tests.
+
+## Baseline Is Red
+
+Read:
+
+- `.ai/codegraph/baseline-status.json`
+- `.ai/codegraph/test-results.json`
+- `.ai/codegraph/final-state.json`
+
+Interpretation:
+
+- `baseline_status = failed` means the repo already had a red baseline.
+- `regression_status = no_regression` means the current failure signature matches known baseline reality.
+- `regression_status = new_failure` means this run likely introduced or exposed a new failure.
+- Passing targeted/smoke tests can coexist with a red historical full suite.
+
+## Trust Looks Low
+
+Trust is axis-based. Read `trust_axes` and `trust_explanation`.
+
+Required axes:
+
+- `graph_freshness`
+- `workspace_noise`
+- `dependency_confidence`
+- `context_confidence`
+- `test_signal`
+- `overall_trust`
+
+A positive axis such as fresh graph or low workspace noise should not be listed as a downgrade reason. The explanation must name the actual lowering axis.
+
+## Context Missing
+
+Use one of:
+
+```bash
+python .agents/skills/zhanggong-impact-blueprint/cig.py analyze --workspace-root . --changed-file <relative-path>
+python .agents/skills/zhanggong-impact-blueprint/cig.py analyze --workspace-root . --patch-file <patch-file>
+python .agents/skills/zhanggong-impact-blueprint/cig.py analyze --workspace-root . --allow-fallback
+```
+
+Explicit changed files should beat dirty-worktree inference.
+
+## Error Code Guide
+
+- `CONFIG_MISSING`: run minimal setup.
+- `CONTEXT_MISSING`: pass changed-file, patch-file, initialize git, or explicitly allow fallback.
+- `SEED_SELECTION_REQUIRED`: the candidate set is too broad; rerun with `--changed-line` or explicit `--seed`.
+- `TASK_CONTEXT_MISSING`: rerun `analyze`, or provide `--seed` and `--task-id`.
+- `TEST_COMMAND_FAILED`: inspect `test-results.json` and output log.
+- `TEST_COMMAND_PREFLIGHT_FAILED`: fix the executable entry point before trusting results.
+- `UNEXPECTED_ERROR`: rerun with `--debug` and inspect latest error logs.

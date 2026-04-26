@@ -132,6 +132,43 @@ def trust_lowering_reasons(
     return reasons
 
 
+def trust_axis_explanations(
+    *,
+    graph_freshness: str,
+    workspace_noise: str,
+    dependency_confidence: str,
+    context_confidence: str,
+    adapter_confidence: str,
+    test_signal: str,
+) -> dict:
+    return {
+        "graph_freshness": (
+            "Graph freshness describes whether the local graph is current. "
+            f"Current value: {graph_freshness}."
+        ),
+        "workspace_noise": (
+            "Workspace noise is low when generated/cache files are not part of the active context. "
+            f"Current value: {workspace_noise}."
+        ),
+        "dependency_confidence": (
+            "Dependency confidence drops when dependency fingerprints changed or could not be compared. "
+            f"Current value: {dependency_confidence}."
+        ),
+        "context_confidence": (
+            "Context confidence describes whether seed and changed-file context came from explicit facts, inference, fallback, or is missing. "
+            f"Current value: {context_confidence}."
+        ),
+        "adapter_confidence": (
+            "Adapter confidence describes how clearly the repo language/profile was resolved. "
+            f"Current value: {adapter_confidence}."
+        ),
+        "test_signal": (
+            "Test signal describes whether direct, configured, full, or no verification evidence is available. "
+            f"Current value: {test_signal}."
+        ),
+    }
+
+
 def trust_axes_payload(
     *,
     graph_freshness: str,
@@ -163,8 +200,14 @@ def trust_axes_payload(
         adapter_confidence=adapter_confidence,
         test_signal=test_signal,
     )
-    if graph_freshness == "fresh" and overall_trust in {"medium", "low"} and lowering_reasons:
-        explanation.append(f"Graph is fresh, but overall trust is {overall_trust} because " + ", ".join(lowering_reasons[:2]) + ".")
+    if overall_trust in {"medium", "low"} and lowering_reasons:
+        explanation.append(
+            f"Overall trust is {overall_trust}. Lowering axes: "
+            + ", ".join(lowering_reasons[:3])
+            + "."
+        )
+    if graph_freshness == "fresh" and lowering_reasons:
+        explanation.append("Graph freshness is positive evidence here; it is not the downgrade reason.")
     if dependency_confidence in {"low", "unknown"} and not any("dependency_confidence" in item for item in explanation):
         explanation.append(f"Dependency confidence is {dependency_confidence}, which lowers overall trust without making the graph stale.")
     return {
@@ -176,6 +219,14 @@ def trust_axes_payload(
         "test_signal": test_signal,
         "overall_trust": overall_trust,
         "trust_explanation": explanation,
+        "axis_explanations": trust_axis_explanations(
+            graph_freshness=graph_freshness,
+            workspace_noise=workspace_noise,
+            dependency_confidence=dependency_confidence,
+            context_confidence=context_confidence,
+            adapter_confidence=adapter_confidence,
+            test_signal=test_signal,
+        ),
     }
 
 

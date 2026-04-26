@@ -247,10 +247,21 @@ def resolve_test_command(
 
     ordered, ignored = rank_candidates(raw_candidates)
     selected = ordered[0] if ordered else {"command": [], "command_string": "", "source": "none", "rank": None}
+    priority_order = [
+        "cli_explicit",
+        "repo_config",
+        "recent_success",
+        "package_json_script",
+        "profile_default",
+        "adapter_default",
+    ]
     return {
         "selected_test_command": selected["command_string"],
         "selected_test_command_argv": selected.get("command", []),
         "test_command_source": selected.get("source"),
+        "test_command_reason": selected.get("reason"),
+        "test_command_priority_order": priority_order,
+        "fallback_reason": selected.get("reason") if str(selected.get("source", "")).startswith(("profile_default", "adapter_default")) else None,
         "test_command_candidates": ordered,
         "ignored_test_commands": ignored,
         "package_manager": package_manager(project_root, package_json_data(project_root)),

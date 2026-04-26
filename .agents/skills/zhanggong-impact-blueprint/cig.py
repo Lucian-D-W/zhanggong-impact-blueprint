@@ -562,11 +562,13 @@ def init_workspace(
     if dry_run:
         return {
             "mode": mode,
+            "write_behavior": "dry_run_only",
             "would_create": sorted(set(would_create)),
             "would_update": sorted(set(would_update)),
             "would_skip": sorted(set(would_skip)),
             "reasons": reasons,
             "preview_changes": preview if preview_changes else [],
+            "minimal_mode_note": "Minimal setup previews and writes only the runtime essentials; full docs/templates require --full.",
             "config_path": str(config_path),
             "schema_path": str(schema_path),
         }
@@ -618,6 +620,10 @@ def init_workspace(
         "created": created,
         "updated": updated,
         "skipped": skipped,
+        "write_behavior": "minimal_runtime_only" if mode == "minimal" else "full_integration_pack",
+        "write_reasons": reasons,
+        "preview_changes": preview if preview_changes else [],
+        "minimal_mode_note": "Minimal setup writes only config, schema, runtime directories, and the managed .gitignore block. Use --full for onboarding docs and AGENTS integration.",
         "config_path": str(config_path),
         "schema_path": str(schema_path),
         "codegraph_dir": str(codegraph_dir),
@@ -1577,6 +1583,39 @@ def candidate_brief(item: dict) -> dict:
     }
 
 
+def file_seed_candidate_for_path(workspace_root: pathlib.Path, config_path: pathlib.Path, path: str) -> dict | None:
+    config = build_graph.load_config(config_path)
+    db_path = build_graph.graph_paths(workspace_root, config)["db_path"]
+    if not db_path.exists():
+        return None
+    normalized = path.replace("\\", "/")
+    with connect_db(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT node_id, kind, path, symbol, start_line, end_line
+            FROM nodes
+            WHERE kind = 'file' AND path = ?
+            ORDER BY node_id
+            LIMIT 1
+            """,
+            (normalized,),
+        ).fetchone()
+    if not row:
+        return None
+    node_id, kind, seed_path_value, symbol, start_line, end_line = row
+    return {
+        "node_id": node_id,
+        "kind": kind,
+        "path": seed_path_value,
+        "symbol": symbol,
+        "start_line": start_line,
+        "end_line": end_line,
+        "confidence": 0.62,
+        "reason": "file-level primary selected for a broad multi-entry change",
+        "reason_details": ["broad file-level seed keeps multiple symbol entries visible without forcing manual selection"],
+    }
+
+
 def seed_candidate_label(item: dict) -> str:
     path = item.get("path") or item.get("node_id", "")
     symbol = item.get("symbol")
@@ -1637,8 +1676,26 @@ def write_machine_outputs(
         write_json(paths["seed_candidates"], seed_candidates)
         written["seed_candidates_path"] = str(paths["seed_candidates"])
     if next_action is not None:
+        layers = layered_state_from_next_action(
+            next_action=next_action,
+            context_resolution=context_resolution,
+            seed_candidates=seed_candidates,
+        )
+        write_json(paths["summary"], layers["summary"])
+        write_json(paths["facts"], layers["facts"])
+        write_json(paths["inferences"], layers["inferences"])
+        next_action = {
+            **next_action,
+            "summary": layers["summary"],
+            "facts_path": str(paths["facts"]),
+            "inferences_path": str(paths["inferences"]),
+            "summary_path": str(paths["summary"]),
+        }
         write_json(paths["next_action"], next_action)
         written["next_action_path"] = str(paths["next_action"])
+        written["summary_path"] = str(paths["summary"])
+        written["facts_path"] = str(paths["facts"])
+        written["inferences_path"] = str(paths["inferences"])
     return written
 
 
@@ -1661,6 +1718,97 @@ def unique_paths(values: list[str]) -> list[str]:
         seen.add(value)
         ordered.append(value)
     return ordered
+
+
+def first_uncertainty_from_next_action(next_action: dict) -> str | None:
+    atlas_summary = next_action.get("atlas_summary") or {}
+    if atlas_summary.get("uncertainty_count"):
+        return f"{atlas_summary.get('uncertainty_count')} uncertainty atlas view(s)"
+    for item in next_action.get("atlas_views") or []:
+        if item.get("view_type") == "uncertainty":
+            return item.get("title") or "uncertainty atlas view present"
+    for item in (next_action.get("trust") or {}).get("trust_explanation") or []:
+        if item:
+            return item
+    budget_reasons = next_action.get("budget_reason_codes") or []
+    if budget_reasons:
+        return str(budget_reasons[0])
+    return None
+
+
+def layered_state_from_next_action(
+    *,
+    next_action: dict,
+    context_resolution: dict | None = None,
+    seed_candidates: dict | None = None,
+) -> dict:
+    trust_payload = next_action.get("trust") or {}
+    trust_axes = trust_payload.get("trust_axes") or {}
+    final_state = next_action.get("final_state") or {}
+    summary = {
+        "selected_seed": next_action.get("selected_seed"),
+        "secondary_seeds": list(next_action.get("secondary_seeds") or []),
+        "workflow_lane": next_action.get("workflow_lane") or next_action.get("lane") or next_action.get("flow_level"),
+        "verification_budget": next_action.get("verification_budget"),
+        "recommended_test_scope": next_action.get("recommended_test_scope"),
+        "must_read_first": list(next_action.get("must_read_first") or [])[:5],
+        "top_uncertainty": first_uncertainty_from_next_action(next_action),
+        "next_step": next_action.get("suggested_next_step"),
+        "can_edit_now": next_action.get("can_edit_now"),
+        "provider_status": next_action.get("provider_status"),
+        "provider_effective": next_action.get("provider_effective"),
+        "provider_authority": next_action.get("provider_authority"),
+        "overall_trust": trust_axes.get("overall_trust") or trust_payload.get("overall"),
+    }
+    facts = {
+        "command": next_action.get("command"),
+        "task_id": next_action.get("task_id"),
+        "selected_seed": next_action.get("selected_seed"),
+        "secondary_seeds": list(next_action.get("secondary_seeds") or []),
+        "changed_files": list((context_resolution or {}).get("effective_changed_files") or (context_resolution or {}).get("changed_files") or []),
+        "changed_lines": list((context_resolution or {}).get("effective_changed_lines") or (context_resolution or {}).get("changed_lines") or []),
+        "provider": {
+            "graph_provider": next_action.get("graph_provider"),
+            "provider_status": next_action.get("provider_status"),
+            "provider_reason": next_action.get("provider_reason"),
+            "provider_fallback": next_action.get("provider_fallback"),
+            "provider_fallback_reason": next_action.get("provider_fallback_reason"),
+            "fallback_provider": next_action.get("fallback_provider"),
+            "provider_effective": next_action.get("provider_effective"),
+            "provider_authority": next_action.get("provider_authority"),
+            "provider_role": next_action.get("provider_role"),
+            "workflow_owner": next_action.get("workflow_owner"),
+        },
+        "build": next_action.get("build_trust") or {},
+        "test_results": next_action.get("test_facts") or {},
+        "baseline_status": final_state.get("baseline_status"),
+        "final_state": final_state,
+    }
+    inferences = {
+        "seed_reason": next_action.get("seed_reason"),
+        "candidate_seeds": list(next_action.get("candidate_seeds") or []),
+        "seed_candidates_status": (seed_candidates or {}).get("status"),
+        "fallback": {
+            "fallback_used": bool(next_action.get("provider_fallback") or next_action.get("fallback_used")),
+            "provider_fallback_used": bool(next_action.get("provider_fallback_used") or next_action.get("provider_fallback")),
+            "seed_fallback_used": bool(next_action.get("seed_fallback_used")),
+            "provider_reason": next_action.get("provider_reason"),
+            "provider_fallback_reason": next_action.get("provider_fallback_reason"),
+            "seed_reason": next_action.get("seed_reason"),
+        },
+        "budget_reason_codes": list(next_action.get("budget_reason_codes") or []),
+        "report_completeness": next_action.get("report_completeness") or {},
+        "test_signal": next_action.get("test_signal") or {},
+        "trust_axes": trust_axes,
+        "trust_explanation": list(trust_axes.get("trust_explanation") or trust_payload.get("trust_explanation") or []),
+        "low_confidence_contract_relations": [
+            item
+            for item in list(next_action.get("affected_contracts") or [])
+            if float(item.get("confidence") or 0.0) < 0.75
+        ],
+        "uncertainty": list((next_action.get("atlas_summary") or {}).get("uncertainty") or []),
+    }
+    return {"summary": summary, "facts": facts, "inferences": inferences}
 
 
 def seed_path(seed_id: str) -> str | None:
@@ -1848,14 +1996,19 @@ def render_integration_block() -> str:
     return "\n".join(
         [
             CIG_MANAGED_BLOCK_START,
-            f"## {DISPLAY_NAME} Runtime Contract",
+            f"## {DISPLAY_NAME} Stage 21 Workflow Contract",
             "",
-            "Adaptive Verification Orchestrator is active in this repo.",
+            f"{DISPLAY_NAME} Stage 21 is active in this repo.",
             "",
-            "- Start with `python .agents/skills/zhanggong-impact-blueprint/cig.py health`.",
-            "- Run `python .agents/skills/zhanggong-impact-blueprint/cig.py analyze` before edits.",
-            "- Read `.ai/codegraph/next-action.json` and follow its verification budget.",
-            "- Use `finish --test-scope targeted` for low-risk edits, and add `--shadow-full` when you want calibration evidence.",
+            "- Use `zhanggong` as the workflow owner for this repo.",
+            "- Use `GitNexus` as the default graph provider when it is ready; accept internal fallback when it is not.",
+            "- Use the smallest honest lane: bypass for ordinary non-runtime docs, lightweight for workflow/agent docs, full guardian for code/config/schema/rules/commands.",
+            "- Start with `python .agents/skills/zhanggong-impact-blueprint/cig.py health` or `calibrate` when repo readiness or provider status is unclear.",
+            "- Run `python .agents/skills/zhanggong-impact-blueprint/cig.py classify-change --changed-file <path>` when lane choice is unclear.",
+            "- Run `python .agents/skills/zhanggong-impact-blueprint/cig.py analyze` before full-guardian edits.",
+            "- Read the analyze brief first; use `.ai/codegraph/summary.json`, `facts.json`, `inferences.json`, and `next-action.json` for detail.",
+            "- Run `finish --test-scope targeted` for low-risk edits, and add `--shadow-full` when you want calibration evidence.",
+            "- Tests passed is evidence, not proof; baseline red is repo reality until final state proves a new regression.",
             "- Prefer this repo-local contract over runtime-private hook/config files.",
             CIG_MANAGED_BLOCK_END,
             "",
@@ -1883,12 +2036,12 @@ def upsert_cig_managed_block(agents_path: pathlib.Path) -> pathlib.Path:
 
 def runtime_template_content(kind: str) -> str:
     if kind == "SESSION_START":
-        return "# SESSION_START\n\n1. Run `cig.py health`.\n2. Restore pending changes, handoff, and next-action.\n3. Surface the current recommended commands.\n"
+        return "# SESSION_START\n\n1. Run `cig.py health` when readiness is unclear.\n2. Restore pending changes, handoff, and next-action.\n3. Surface current lane, selected seed, secondary seeds, and recommended commands.\n"
     if kind == "BEFORE_EDIT":
-        return "# BEFORE_EDIT\n\n1. Read `.ai/codegraph/next-action.json`.\n2. If trust is low or risk is high, run `cig.py analyze` again.\n3. Do not start with a full suite by default.\n"
+        return "# BEFORE_EDIT\n\n1. Check `workflow_lane` before choosing ceremony.\n2. For full guardian, read the analyze brief, `summary.json`, `facts.json`, and `inferences.json`.\n3. Do not start with a full suite by default.\n"
     if kind == "AFTER_EDIT":
-        return "# AFTER_EDIT\n\n1. Record changed files in `.ai/codegraph/pending-changes.jsonl`.\n2. Run formatter if needed.\n3. Prefer budget-driven verification before handoff.\n"
-    return "# BEFORE_STOP\n\n1. If pending changes exist, run `cig.py analyze` or `cig.py finish`.\n2. Surface `next-action.json` recommended commands.\n3. Leave a clear handoff when verification is incomplete.\n"
+        return "# AFTER_EDIT\n\n1. Record changed files in `.ai/codegraph/pending-changes.jsonl`.\n2. Run formatter if needed.\n3. Use budget-driven verification and preserve the test evidence statement.\n"
+    return "# BEFORE_STOP\n\n1. If full-guardian pending changes exist, run `cig.py analyze` or `cig.py finish`.\n2. Surface summary/facts/inferences and `next-action.json` recommended commands.\n3. Leave a clear handoff when verification is incomplete.\n"
 
 
 def install_integration_pack(*, workspace_root: pathlib.Path, config_path: pathlib.Path) -> dict:
@@ -1958,6 +2111,19 @@ def next_action_payload(
     direct_payload = (report_payload or {}).get("direct") or (report_json.get("direct") or {})
     definition = (report_payload or {}).get("definition") or (report_json.get("definition") or {})
     provider_brief = (report_payload or {}).get("provider") or report_json.get("provider") or {}
+    provider_fallback_used = bool(provider_brief.get("provider_fallback"))
+    provider_effective = provider_brief.get("provider_effective")
+    provider_authority = provider_brief.get("provider_authority")
+    if not provider_authority:
+        if provider_fallback_used:
+            provider_authority = "fallback"
+        elif provider_effective and provider_effective == provider_brief.get("graph_provider"):
+            provider_authority = "primary"
+        elif provider_effective:
+            provider_authority = "delegated"
+        else:
+            provider_authority = "unavailable"
+    seed_fallback_used = bool((seed_selection or {}).get("fallback_used") or fallback_used)
     provider_overlay = (report_payload or {}).get("provider_overlay") or report_json.get("provider_overlay") or {}
     affected_contracts = list((report_payload or {}).get("affected_contracts") or report_json.get("affected_contracts") or [])
     architecture_chains = list((report_payload or {}).get("architecture_chains") or report_json.get("architecture_chains") or [])
@@ -1974,6 +2140,7 @@ def next_action_payload(
         }
     effective_class = change_summary.get("effective_class") or change_summary.get("change_class") or "guarded"
     flow_level = change_summary.get("flow_level") or "full_guardian"
+    workflow_lane = change_summary.get("workflow_lane") or change_summary.get("lane") or ("full_guardian" if effective_class in {"guarded", "risk_sensitive"} else effective_class)
     atlas_views = raw_atlas_views if effective_class not in {"bypass", "lightweight"} else []
     next_tests = report_brief.get("next_tests", [])
     test_signal = report_brief.get("test_signal", {})
@@ -2011,6 +2178,11 @@ def next_action_payload(
         contract_risk = "medium"
     suggestion = success_next_step(command_name)
     recommended_action = "edit_code"
+    gitnexus_primary = provider_effective == "gitnexus" and provider_authority == "primary"
+    build_mismatch_with_gitnexus_primary = (
+        build_decision.get("verification_status") == "mismatched" and gitnexus_primary
+    )
+    seed_fallback_with_gitnexus_primary = seed_fallback_used and gitnexus_primary
     loop_state = {
         "active_loop": False,
         "repeat_count": 0,
@@ -2030,12 +2202,18 @@ def next_action_payload(
     if tests_status == "failed":
         recommended_action = "inspect_failed_tests"
         suggestion = "Inspect test-results.json and the failing test output, then rerun the most relevant tests before trusting the edit."
-    elif build_decision.get("verification_status") == "mismatched":
+    elif build_decision.get("verification_status") == "mismatched" and not gitnexus_primary:
         recommended_action = "run_full_rebuild"
         suggestion = "Run `cig.py build --full-rebuild` before relying on the current graph."
-    elif fallback_used:
-        recommended_action = "inspect_report"
-        suggestion = "Review the brief report carefully because generic fallback reduced symbol-level confidence."
+    elif provider_fallback_used:
+        recommended_action = "inspect_provider_fallback"
+        suggestion = (
+            "GitNexus is not the active graph source for this run. "
+            f"{provider_brief.get('provider_fallback_reason') or provider_brief.get('provider_reason') or 'Review provider_reason before trusting internal fallback.'}"
+        )
+    elif seed_fallback_used and not gitnexus_primary:
+        recommended_action = "confirm_seed"
+        suggestion = "Review the brief report carefully because inferred/file-level seed context reduced symbol-level confidence."
     elif tests_payload and not test_signal.get("affected_tests_found"):
         recommended_action = "continue_with_warning"
         if tests_status == "passed":
@@ -2113,6 +2291,13 @@ def next_action_payload(
         resolved_escalation_level,
         recommended_test_scope,
     )
+    secondary_seeds = list((seed_selection or {}).get("secondary_seeds", []))
+    seed_coverage = (seed_selection or {}).get("coverage") or {
+        "primary_seed": seed,
+        "secondary_seed_count": len(secondary_seeds),
+        "selection_required": selection_state == "seed_selection_required",
+        "reason": (seed_selection or {}).get("reason"),
+    }
 
     risk_level = "low"
     if effective_class in {"bypass", "lightweight"}:
@@ -2148,6 +2333,12 @@ def next_action_payload(
             recommended_commands.append(
                 "python .agents/skills/zhanggong-impact-blueprint/cig.py finish --workspace-root . --test-scope full"
             )
+        if recommended_action == "edit_code":
+            suggestion = f"Edit the code, then run `cig.py finish --test-scope {recommended_test_scope}`."
+            if seed_fallback_with_gitnexus_primary:
+                suggestion += " GitNexus is primary; the inferred/file-level seed is a context caveat, not internal fallback."
+            if build_mismatch_with_gitnexus_primary:
+                suggestion += " GitNexus is primary; the local zhanggong graph cache mismatch is a report caveat, not provider fallback."
 
     primary_contract = affected_contracts[0] if affected_contracts else {}
     primary_contract_name = primary_contract.get("name") or "the affected contract"
@@ -2212,6 +2403,11 @@ def next_action_payload(
             "This is a lightweight documentation or process-text change. Use the lightweight flow and skip tests "
             "unless command, rule, config, or schema semantics also changed."
         )
+    elif secondary_seeds:
+        user_message = (
+            f"Primary seed is `{seed}`. Secondary seed(s) are kept in view for this multi-entry change: "
+            f"{', '.join(secondary_seeds[:3])}. Continue from the primary view, but check the secondary entries before claiming coverage."
+        )
     elif resolved_escalation_level == "L3":
         user_message = (
             "This is not the first failed attempt for this area. Stop local patching, read the expanded chain first, "
@@ -2259,6 +2455,8 @@ def next_action_payload(
             agent_instruction += " Do not treat function-only impact as complete. Review affected_contracts and architecture_chains before editing."
         if uncertainty_view:
             agent_instruction += " Treat uncertainty atlas_views and DEPENDS_ON edges as low-confidence hints, not proof."
+        if secondary_seeds:
+            agent_instruction += " Treat secondary_seeds as parallel entry points that must stay visible during the edit."
         if loop_state.get("repeat_count", 0) >= 3:
             agent_instruction += " Stop patching the same local area. Read loop_atlas_views or atlas_views before patching again."
     trust_payload = dict(trust or build_decision.get("trust") or {})
@@ -2282,14 +2480,25 @@ def next_action_payload(
         "provider_status": provider_brief.get("provider_status"),
         "provider_reason": provider_brief.get("provider_reason"),
         "provider_fallback": provider_brief.get("provider_fallback"),
+        "provider_fallback_reason": provider_brief.get("provider_fallback_reason"),
         "fallback_provider": provider_brief.get("fallback_provider"),
-        "provider_effective": provider_brief.get("provider_effective"),
+        "provider_effective": provider_effective,
+        "provider_authority": provider_authority,
+        "provider_role": provider_brief.get("provider_role") or "fact_source",
+        "workflow_owner": provider_brief.get("workflow_owner") or "zhanggong",
+        "provider_fallback_used": provider_fallback_used,
+        "seed_fallback_used": seed_fallback_used,
+        "fallback_used": bool(provider_fallback_used or seed_fallback_used),
         "provider_evidence_summary": list(report_brief.get("provider_evidence_summary") or []),
         "secondary_seeds": list((seed_selection or {}).get("secondary_seeds", [])),
         "change_class": change_summary.get("change_class"),
         "flow_level": flow_level,
+        "workflow_lane": workflow_lane,
+        "lane": workflow_lane,
+        "lane_explanation": change_summary.get("lane_explanation"),
         "effective_change_class": effective_class,
         "seed_reason": (seed_selection or {}).get("reason"),
+        "seed_coverage": seed_coverage,
         "candidate_seeds": (seed_selection or {}).get("top_candidates", [])[:3],
         "seed_confidence": (seed_selection or {}).get("seed_confidence", (seed_selection or {}).get("confidence")),
         "recent_task_influenced": bool((seed_selection or {}).get("recent_task_influenced")),
@@ -2325,9 +2534,45 @@ def next_action_payload(
             "graph_freshness": build_decision.get("graph_freshness"),
             "dependency_fingerprint_status": build_decision.get("dependency_fingerprint_status"),
         },
+        "test_facts": {
+            "status": (tests_payload or {}).get("status"),
+            "tests_passed": bool((tests_payload or {}).get("tests_passed")),
+            "effective_test_scope": (tests_payload or {}).get("effective_test_scope"),
+            "selected_test_command": (tests_payload or {}).get("selected_test_command"),
+            "test_command_source": (tests_payload or {}).get("test_command_source"),
+            "baseline_status": (tests_payload or {}).get("baseline_status"),
+            "regression_status": (tests_payload or {}).get("regression_status"),
+            "affected_tests_found": (tests_payload or {}).get("affected_tests_found"),
+        },
         "trust": trust_payload,
         "report_completeness": report_completeness,
         "test_signal": test_signal,
+        "decision_trace": {
+            "seed": {
+                "selected": seed,
+                "source": (seed_selection or {}).get("mode"),
+                "reason": (seed_selection or {}).get("reason"),
+                "secondary_seeds": secondary_seeds,
+            },
+            "lane": {
+                "selected": workflow_lane,
+                "reason": change_summary.get("lane_explanation"),
+                "reason_codes": change_summary.get("reason_codes", []),
+            },
+            "verification": {
+                "budget": budget_decision["budget"],
+                "recommended_test_scope": recommended_test_scope,
+                "reason_codes": budget_decision["reason_codes"],
+            },
+            "provider": {
+                "selected": provider_effective,
+                "authority": provider_authority,
+                "status": provider_brief.get("provider_status"),
+                "reason": provider_brief.get("provider_reason"),
+                "fallback_reason": provider_brief.get("provider_fallback_reason"),
+                "local_cache_mismatch_masked": build_mismatch_with_gitnexus_primary,
+            },
+        },
         "user_message": user_message,
         "agent_instruction": agent_instruction,
         "user_summary": report_brief.get("user_summary"),
@@ -2385,18 +2630,48 @@ def resolve_seed_selection(
             "secondary_seeds": [],
         }
 
-    if top_candidates and multi_seed == "auto" and int(ranked.get("candidate_count", len(top_candidates))) <= 3:
-        primary_candidate = top_candidates[0]
-        return primary_candidate["node_id"], {
-            "mode": "multi_seed_auto",
-            "seed_confidence": ranked.get("confidence", 0.0),
-            "confidence": ranked.get("confidence", 0.0),
-            "reason": primary_candidate.get("reason", "primary seed selected from a small candidate set"),
-            "top_candidates": top_candidates,
-            "fallback_used": bool(primary_candidate.get("kind") == "file"),
-            "recent_task_influenced": ranked.get("recent_task_influenced", False),
-            "secondary_seeds": [item["node_id"] for item in top_candidates[1:]],
-        }
+    if top_candidates and multi_seed == "auto":
+        candidate_count = int(ranked.get("candidate_count", len(top_candidates)))
+        top_paths = sorted({item.get("path") for item in top_candidates if item.get("path")})
+        if candidate_count > 3 and len(top_paths) == 1 and not changed_lines:
+            file_candidate = file_seed_candidate_for_path(workspace_root, config_path, top_paths[0])
+            if file_candidate:
+                return file_candidate["node_id"], {
+                    "mode": "multi_seed_file_primary",
+                    "seed_confidence": file_candidate.get("confidence", 0.62),
+                    "confidence": file_candidate.get("confidence", 0.62),
+                    "reason": file_candidate.get("reason", "file-level primary selected for broad multi-entry change"),
+                    "top_candidates": [file_candidate, *top_candidates],
+                    "fallback_used": True,
+                    "recent_task_influenced": ranked.get("recent_task_influenced", False),
+                    "secondary_seeds": [item["node_id"] for item in top_candidates[:3]],
+                    "candidate_count": candidate_count,
+                    "coverage": {
+                        "primary_seed": file_candidate["node_id"],
+                        "secondary_seed_count": min(len(top_candidates), 3),
+                        "selection_required": False,
+                        "reason": "many symbol candidates in one file; file-level primary keeps work moving without pretending one function is certain",
+                    },
+                }
+        if candidate_count <= 12 or len(top_paths) <= 3:
+            primary_candidate = top_candidates[0]
+            return primary_candidate["node_id"], {
+                "mode": "multi_seed_auto",
+                "seed_confidence": ranked.get("confidence", 0.0),
+                "confidence": ranked.get("confidence", 0.0),
+                "reason": primary_candidate.get("reason", "primary seed selected from a bounded candidate set"),
+                "top_candidates": top_candidates,
+                "fallback_used": bool(primary_candidate.get("kind") == "file"),
+                "recent_task_influenced": ranked.get("recent_task_influenced", False),
+                "secondary_seeds": [item["node_id"] for item in top_candidates[1:]],
+                "candidate_count": candidate_count,
+                "coverage": {
+                    "primary_seed": primary_candidate["node_id"],
+                    "secondary_seed_count": max(len(top_candidates) - 1, 0),
+                    "selection_required": False,
+                    "reason": "bounded multi-entry candidate set; primary and secondary seeds are kept visible",
+                },
+            }
 
     candidates = latest_seed_candidates(workspace_root, config_path)
     if not top_candidates and not candidates:
@@ -3179,8 +3454,16 @@ def finalize_after_edit(
     )
     tests_payload["final_state"] = final_state
     next_action["final_state"] = final_state
+    next_action["final_state_path"] = str(runtime_paths(workspace_root)["final_state"])
     write_json(workspace_root / ".ai" / "codegraph" / "test-results.json", tests_payload)
-    write_json(runtime_paths(workspace_root)["next_action"], next_action)
+    write_json(runtime_paths(workspace_root)["final_state"], final_state)
+    machine_outputs.update(
+        write_machine_outputs(
+            workspace_root,
+            context_resolution=context_resolution,
+            next_action=next_action,
+        )
+    )
     if task_status != "failed":
         clear_last_error(workspace_root)
     notes: list[str] = []
@@ -3406,11 +3689,13 @@ def render_analyze_brief_text(payload: dict) -> str:
         lines.append(f"secondary_seeds: {', '.join(secondary[:3])}")
     lines.extend(
         [
+            f"workflow_lane: {next_action.get('workflow_lane') or next_action.get('lane') or 'unknown'}",
             f"change_class: {next_action.get('change_class', 'unknown')}",
             f"verification_budget: {next_action.get('verification_budget', 'unknown')}",
             f"recommended_test_scope: {next_action.get('recommended_test_scope', 'unknown')}",
             f"graph_provider: {next_action.get('graph_provider') or brief.get('graph_provider') or payload.get('graph_provider') or 'unknown'}",
             f"provider_status: {next_action.get('provider_status') or brief.get('provider_status') or payload.get('provider_status') or 'unknown'}",
+            f"provider_effective: {next_action.get('provider_effective') or brief.get('provider_effective') or 'unknown'} ({next_action.get('provider_authority') or brief.get('provider_authority') or 'unknown'})",
         ]
     )
     for item in list(next_action.get("must_read_first") or [])[:3]:
@@ -3432,9 +3717,18 @@ def render_analyze_brief_text(payload: dict) -> str:
                 if value is not None
             )
         )
-    lines.append(f"uncertainty_count: {(next_action.get('atlas_summary') or {}).get('uncertainty_count', 0)}")
+    top_uncertainty = first_uncertainty_from_next_action(next_action)
+    if top_uncertainty:
+        lines.append(f"top_uncertainty: {top_uncertainty}")
+    else:
+        lines.append(f"uncertainty_count: {(next_action.get('atlas_summary') or {}).get('uncertainty_count', 0)}")
+    lines.append(f"next_step: {next_action.get('suggested_next_step') or 'review next-action.json'}")
     lines.append(f"report_path: {report.get('report_path')}")
     lines.append(f"next_action_path: {payload.get('machine_outputs', {}).get('next_action_path')}")
+    if payload.get("machine_outputs", {}).get("facts_path"):
+        lines.append(f"facts_path: {payload.get('machine_outputs', {}).get('facts_path')}")
+    if payload.get("machine_outputs", {}).get("inferences_path"):
+        lines.append(f"inferences_path: {payload.get('machine_outputs', {}).get('inferences_path')}")
     return "\n".join(lines[:20])
 
 
@@ -3479,6 +3773,9 @@ def output_paths_for_command(command_name: str, workspace_root: pathlib.Path, pa
             "last_task_path": payload.get("last_task_path"),
             "context_resolution_path": payload.get("machine_outputs", {}).get("context_resolution_path"),
             "seed_candidates_path": payload.get("machine_outputs", {}).get("seed_candidates_path"),
+            "summary_path": payload.get("machine_outputs", {}).get("summary_path"),
+            "facts_path": payload.get("machine_outputs", {}).get("facts_path"),
+            "inferences_path": payload.get("machine_outputs", {}).get("inferences_path"),
             "next_action_path": payload.get("machine_outputs", {}).get("next_action_path"),
         }
     if command_name == "recommend-tests" and isinstance(payload, dict):
@@ -3490,6 +3787,10 @@ def output_paths_for_command(command_name: str, workspace_root: pathlib.Path, pa
             "test_results_path": str((workspace_root / ".ai" / "codegraph" / "test-results.json")),
             "handoff_path": str(runtime_paths(workspace_root)["handoff_latest"]),
             "context_resolution_path": payload.get("machine_outputs", {}).get("context_resolution_path"),
+            "summary_path": payload.get("machine_outputs", {}).get("summary_path"),
+            "facts_path": payload.get("machine_outputs", {}).get("facts_path"),
+            "inferences_path": payload.get("machine_outputs", {}).get("inferences_path"),
+            "final_state_path": str(runtime_paths(workspace_root)["final_state"]),
             "next_action_path": payload.get("machine_outputs", {}).get("next_action_path"),
         }
     if command_name == "finish" and isinstance(payload, dict):
@@ -3500,6 +3801,10 @@ def output_paths_for_command(command_name: str, workspace_root: pathlib.Path, pa
             "handoff_path": str(runtime_paths(workspace_root)["handoff_latest"]),
             "last_task_path": payload.get("last_task_path"),
             "context_resolution_path": payload.get("machine_outputs", {}).get("context_resolution_path"),
+            "summary_path": payload.get("machine_outputs", {}).get("summary_path"),
+            "facts_path": payload.get("machine_outputs", {}).get("facts_path"),
+            "inferences_path": payload.get("machine_outputs", {}).get("inferences_path"),
+            "final_state_path": str(runtime_paths(workspace_root)["final_state"]),
             "next_action_path": payload.get("machine_outputs", {}).get("next_action_path"),
         }
     if command_name == "baseline":
@@ -3519,6 +3824,9 @@ def output_paths_for_command(command_name: str, workspace_root: pathlib.Path, pa
             "last_task_path": str(workspace_root / ".ai" / "codegraph" / "last-task.json"),
             "context_resolution_path": str(runtime_paths(workspace_root)["context_resolution"]),
             "build_decision_path": str(runtime_paths(workspace_root)["build_decision"]),
+            "summary_path": str(runtime_paths(workspace_root)["summary"]),
+            "facts_path": str(runtime_paths(workspace_root)["facts"]),
+            "inferences_path": str(runtime_paths(workspace_root)["inferences"]),
             "next_action_path": str(runtime_paths(workspace_root)["next_action"]),
         }
     return {}

@@ -31,8 +31,8 @@ Setup-ready profiles:
 
 ## Architecture-contract surfaces
 
-Stage 16 adds lightweight repo-local support for contract nodes and edges such
-as:
+The skill includes lightweight repo-local support for contract nodes and edges
+such as:
 
 - endpoints and routes
 - components and props

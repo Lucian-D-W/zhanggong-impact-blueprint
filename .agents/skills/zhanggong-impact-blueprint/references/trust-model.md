@@ -16,7 +16,7 @@ Stage 21 treats trust as explanation across axes, not as a single mysterious sco
 - Seed selection is an inference unless explicitly provided by the user.
 - Secondary seeds are bounded context, not proof that every entry was fully covered.
 - Verification budget is a policy decision.
-- `affected_contracts`, `architecture_chains`, and `atlas_views` are useful views over evidence, not magical proof.
+- `affected_contracts` and `atlas_views` are useful views over evidence, not magical proof.
 - Fallback is an inference about best continuation path and must include a reason.
 
 ## Required Axes

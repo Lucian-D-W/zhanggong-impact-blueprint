@@ -8,13 +8,13 @@
 
 张工的施工图 / ZhangGong Impact Blueprint 是一个面向 agent 驱动改动的、仓库本地化影响图谱与验证 workflow harness。
 完整规则和详细行为说明请看 [`.agents/skills/zhanggong-impact-blueprint/SKILL.md`](E:/AA-HomeforAI/CodeAccounting/.agents/skills/zhanggong-impact-blueprint/SKILL.md:1)。
-如果你更习惯中文审阅，可以看中文版说明：[`.agents/skills/zhanggong-impact-blueprint/SKILL.zh-CN.md`](E:/AA-HomeforAI/CodeAccounting/.agents/skills/zhanggong-impact-blueprint/SKILL.zh-CN.md:1)。
+如果你更习惯中文审阅，可以先看这份中文 README；skill 正文目前以 `SKILL.md` 为准。
 
 ## 这是什么
 
 - 一个可复制的 skill 文件夹
 - 一个在行为改动前给出影响阅读面、在改动后保留结构化证据的低摩擦工作流
-- 一套三车道协议，避免普通文档也被强行拉进完整 guardian 流程
+- 一套克制的工作协议，避免普通文档也被强行拉进完整流程
 
 ## 有什么用
 
@@ -31,73 +31,6 @@
 
 如果只是正常使用，你一般不需要手动去跑这些命令行。命令行更偏向维护、排障或验证这个 skill 本身时使用。
 
-## 先安装 GitNexus
-
-Stage 21 在第一次跑真实仓库前，最好先把 GitNexus 装好。
-
-1. 安装 GitNexus CLI：
-   `npm install -g gitnexus`
-2. 验证命令可用：
-   `gitnexus --version`
-3. 日常仍然使用 `zhanggong` 这条主流程：
-   `setup --dry-run --preview-changes -> setup -> calibrate/health -> classify-change/analyze -> finish`
-
-当 GitNexus 可用时，zhanggong 会把它当成默认 graph provider。
-当 GitNexus 对当前仓库还没准备好时，zhanggong 会继续用 internal provider，把流程跑完。
-
-GitNexus-first 的意思是：
-
-- GitNexus ready 时，它是主要图谱事实来源。
-- zhanggong 仍然负责 lane、seed、测试范围、finish 和 handoff。
-- internal graph 只能是显式 fallback；一旦接管，报告必须写清 `provider_fallback_reason`。
-- 日常不要裸跑 `gitnexus analyze`；zhanggong 会负责抑制 GitNexus 根目录副作用，并记录 provider authority。
-
-## Stage 21 三条车道
-
-不是所有任务都需要同样重的流程。
-
-| 车道 | 用途 | 例子 | 流程 |
-| --- | --- | --- | --- |
-| bypass | 不影响运行时、规则、agent 行为的编辑 | 归档笔记、普通文档文案、图、review 文案 | 不走完整 guardian |
-| lightweight | 影响 agent / workflow / 流程文本，但不直接改代码行为 | `AGENTS.md`、`SKILL.md`、quickstart、troubleshooting、模板 | 保留结构，通常不跑测试 |
-| full guardian | 影响行为的改动 | 源码、测试、config、schema、SQL、env、依赖、规则、命令 | 改前 `analyze`，改后 `finish` |
-
-不确定时先跑：
-
-```bash
-python .agents/skills/zhanggong-impact-blueprint/cig.py classify-change --workspace-root . --changed-file <path>
-```
-
-看 `workflow_lane`、`lane_explanation`、`verification_budget` 和 `recommended_test_scope`。
-
-## 输出契约
-
-`analyze` 默认只输出短简报。完整状态分层落盘：
-
-- `.ai/codegraph/summary.json`：第一眼该做什么
-- `.ai/codegraph/facts.json`：真实检测到的事实
-- `.ai/codegraph/inferences.json`：不确定性、fallback、trust、低置信提示
-- `.ai/codegraph/next-action.json`：给 agent 的控制面
-- `.ai/codegraph/final-state.json`：`finish` 后的统一最终状态
-- `.ai/codegraph/handoff/latest.md`：最终交接
-
-多入口任务默认用 `selected_seed` 做主视角，用 `secondary_seeds` 展开并列入口。
-只有候选确实无法收敛时，才进入 `selection_required`。
-
-## 测试现实
-
-这三件事必须分开说：
-
-- tests passed：选中的命令通过了
-- directly affected tests found：识别到了定点测试
-- baseline red：仓库可能历史上已经红了
-
-如果没找到 directly affected tests，但 configured/smoke suite 通过，通常只能说“未爆回归”，不能说“已经定点覆盖”。
-
-默认 `finish` 验证的是当前任务，不是倒回去扫历史任务。
-`python -m unittest discover -s tests -p test_*.py` 这种 broad historical command 只应该在显式
-`--test-scope full` 或显式 `--test-command` 时运行；不能在找不到当前任务测试时静默替代当前任务验证。
-
 ## 适合什么场景
 
 - 当你已经把 AI 当成了日常搭子，而不是偶尔拿来查个报错的小工具
@@ -108,18 +41,16 @@ python .agents/skills/zhanggong-impact-blueprint/cig.py classify-change --worksp
 
 ## 更新说明
 
-### Stage 21 / v0.21.0-rc1
+### Stage 21 / v0.21.0
 
 重点变化：
 
-- workflow 明确分成 bypass / lightweight / full guardian 三条车道
-- `analyze` 默认终端输出变成短简报
-- 新增 `summary.json`、`facts.json`、`inferences.json`
-- 多入口任务默认 primary seed + secondary seeds，不再默认硬中断
-- trust 改成按轴解释，而不是神秘分数
-- setup 默认 minimal，`--full` 才落完整文档和模板
-- 增加“测试通过但不是定点覆盖”的固定表达
-- 明确 baseline red 不等于这次改动制造失败
+- 把 workflow 分成 bypass / lightweight / full guardian，轻量任务不再强制走完整流程
+- `analyze` 默认变成短简报，事实、推断和摘要分开保存
+- 明确 GitNexus-first，fallback 必须说清原因
+- 多入口任务不再默认硬中断
+- trust 改成解释型，setup 默认更克制
+- `finish` 默认验证当前任务，并区分测试通过、定点覆盖和 baseline red
 
 ### Stage 20 / v0.20.0-rc1
 
@@ -145,5 +76,5 @@ python .agents/skills/zhanggong-impact-blueprint/cig.py classify-change --worksp
 
 ## 致谢
 
-Stage 20 形态下，本项目默认使用 GitNexus 作为图谱 provider。
+Stage 21 形态下，本项目优先使用 GitNexus 作为主要图谱事实来源。
 感谢 [GitNexus](https://github.com/abhigyanpatwari/GitNexus) 提供更强的本地图谱、上下游影响和流程链路视角。

@@ -1,9 +1,11 @@
 name: zhanggong-impact-blueprint
 entry: cig.py
-description: Repo-local Stage 20 workflow for install/setup, calibrate, analyze, finish, and status.
+description: Repo-local Stage 21 low-friction workflow for setup, health, classify-change, analyze, finish, and handoff.
 recommended_commands:
   - setup
+  - health
   - calibrate
+  - classify-change
   - analyze
   - finish
 

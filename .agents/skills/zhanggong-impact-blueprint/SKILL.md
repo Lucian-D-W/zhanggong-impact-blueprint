@@ -48,7 +48,7 @@ Minimal setup writes only runtime essentials. Use `--full` only when the repo ex
 
 ## Daily Full Guardian Flow
 
-Use this for source, tests, config, schema, rules, command behavior, dependencies, env, SQL, or runtime-facing docs.
+Use this for source, tests, config, schema, rules, command behavior, dependencies, env, SQL, or docs that change runtime/setup/command behavior.
 
 1. Run `health` when repo readiness is unclear.
 2. Run `calibrate` when adapter, provider, baseline, or test command choice is unclear.

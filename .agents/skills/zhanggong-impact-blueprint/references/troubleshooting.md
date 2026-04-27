@@ -40,7 +40,7 @@ Then retry targeted tests first when possible.
 2. Check whether the current task was pulled toward an unrelated recent code
    seed.
 3. If the task is about API, route, event, SQL, env/config, or IPC contracts,
-   inspect `affected_contracts` and `architecture_chains`.
+   inspect `affected_contracts` and `atlas_views`.
 4. If the task is documentation-only and those fields are irrelevant, do not
    overfit the edit to stale runtime context.
 

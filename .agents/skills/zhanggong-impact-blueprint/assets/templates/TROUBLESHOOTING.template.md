@@ -61,7 +61,6 @@ Valid cases:
 - GitNexus stale/unindexed
 - path incompatibility
 - non-git repo constraints
-- provider side effects suppressed
 
 Continue with internal fallback when the reason is explicit and the lane permits it. Do not let provider fallback silently change test or finish ownership.
 
@@ -83,7 +82,7 @@ Check:
 - `test_command_candidates`
 - `ignored_test_commands`
 
-Priority is repo config > recent successful command > package scripts > profile fallback > adapter default.
+Priority is repo config > recent successful command > package scripts > provider/adapter fallback > built-in default.
 If repo config is being ignored, that is a bug to investigate.
 
 ## Tests Passed But No Direct Tests Were Found
